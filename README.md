@@ -3,39 +3,102 @@
 어떤 언어·프로젝트에도 넣을 수 있는 얇은 에이전트 작업 기반이다. 요구를 정리해 설계하고, 다른 세션이 구현하고,
 또 다른 세션이 실제 결과로 검증한다. 실패하면 원인(요구·설계·구현·검사·환경)이 있는 곳을 고쳐 다음 작업이 같은 실수를 덜 하게 한다.
 
-이 키트가 정하는 것은 결과·근거·관찰·권한·인계의 경계다. 작업 방법은 모델이 고른다. 그래서 모델이 좋아질수록 같은 판에서 더 적은 시도로 끝나고,
-낡은 방법 지시는 아래 "규칙을 걷어내는 법"으로 줄인다.
+이 키트가 정하는 것은 결과·근거·관찰·권한·인계의 경계다. 작업 방법은 모델이 고르며, 모델·도구가 바뀌면 아래
+"규칙을 걷어내는 법"으로 낡은 방법 지시를 재평가한다. 시도 수나 비용이 줄었는지는 실제 비교 결과로 판단한다.
+
+> A lightweight workflow kit for planning, implementation, and independent verification in separate agent sessions.
+> The Korean instructions are the canonical version. Install the files into your repository, fill in the project map
+> in AGENTS.md, and share one temporary work file between sessions. Sessions must have access to the same code and
+> evidence; the kit does not launch sessions automatically. Check the license status before reusing or redistributing the kit.
 
 ## 구성
 
 | 파일 | 역할 |
 | --- | --- |
 | `AGENTS.md` | 진입: 작업 경로, 질문 경계, 완료·인계, 안전, 프로젝트 지도(설치 시 채움) |
-| `CLAUDE.md` | Claude Code 런타임 연결(`@AGENTS.md`). 다른 런타임은 같은 방식으로 AGENTS.md만 가리킨다 |
+| `CLAUDE.md` | Claude Code의 AGENTS.md 연결(`@AGENTS.md`). 다른 런타임은 해당 런타임이 지원하는 방식으로 같은 정본을 읽게 한다 |
 | `.agents/skills/wf-design/` | 요구와 설계. `work-template.md`는 세션 인계 양식 |
 | `.agents/skills/wf-implement/` | 인계 구현, 직접 검사, 변경 기록 |
 | `.agents/skills/wf-verify/` | 독립 판정, 실패 원인 회수, 재확인 |
-| `work/<작업명>/work.md` | 작업 중에만 생기는 인계 파일(Git 제외). 완료 후 삭제 |
+| `work/<작업명>/work.md` | 작업 중에만 생기는 인계 파일. 선택한 임시 경로만 Git에서 제외하며, 완료 보고·정본 반영 후 해당 작업 자료만 삭제한다 |
+
+## 에이전트에게 설치 맡기기
+
+새 프로젝트든 기존 프로젝트든, 대상 저장소에서 에이전트에게 이 저장소 주소와 함께 이렇게 요청하면 된다.
+
+```text
+https://github.com/taehyung-lab/agent-workflow-kit 의 README "설치"대로 이 저장소에 키트를 설치하고,
+AGENTS.md의 프로젝트 지도를 이 저장소를 조사해서 채워줘. 기존 진입 문서·스킬과 겹치면 쓰기 전에 병합안을 보여줘.
+```
+
+설치하는 에이전트는 다음 순서를 따른다.
+
+1. 아래 "설치"를 실행한다. 충돌로 멈추면 기존 파일과 키트 파일을 비교한 병합안을 사용자에게 보이고 승인 뒤에 쓴다.
+2. 저장소를 조사해 프로젝트 지도를 채운다: 패키지·빌드 설정에서 실행·검사 명령, README·docs에서 제품 원문과 결정 위치,
+   API 명세·스키마 위치, 테스트·브라우저·시험 데이터 도구. 찾은 칸에는 근거 파일을 함께 적고, 못 찾은 칸은 "미확인"으로 둔다.
+3. 조사로 정할 수 없는 것(제품 원문 위치, 결정권자, 보호 대상, 작업 한도)만 사용자에게 묻는다.
+4. 기존 진입 문서(AGENTS.md·CLAUDE.md 등)에 있던 저장소 고유 사실은 지도나 해당 역할 스킬로 옮기고, 작업 절차만 이 키트로 대체한다.
+   삭제할 기존 문서는 목록으로 보이고 승인 뒤에 지운다.
+5. 새 세션에서 `wf-design`·`wf-implement`·`wf-verify`가 보이는지 확인하고 결과를 보고한다.
 
 ## 설치
 
+먼저 사용할 키트 버전을 내려받고(재현성이 필요하면 tag나 commit을 checkout한다) 대상 저장소의 루트로 이동한다.
+아래 명령은 AGENTS.md·CLAUDE.md와 세 wf-* 스킬의 설치 위치가 모두 없는 첫 설치용이다. 같은 이름의 파일·디렉터리·심링크가
+있거나 .agents/.claude 경로가 심링크면 멈추므로, 실제 대상을 확인한 뒤 기존 내용을 비교·병합한다.
+Claude Code를 쓰지 않으면 CLAUDE.md 복사와 .claude/skills 연결은 생략해도 된다.
+
 ```bash
-KIT=~/.agents/kits/agent-workflow-kit      # 이 저장소를 clone한 위치
-cd <대상 저장소>
-cp -n "$KIT/AGENTS.md" "$KIT/CLAUDE.md" .   # 이미 있으면 덮지 않는다. 기존 진입 문서는 직접 병합한다
-mkdir -p .agents/skills && cp -R "$KIT/.agents/skills/wf-"* .agents/skills/
-mkdir -p .claude/skills && for s in wf-design wf-implement wf-verify; do ln -sfn "../../.agents/skills/$s" ".claude/skills/$s"; done
-grep -qxF 'work/' .gitignore 2>/dev/null || echo 'work/' >> .gitignore
+# 아직 clone하지 않았다면 실행한다. 기존 clone에는 덮어쓰지 않는다.
+git clone https://github.com/taehyung-lab/agent-workflow-kit.git "$HOME/.agents/kits/agent-workflow-kit"
+# 아래는 별도 subshell에서 실행한다. /path/to/target-repository 를 실제 경로로 바꾼다.
+(
+  set -e
+  KIT="$HOME/.agents/kits/agent-workflow-kit"
+  cd /path/to/target-repository
+  for p in AGENTS.md CLAUDE.md .agents/skills/wf-design .agents/skills/wf-implement .agents/skills/wf-verify .claude/skills/wf-design .claude/skills/wf-implement .claude/skills/wf-verify; do
+    if [ -e "$p" ] || [ -L "$p" ]; then
+      echo "기존 경로를 먼저 비교·병합하세요: $p" >&2
+      exit 1
+    fi
+  done
+  for p in .agents .agents/skills .claude .claude/skills; do
+    if [ -L "$p" ]; then
+      echo "심링크의 실제 설치 대상을 먼저 확인하세요: $p" >&2
+      exit 1
+    fi
+  done
+  cp "$KIT/AGENTS.md" "$KIT/CLAUDE.md" .
+  mkdir -p .agents/skills .claude/skills
+  for s in wf-design wf-implement wf-verify; do
+    cp -R "$KIT/.agents/skills/$s" .agents/skills/
+    ln -s "../../.agents/skills/$s" ".claude/skills/$s"
+  done
+)
 ```
+
+대상 저장소의 루트 `work/`가 이 키트의 임시 작업 전용인지 먼저 확인한다. 전용이면 `.gitignore`의 기존 내용을 보존하고
+줄을 분리해 `/work/`를 추가한다. 이미 다른 용도로 쓰는 경로라면 충돌 없는 임시 루트 경로를 정하고, AGENTS.md의 인계 경로와
+wf-design의 출력 경로를 함께 맞춘 뒤 그 경로만 제외한다. 기존 `work/`의 자료는 이동·삭제하지 않는다.
 
 그다음 `AGENTS.md`의 "프로젝트 지도"를 실제 위치로 채운다. 모르는 칸은 비워 두지 말고 "미확인"으로 적는다.
 런타임 진입 파일과 스킬은 정본 하나를 가리키게 하고 본문을 복제하지 않는다.
 
+Codex는 대상 저장소의 `.agents/skills`에서 세 스킬을 찾는다. 설치한 저장소에서 새 세션을 열어 wf-design·wf-implement·wf-verify가
+보이는지 확인하고, 반영되지 않으면 재시작한다. 목록에서 찾지 못하면 AGENTS.md에 적힌 SKILL.md 경로를 직접 읽게 하고
+런타임 설정을 확인한다. `.codex/skills`에 본문을 중복 복사하지 않는다.
+
 ## 쓰는 법
 
-- 단순 질의·명령, 확정 값의 작은 수정: 한 세션에서 끝낸다. 인계 파일을 만들지 않는다.
-- 새 동작·제품 판단·구조 변경: 세션 A에서 `wf-design` → 새 세션 B에서 `wf-implement` → 새 세션 C에서 `wf-verify`.
-  각 세션에는 `work/<작업명>/work.md` 경로만 넘긴다. 검증 세션은 다른 모델이나 도구로 돌려도 된다.
+단순 질의·명령과 확정 값의 작은 수정은 관련 결과를 직접 확인하고, 별도 인계가 필요 없으면 한 세션에서 끝낸다.
+사용자나 프로젝트가 별도 세션·독립 검증을 요구하면 그 조건을 따른다.
+
+새 동작·제품 판단·구조 변경은 세션 A의 wf-design → 새 세션 B의 wf-implement → 새 세션 C의 wf-verify로 진행한다.
+이 키트는 세션을 자동으로 열지 않으며 전체 담당자가 각 세션과 실패 회수를 연결한다.
+
+다음 세션에 work 파일 경로와 맡을 단계를 전달하고 현재 작성자를 갱신한다. 경로만 전달하려면 다음 세션이 같은 코드·work 파일·증거에
+접근할 수 있어야 한다. 다른 worktree·clone·실행 환경을 쓰면 필요한 변경과 임시 자료를 먼저 전달하고 기준 버전을 확인한다.
+다음 작성자가 인계받은 뒤 이전 작성자는 같은 work 파일을 수정하지 않는다.
 
 ## 외부 스킬 선택
 
@@ -60,3 +123,7 @@ grep -qxF 'work/' .gitignore 2>/dev/null || echo 'work/' >> .gitignore
 제거해도 필수 결과가 유지되고 비용이나 방해가 줄면 제거한다. 회귀하면 원인에 맞게 유지·축소하고, 차이가 불분명하면 효과 미확인으로 남긴다. 한 번의 성공을 모든 작업의 개선이라고 주장하지 않는다.
 
 모든 규칙을 한꺼번에 비교하지 않는다. 시험의 대상·종료 조건·한도를 먼저 정하고, 수용 기준이나 필수 접근 제한을 낮춰 성공을 만들지 않는다.
+
+## 라이선스
+
+현재 이 키트에는 재사용 라이선스가 지정되어 있지 않다. 공개 열람과 GitHub fork 외의 복제·수정·재배포 조건은 저장소 소유자에게 확인한다.

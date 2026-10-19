@@ -5,7 +5,7 @@
 ## 작업 경로
 - 단순 질의·명령은 바로 처리한다.
 - 확정 값의 작은 수정은 관련 코드에서 시작해 직접 결과를 확인한다. 새 제품 판단·공용 경계·외부 계약 변화가 생기면 설계 경로로 전환한다.
-- 요구·설계를 정할 때는 `.agents/skills/wf-design/SKILL.md`, 구현은 `wf-implement/SKILL.md`, 독립 판정은 `wf-verify/SKILL.md`를 읽는다. 설계·구현·검증은 별도 세션으로 인계한다.
+- 요구·설계를 정할 때는 `.agents/skills/wf-design/SKILL.md`, 구현은 `.agents/skills/wf-implement/SKILL.md`, 독립 판정은 `.agents/skills/wf-verify/SKILL.md`를 읽는다. 설계·구현·검증은 별도 세션으로 인계한다.
 - 추가 스킬은 바뀌는 책임에 맞는 description으로 선택한다. 이미 끝낸 조사는 달라진 근거가 있을 때만 다시 한다.
 
 ## 자율과 질문
