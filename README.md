@@ -20,6 +20,8 @@
 | `.agents/skills/wf-design/` | 요구와 설계. `work-template.md`는 세션 인계 양식 |
 | `.agents/skills/wf-implement/` | 인계 구현, 직접 검사, 변경 기록 |
 | `.agents/skills/wf-verify/` | 독립 판정, 실패 원인 회수, 재확인 |
+| `.agents/skills/<역할>/` | 프로젝트가 추가하는 역할 스킬(예: 목록 검색 공용 기준). description이 라우터다 |
+| `.claude/skills` | `.agents/skills`를 가리키는 링크 하나. 새 역할 스킬도 따로 연결할 필요가 없다 |
 | `work/<작업명>/work.md` | 작업 중에만 생기는 인계 파일. 선택한 임시 경로만 Git에서 제외하며, 완료 보고·정본 반영 후 해당 작업 자료만 삭제한다 |
 
 ## 에이전트에게 설치 맡기기
@@ -34,18 +36,22 @@ AGENTS.md의 프로젝트 지도를 이 저장소를 조사해서 채워줘. 기
 설치하는 에이전트는 다음 순서를 따른다.
 
 1. 아래 "설치"를 실행한다. 충돌로 멈추면 기존 파일과 키트 파일을 비교한 병합안을 사용자에게 보이고 승인 뒤에 쓴다.
+   Codex의 기본 샌드박스는 `.agents/` 쓰기를 막을 수 있다. 그때는 쓰기 승인을 요청하고, 승인이 없으면 설치를 미완료로 보고한다.
 2. 저장소를 조사해 프로젝트 지도를 채운다: 패키지·빌드 설정에서 실행·검사 명령, README·docs에서 제품 원문과 결정 위치,
-   API 명세·스키마 위치, 테스트·브라우저·시험 데이터 도구. 찾은 칸에는 근거 파일을 함께 적고, 못 찾은 칸은 "미확인"으로 둔다.
+   API 명세·스키마 위치, 테스트·브라우저·시험 데이터 도구. 항목마다 위치와 한 줄만 적고 근거 파일을 붙인다. 못 찾은 칸은 "미확인"으로 둔다.
+   저장소에 정의된 명령만 적고, 설치하는 에이전트 자신의 셸 래퍼·별칭·전역 설정은 적지 않는다.
 3. 조사로 정할 수 없는 것(제품 원문 위치, 결정권자, 보호 대상, 작업 한도)만 사용자에게 묻는다.
 4. 기존 진입 문서(AGENTS.md·CLAUDE.md 등)에 있던 저장소 고유 사실은 지도나 해당 역할 스킬로 옮기고, 작업 절차만 이 키트로 대체한다.
    삭제할 기존 문서는 목록으로 보이고 승인 뒤에 지운다.
-5. 새 세션에서 `wf-design`·`wf-implement`·`wf-verify`가 보이는지 확인하고 결과를 보고한다.
+5. 새 세션에서 `wf-design`·`wf-implement`·`wf-verify`가 보이는지 확인하고 결과를 사용자에게 보고한다.
+   설치 경과·미완료 기록은 AGENTS.md에 쓰지 않는다(다음 세션에 낡은 사실로 남는다).
 
 ## 설치
 
 먼저 사용할 키트 버전을 내려받고(재현성이 필요하면 tag나 commit을 checkout한다) 대상 저장소의 루트로 이동한다.
 아래 명령은 AGENTS.md·CLAUDE.md와 세 wf-* 스킬의 설치 위치가 모두 없는 첫 설치용이다. 같은 이름의 파일·디렉터리·심링크가
 있거나 .agents/.claude 경로가 심링크면 멈추므로, 실제 대상을 확인한 뒤 기존 내용을 비교·병합한다.
+이미 `.claude/skills`가 실제 폴더라면 그 안의 스킬을 `.agents/skills`로 옮겨 정본을 하나로 만든 뒤 링크로 바꾸는 병합안을 먼저 보인다.
 Claude Code를 쓰지 않으면 CLAUDE.md 복사와 .claude/skills 연결은 생략해도 된다.
 
 ```bash
@@ -56,24 +62,24 @@ git clone https://github.com/taehyung-lab/agent-workflow-kit.git "$HOME/.agents/
   set -e
   KIT="$HOME/.agents/kits/agent-workflow-kit"
   cd /path/to/target-repository
-  for p in AGENTS.md CLAUDE.md .agents/skills/wf-design .agents/skills/wf-implement .agents/skills/wf-verify .claude/skills/wf-design .claude/skills/wf-implement .claude/skills/wf-verify; do
+  for p in AGENTS.md CLAUDE.md .agents/skills/wf-design .agents/skills/wf-implement .agents/skills/wf-verify .claude/skills; do
     if [ -e "$p" ] || [ -L "$p" ]; then
       echo "기존 경로를 먼저 비교·병합하세요: $p" >&2
       exit 1
     fi
   done
-  for p in .agents .agents/skills .claude .claude/skills; do
+  for p in .agents .agents/skills .claude; do
     if [ -L "$p" ]; then
       echo "심링크의 실제 설치 대상을 먼저 확인하세요: $p" >&2
       exit 1
     fi
   done
   cp "$KIT/AGENTS.md" "$KIT/CLAUDE.md" .
-  mkdir -p .agents/skills .claude/skills
+  mkdir -p .agents/skills .claude
   for s in wf-design wf-implement wf-verify; do
     cp -R "$KIT/.agents/skills/$s" .agents/skills/
-    ln -s "../../.agents/skills/$s" ".claude/skills/$s"
   done
+  ln -s ../.agents/skills .claude/skills
 )
 ```
 
@@ -99,6 +105,24 @@ Codex는 대상 저장소의 `.agents/skills`에서 세 스킬을 찾는다. 설
 다음 세션에 work 파일 경로와 맡을 단계를 전달하고 현재 작성자를 갱신한다. 경로만 전달하려면 다음 세션이 같은 코드·work 파일·증거에
 접근할 수 있어야 한다. 다른 worktree·clone·실행 환경을 쓰면 필요한 변경과 임시 자료를 먼저 전달하고 기준 버전을 확인한다.
 다음 작성자가 인계받은 뒤 이전 작성자는 같은 work 파일을 수정하지 않는다.
+
+## 역할 스킬 추가
+
+여러 작업에 반복되는 기준(예: 목록 필터·정렬·페이지네이션 공용화)은 별도 문서가 아니라 역할 스킬로 둔다.
+루트 AGENTS.md에 목록을 추가하지 않는다. 런타임이 description으로 찾아 준다.
+
+```markdown
+---
+name: list-search
+description: 목록 화면의 검색 필터·정렬·페이지네이션을 설계·구현·검증할 때 읽는다. 목록 데이터의 서버 계약은 API 계약 위치를, 개별 화면의 문구·값은 제품 원문을 본다.
+---
+# 목록 검색 공용 기준
+## 확정 결정 (출처·날짜)
+## 지켜야 할 조건과 확인 방법
+## 미정 (질문, 추천, 영향)
+```
+
+description이 실제로 작동하는지는 그 스킬이 필요한 요청, 같은 뜻의 다른 표현, 관계없는 요청을 새 세션에 줘서 확인한다.
 
 ## 외부 스킬 선택
 
