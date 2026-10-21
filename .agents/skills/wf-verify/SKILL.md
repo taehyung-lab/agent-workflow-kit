@@ -1,6 +1,6 @@
 ---
 name: wf-verify
-description: 공용 경계·연결 불확실성·고위험 변경이나 기준 수정 항목을 독립 판정할 때 읽는다. 조건 교정은 wf-design, 구현 교정은 wf-implement로 보낸다.
+description: 공용 경계·연결 불확실성·틀린 결과의 영향이 큰 변경이나 기준 수정 항목을 독립 판정할 때 읽는다. 조건 교정은 wf-design, 구현 교정은 wf-implement로 보낸다.
 ---
 
 # 독립 판정
