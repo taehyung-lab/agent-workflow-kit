@@ -65,6 +65,7 @@ install_update() {
   kit cat-file -e "$old^{commit}" 2>/dev/null || fail "Installed version $old not found in kit; fetch it first"
   if [ "$old" = "$new" ]; then printf 'Already at %s\n' "$new"; return; fi
   kit merge-base --is-ancestor "$old" "$new" || fail "Kit HEAD $new is not newer than installed $old"
+  [ ! -L AGENTS.md ] || fail 'AGENTS.md is a symlink; update the file it points to by hand'
   [ -f AGENTS.md ] && markers_ok AGENTS.md || fail 'AGENTS.md has no single kit region; see README to mark it once'
   kit show "$old:AGENTS.md" | grep -qxF "$begin" || fail "Installed version $old predates kit region; see README to mark it once"
   cmp -s <(region < AGENTS.md) <(kit show "$old:AGENTS.md" | region) || changed="$changed AGENTS.md(kit-region)"
@@ -77,15 +78,15 @@ install_update() {
     listed "$p" "$old_files" || { [ ! -e "$p" ] && [ ! -L "$p" ]; } || changed="$changed $p(exists)"
   done
   [ -z "$changed" ] || fail "Local change in kit-owned path:$changed. Move project changes to project sections or role skills, then retry."
-  # 영역 밖은 바이트 그대로 두고, 옆 임시 파일에 명령마다 따로 조립한 뒤 권한을 맞춰 한 번에 바꿔 끼운다
+  # 영역 밖은 바이트 그대로 두고, 권한을 복사한 옆 임시 파일에 명령마다 따로 조립한 뒤 한 번에 바꿔 끼운다
   local b e
   b=$(grep -nxF -- "$begin" AGENTS.md | cut -d: -f1)
   e=$(grep -nxF -- "$end" AGENTS.md | cut -d: -f1)
   assembled=$(mktemp AGENTS.md.kit-XXXXXX)
+  cp -p AGENTS.md "$assembled"
   awk -v b="$b" 'NR<b' AGENTS.md > "$assembled"
   kit show "$new:AGENTS.md" | region >> "$assembled"
   tail -n "+$((e + 1))" AGENTS.md >> "$assembled"
-  chmod "$(stat -f %Lp AGENTS.md 2>/dev/null || stat -c %a AGENTS.md)" "$assembled"
   mv "$assembled" AGENTS.md
   assembled=''
   for p in $old_files; do

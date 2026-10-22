@@ -105,7 +105,7 @@ if install --update "$t" && [ ! -s "$tmp/err" ] \
   && [ "$(cat "$t/.agents/agent-workflow-kit.version")" = "$v2" ] \
   && [ "$(grep -cxF "$begin" "$t/AGENTS.md")" = 1 ] \
   && [ "$(tail -c 25 "$t/AGENTS.md")" = 'tail & \1 without newline' ] \
-  && [ "$(stat -f %Lp "$t/AGENTS.md" 2>/dev/null || stat -c %a "$t/AGENTS.md")" = 640 ]; then ok "update keeps project parts"; else ng "update keeps project parts"; fi
+  && [ "$(ls -l "$t/AGENTS.md" | cut -c1-10)" = '-rw-r-----' ]; then ok "update keeps project parts"; else ng "update keeps project parts"; fi
 
 # 조립 도중 실패하면 AGENTS.md를 그대로 두고 임시 파일도 남기지 않는다
 t="$tmp/up-plain"; mkdir -p "$tmp/shim"; printf '#!/bin/sh\nexit 1\n' > "$tmp/shim/tail"; chmod +x "$tmp/shim/tail"
@@ -141,6 +141,11 @@ for n in region skill exists; do
   t="$tmp/up-$n"; before=$(snap "$t")
   if ! install --update "$t" && grep -q 'Local change in kit-owned path' "$tmp/err" && [ "$(snap "$t")" = "$before" ]; then ok "update refuses local $n change"; else ng "update refuses local $n change"; fi
 done
+
+# AGENTS.md가 심링크면 링크를 일반 파일로 바꾸지 않고 멈춘다
+t="$tmp/up-link"; mkdir "$t"; git -C "$kit" checkout -q "$v2"; install "$t"; git -C "$kit" checkout -q -
+mkdir "$t/docs"; mv "$t/AGENTS.md" "$t/docs/AGENTS.md"; ln -s docs/AGENTS.md "$t/AGENTS.md"; before=$(snap "$t")
+if ! install --update "$t" && grep -q 'symlink' "$tmp/err" && [ -L "$t/AGENTS.md" ] && [ "$(snap "$t")" = "$before" ]; then ok "update refuses symlinked AGENTS.md"; else ng "update refuses symlinked AGENTS.md"; fi
 
 # 표시 없는(이전 방식) 설치본은 멈춘다
 t="$tmp/up-nomark"; mkdir -p "$t/.agents"; grep -vxF "$begin" "$kit/AGENTS.md" > "$t/AGENTS.md"; echo "$v1" > "$t/.agents/agent-workflow-kit.version"
