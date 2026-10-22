@@ -2,7 +2,7 @@
 # 키트를 대상 저장소에 처음 설치하거나(--update 없이), 설치된 저장소의 키트 소유 부분만 키트의 현재 커밋으로 교체한다.
 # 키트 소유 부분: AGENTS.md의 표시 영역, CLAUDE.md, 키트 .agents/skills 아래 파일. 그 밖은 프로젝트가 관리한다.
 # macOS 기본 bash 3.2에서 돌도록 mapfile·빈 배열 확장을 쓰지 않는다.
-set -euo pipefail
+set -Eeuo pipefail
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 mode=install
 if [ "${1-}" = --update ]; then mode=update; shift; fi
@@ -10,6 +10,7 @@ if [ "${1-}" = --update ]; then mode=update; shift; fi
 kit_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 kit() { git -C "$kit_root" "$@"; }
 new=$(kit rev-parse --verify HEAD 2>/dev/null) || fail 'Kit must be a git checkout'
+[ "$(kit rev-parse --show-toplevel)" = "$kit_root" ] || fail 'Kit must be the root of its own git checkout'
 [ -z "$(kit status --porcelain)" ] || fail 'Kit has uncommitted changes; the version file could not reproduce them'
 cd -- "$1"
 begin='<!-- agent-workflow-kit:begin -->'
@@ -58,8 +59,10 @@ install_update() {
   local p old old_files new_files changed=''
   [ -f "$version_file" ] || fail "Not installed: $version_file missing"
   old=$(cat "$version_file")
+  printf '%s\n' "$old" | grep -qxE '[0-9a-f]{40}' || fail "Invalid version in $version_file: $old"
   kit cat-file -e "$old^{commit}" 2>/dev/null || fail "Installed version $old not found in kit; fetch it first"
   if [ "$old" = "$new" ]; then printf 'Already at %s\n' "$new"; return; fi
+  kit merge-base --is-ancestor "$old" "$new" || fail "Kit HEAD $new is not newer than installed $old"
   [ -f AGENTS.md ] && markers_ok AGENTS.md || fail 'AGENTS.md has no single kit region; see README to mark it once'
   kit show "$old:AGENTS.md" | grep -qxF "$begin" || fail "Installed version $old predates kit region; see README to mark it once"
   cmp -s <(region < AGENTS.md) <(kit show "$old:AGENTS.md" | region) || changed="$changed AGENTS.md(kit-region)"
@@ -72,11 +75,12 @@ install_update() {
     listed "$p" "$old_files" || { [ ! -e "$p" ] && [ ! -L "$p" ]; } || changed="$changed $p(exists)"
   done
   [ -z "$changed" ] || fail "Local change in kit-owned path:$changed. Move project changes to project sections or role skills, then retry."
-  kit show "$new:AGENTS.md" | region > AGENTS.md.kit-region
-  awk -v b="$begin" -v e="$end" -v rf=AGENTS.md.kit-region \
-    '$0==b{while((getline l < rf)>0)print l; f=1; next} $0==e{f=0; next} !f{print}' AGENTS.md > AGENTS.md.kit-update
-  mv AGENTS.md.kit-update AGENTS.md
-  rm AGENTS.md.kit-region
+  # 영역 밖은 head·tail로 바이트 그대로 두고, 같은 파일에 다시 써서 권한도 유지한다
+  local b e agents
+  b=$(grep -nxF -- "$begin" AGENTS.md | cut -d: -f1)
+  e=$(grep -nxF -- "$end" AGENTS.md | cut -d: -f1)
+  agents=$({ head -n "$((b - 1))" AGENTS.md; kit show "$new:AGENTS.md" | region; tail -n "+$((e + 1))" AGENTS.md; printf x; })
+  printf '%s' "${agents%x}" > AGENTS.md
   for p in $old_files; do
     listed "$p" "$new_files" && continue
     rm -- "$p"

@@ -15,7 +15,11 @@ snap() { (cd "$1" && find . -type f -exec cksum {} + | sort); }
 
 mkdir "$kit"
 (cd "$src" && tar cf - --exclude=.git .) | (cd "$kit" && tar xf -)
-g init -q; g add -A; g commit -qm v1
+g init -q; g add -A
+# v0: 표시 영역이 없던 이전 방식 키트. v1에서 표시를 되살린다
+cp "$kit/AGENTS.md" "$tmp/agents.v1"; grep -vE '^<!-- agent-workflow-kit:(begin|end) -->$' "$tmp/agents.v1" > "$kit/AGENTS.md"
+g add -A; g commit -qm v0; v0=$(git -C "$kit" rev-parse HEAD)
+cp "$tmp/agents.v1" "$kit/AGENTS.md"; g add -A; g commit -qm v1
 v1=$(git -C "$kit" rev-parse HEAD)
 begin='<!-- agent-workflow-kit:begin -->'
 
@@ -47,24 +51,44 @@ if ! install "$t" && grep -q 'Invalid parent: .agents' "$tmp/err" && [ -z "$(ls 
 t="$tmp/parent-file"; mkdir "$t"; echo x > "$t/.claude"
 if ! install "$t" && grep -q 'Invalid parent: .claude' "$tmp/err"; then ok "file parent refused"; else ng "file parent refused"; fi
 
+# 키트 스킬 폴더가 이미 있으면 멈춘다
+t="$tmp/conflict-skill"; mkdir -p "$t/.agents/skills/wf-design"
+if ! install "$t" && grep -q 'Conflict: .agents/skills/wf-design' "$tmp/err" && [ ! -e "$t/AGENTS.md" ]; then ok "conflict wf dir kept"; else ng "conflict wf dir kept"; fi
+
+# git이 아니거나 다른 저장소 안에 들어 있는 키트는 거절한다
+t="$tmp/nogit"; mkdir -p "$t" "$tmp/plain"; git -C "$kit" archive HEAD | tar xf - -C "$tmp/plain"
+if ! bash "$tmp/plain/install.sh" "$t" 2>"$tmp/err" && grep -q 'Kit must be a git checkout' "$tmp/err" && [ -z "$(ls -A "$t")" ]; then ok "non-git kit refused"; else ng "non-git kit refused"; fi
+mkdir -p "$tmp/outer/vendor"; git -C "$kit" archive HEAD | tar xf - -C "$tmp/outer/vendor"
+git -C "$tmp/outer" init -q; git -C "$tmp/outer" add -A; git -C "$tmp/outer" -c user.name=t -c user.email=t@t commit -qm o
+t="$tmp/subdir"; mkdir "$t"
+if ! bash "$tmp/outer/vendor/install.sh" "$t" 2>"$tmp/err" && grep -q 'root of its own' "$tmp/err" && [ -z "$(ls -A "$t")" ]; then ok "nested kit refused"; else ng "nested kit refused"; fi
+
+# 쓰기 도중 실패하면 부분 설치 안내를 낸다
+t="$tmp/readonly"; mkdir -p "$t/.agents/skills"; chmod 555 "$t/.agents/skills"
+if ! install "$t" && grep -q 'partial files may remain' "$tmp/err"; then ok "partial-write notice"; else ng "partial-write notice"; fi
+chmod 755 "$t/.agents/skills"
+
 # 미커밋 키트 거절: 버전 파일로 재현할 수 없는 설치는 하지 않는다
 t="$tmp/dirty"; mkdir "$t"; echo x >> "$kit/README.md"
 if ! install "$t" && grep -q 'uncommitted' "$tmp/err" && [ -z "$(ls -A "$t")" ]; then ok "dirty kit refused"; else ng "dirty kit refused"; fi
 git -C "$kit" checkout -q -- README.md
 
 # 업데이트 준비: v1 설치본 세 개(보존·영역 변경·스킬 변경)에 프로젝트 내용을 넣고, 키트 v2를 만든다
-for n in keep region skill; do
+for n in keep region skill exists; do
   t="$tmp/up-$n"; mkdir "$t"; install "$t"
   sed -i.bak 's/^- 제품 원문·사용자 결정·결정권자: 미확인$/- 제품 원문·사용자 결정·결정권자: docs\/product.md/' "$t/AGENTS.md" && rm "$t/AGENTS.md.bak"
   printf '\n## 프로젝트 약속\n\n- 이 저장소만의 약속\n' >> "$t/AGENTS.md"
   mkdir -p "$t/.agents/skills/my-role"; echo role > "$t/.agents/skills/my-role/SKILL.md"
 done
 echo 'local' >> "$tmp/up-skill/.agents/skills/wf-verify/SKILL.md"
+mkdir -p "$tmp/up-exists/.agents/skills/wf-new"; echo mine > "$tmp/up-exists/.agents/skills/wf-new/SKILL.md"
+printf 'tail & \\1 without newline' >> "$tmp/up-keep/AGENTS.md"; chmod 640 "$tmp/up-keep/AGENTS.md"
 awk -v b="$begin" '{print} $0==b{print "LOCAL EDIT"}' "$tmp/up-region/AGENTS.md" > "$tmp/a" && mv "$tmp/a" "$tmp/up-region/AGENTS.md"
 awk -v b="$begin" '{print} $0==b{print "v2 kit line"}' "$kit/AGENTS.md" > "$tmp/a" && mv "$tmp/a" "$kit/AGENTS.md"
 echo 'v2' >> "$kit/.agents/skills/wf-verify/SKILL.md"
 mkdir "$kit/.agents/skills/wf-new"; echo new > "$kit/.agents/skills/wf-new/SKILL.md"
 git -C "$kit" rm -q .agents/skills/wf-design/work-template.md
+mkdir "$kit/.agents/skills/wf-old"; echo old > "$kit/.agents/skills/wf-old/SKILL.md"
 g add -A; g commit -qm v2
 v2=$(git -C "$kit" rev-parse HEAD)
 
@@ -78,14 +102,25 @@ if install --update "$t" \
   && [ -f "$t/.agents/skills/wf-new/SKILL.md" ] && [ ! -e "$t/.agents/skills/wf-design/work-template.md" ] \
   && [ -f "$t/.agents/skills/wf-design/SKILL.md" ] && [ "$(cat "$t/.agents/skills/my-role/SKILL.md")" = role ] \
   && [ "$(cat "$t/.agents/agent-workflow-kit.version")" = "$v2" ] \
-  && [ "$(grep -cxF "$begin" "$t/AGENTS.md")" = 1 ]; then ok "update keeps project parts"; else ng "update keeps project parts"; fi
+  && [ "$(grep -cxF "$begin" "$t/AGENTS.md")" = 1 ] \
+  && [ "$(tail -c 25 "$t/AGENTS.md")" = 'tail & \1 without newline' ] \
+  && [ "$(stat -f %Lp "$t/AGENTS.md" 2>/dev/null || stat -c %a "$t/AGENTS.md")" = 640 ]; then ok "update keeps project parts"; else ng "update keeps project parts"; fi
+
+# 키트에서 지운 스킬은 빈 폴더까지 정리한다(v3에서 wf-old 삭제)
+git -C "$kit" rm -q -r .agents/skills/wf-old; g commit -qm v3
+if install --update "$t" && [ ! -e "$t/.agents/skills/wf-old" ] && [ -d "$t/.agents/skills/my-role" ]; then ok "update removes dropped skill dir"; else ng "update removes dropped skill dir"; fi
+
+# 더 오래된 키트 커밋으로는 내려가지 않는다
+git -C "$kit" checkout -q "$v2"; before=$(snap "$t")
+if ! install --update "$t" && grep -q 'not newer' "$tmp/err" && [ "$(snap "$t")" = "$before" ]; then ok "update refuses downgrade"; else ng "update refuses downgrade"; fi
+git -C "$kit" checkout -q -; v3=$(git -C "$kit" rev-parse HEAD)
 
 # 같은 버전 재실행은 아무것도 바꾸지 않는다
 before=$(snap "$t")
 if install --update "$t" && grep -q 'Already at' "$tmp/out" && [ "$(snap "$t")" = "$before" ]; then ok "update idempotent"; else ng "update idempotent"; fi
 
 # 키트 소유 부분의 로컬 변경은 덮어쓰지 않고 멈춘다
-for n in region skill; do
+for n in region skill exists; do
   t="$tmp/up-$n"; before=$(snap "$t")
   if ! install --update "$t" && grep -q 'Local change in kit-owned path' "$tmp/err" && [ "$(snap "$t")" = "$before" ]; then ok "update refuses local $n change"; else ng "update refuses local $n change"; fi
 done
@@ -94,6 +129,13 @@ done
 t="$tmp/up-nomark"; mkdir -p "$t/.agents"; grep -vxF "$begin" "$kit/AGENTS.md" > "$t/AGENTS.md"; echo "$v1" > "$t/.agents/agent-workflow-kit.version"
 before=$(snap "$t")
 if ! install --update "$t" && grep -q 'no single kit region' "$tmp/err" && [ "$(snap "$t")" = "$before" ]; then ok "update refuses unmarked AGENTS.md"; else ng "update refuses unmarked AGENTS.md"; fi
+
+# 버전 파일이 쓸 수 없는 값이면 멈춘다: 키트에 없는 커밋, sha가 아닌 값, 표시 이전 커밋
+for case in "0000000000000000000000000000000000000000|not found in kit" "HEAD~1|Invalid version" "$v0|predates kit region"; do
+  bad=${case%%|*}; want=${case#*|}
+  t="$tmp/up-bad"; rm -rf "$t"; mkdir "$t"; install "$t"; echo "$bad" > "$t/.agents/agent-workflow-kit.version"; before=$(snap "$t")
+  if ! install --update "$t" && grep -q "$want" "$tmp/err" && [ "$(snap "$t")" = "$before" ]; then ok "update refuses version: $want"; else ng "update refuses version: $want"; fi
+done
 
 printf '%d passed, %d failed\n' "$pass" "$failed"
 [ "$failed" -eq 0 ]
