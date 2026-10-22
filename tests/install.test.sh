@@ -107,9 +107,20 @@ if install --update "$t" && [ ! -s "$tmp/err" ] \
   && [ "$(tail -c 25 "$t/AGENTS.md")" = 'tail & \1 without newline' ] \
   && [ "$(stat -f %Lp "$t/AGENTS.md" 2>/dev/null || stat -c %a "$t/AGENTS.md")" = 640 ]; then ok "update keeps project parts"; else ng "update keeps project parts"; fi
 
+# 조립 도중 실패하면 AGENTS.md를 그대로 두고 임시 파일도 남기지 않는다
+t="$tmp/up-plain"; mkdir -p "$tmp/shim"; printf '#!/bin/sh\nexit 1\n' > "$tmp/shim/tail"; chmod +x "$tmp/shim/tail"
+before=$(snap "$t")
+if ! PATH="$tmp/shim:$PATH" install --update "$t" && grep -q 'partial files may remain' "$tmp/err" \
+  && [ "$(snap "$t")" = "$before" ]; then ok "failed assembly keeps AGENTS.md"; else ng "failed assembly keeps AGENTS.md"; fi
+
+# 마지막 바꿔 끼우기가 실패해도 AGENTS.md는 비지 않는다
+mkdir -p "$tmp/shim-mv"; printf '#!/bin/sh\nexit 1\n' > "$tmp/shim-mv/mv"; chmod +x "$tmp/shim-mv/mv"
+if ! PATH="$tmp/shim-mv:$PATH" install --update "$t" && [ "$(snap "$t")" = "$before" ]; then ok "failed replace keeps AGENTS.md"; else ng "failed replace keeps AGENTS.md"; fi
+
 # 설치 그대로(영역이 첫 줄)인 대상도 경고 없이 업데이트된다
 t="$tmp/up-plain"
-if install --update "$t" && [ ! -s "$tmp/err" ] && grep -qxF 'v2 kit line' "$t/AGENTS.md" && [ "$(head -n 1 "$t/AGENTS.md")" = "$begin" ]; then ok "update quiet when region starts file"; else ng "update quiet when region starts file"; fi
+if install --update "$t" && [ ! -s "$tmp/err" ] && grep -qxF 'v2 kit line' "$t/AGENTS.md" && [ "$(head -n 1 "$t/AGENTS.md")" = "$begin" ] \
+  && [ -z "$(find "$t" -name 'AGENTS.md.kit-*')" ]; then ok "update quiet when region starts file"; else ng "update quiet when region starts file"; fi
 t="$tmp/up-keep"
 
 # 키트에서 지운 스킬은 빈 폴더까지 정리한다(v3에서 wf-old 삭제)

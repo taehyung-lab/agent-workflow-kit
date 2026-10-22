@@ -25,7 +25,9 @@ region() { awk -v b="$begin" -v e="$end" '$0==b{f=1} f{print} $0==e{f=0}'; }
 markers_ok() { awk -v b="$begin" -v e="$end" '$0==b{nb++; if(ne)bad=1} $0==e{ne++} END{exit !(nb==1 && ne==1 && !bad)}' "$1"; }
 # 줄 목록 $2에 줄 $1이 있는지 확인한다
 listed() { printf '%s\n' "$2" | grep -qxF -- "$1"; }
-trap 'printf "%s\n" "Install failed; partial files may remain. Inspect before retry." >&2' ERR
+# 실패하면 조립 중이던 임시 파일을 지우고 부분 설치 가능성을 알린다
+assembled=''
+trap 'rm -f "$assembled"; printf "%s\n" "Install failed; partial files may remain. Inspect before retry." >&2' ERR
 
 # 처음 설치: 키트 소유 경로가 하나라도 있으면 쓰기 전에 멈춘다
 install_fresh() {
@@ -75,16 +77,17 @@ install_update() {
     listed "$p" "$old_files" || { [ ! -e "$p" ] && [ ! -L "$p" ]; } || changed="$changed $p(exists)"
   done
   [ -z "$changed" ] || fail "Local change in kit-owned path:$changed. Move project changes to project sections or role skills, then retry."
-  # 영역 밖은 바이트 그대로 두고, 각 단계의 실패가 그대로 멈추도록 명령마다 따로 쓴다. 마지막에 같은 파일에 다시 써서 권한을 유지한다
-  local b e assembled
+  # 영역 밖은 바이트 그대로 두고, 옆 임시 파일에 명령마다 따로 조립한 뒤 권한을 맞춰 한 번에 바꿔 끼운다
+  local b e
   b=$(grep -nxF -- "$begin" AGENTS.md | cut -d: -f1)
   e=$(grep -nxF -- "$end" AGENTS.md | cut -d: -f1)
-  assembled=$(mktemp)
+  assembled=$(mktemp AGENTS.md.kit-XXXXXX)
   awk -v b="$b" 'NR<b' AGENTS.md > "$assembled"
   kit show "$new:AGENTS.md" | region >> "$assembled"
   tail -n "+$((e + 1))" AGENTS.md >> "$assembled"
-  cat "$assembled" > AGENTS.md
-  rm -f "$assembled"
+  chmod "$(stat -f %Lp AGENTS.md 2>/dev/null || stat -c %a AGENTS.md)" "$assembled"
+  mv "$assembled" AGENTS.md
+  assembled=''
   for p in $old_files; do
     listed "$p" "$new_files" && continue
     rm -- "$p"
