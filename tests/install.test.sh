@@ -74,7 +74,7 @@ if ! install "$t" && grep -q 'uncommitted' "$tmp/err" && [ -z "$(ls -A "$t")" ];
 git -C "$kit" checkout -q -- README.md
 
 # 업데이트 준비: v1 설치본 세 개(보존·영역 변경·스킬 변경)에 프로젝트 내용을 넣고, 키트 v2를 만든다
-for n in keep region skill exists; do
+for n in keep plain region skill exists; do
   t="$tmp/up-$n"; mkdir "$t"; install "$t"
   sed -i.bak 's/^- 제품 원문·사용자 결정·결정권자: 미확인$/- 제품 원문·사용자 결정·결정권자: docs\/product.md/' "$t/AGENTS.md" && rm "$t/AGENTS.md.bak"
   printf '\n## 프로젝트 약속\n\n- 이 저장소만의 약속\n' >> "$t/AGENTS.md"
@@ -82,7 +82,7 @@ for n in keep region skill exists; do
 done
 echo 'local' >> "$tmp/up-skill/.agents/skills/wf-verify/SKILL.md"
 mkdir -p "$tmp/up-exists/.agents/skills/wf-new"; echo mine > "$tmp/up-exists/.agents/skills/wf-new/SKILL.md"
-printf 'tail & \\1 without newline' >> "$tmp/up-keep/AGENTS.md"; chmod 640 "$tmp/up-keep/AGENTS.md"
+{ printf '# 프로젝트 머리말\n\n'; cat "$tmp/up-keep/AGENTS.md"; printf 'tail & \\1 without newline'; } > "$tmp/a" && cat "$tmp/a" > "$tmp/up-keep/AGENTS.md"; chmod 640 "$tmp/up-keep/AGENTS.md"
 awk -v b="$begin" '{print} $0==b{print "LOCAL EDIT"}' "$tmp/up-region/AGENTS.md" > "$tmp/a" && mv "$tmp/a" "$tmp/up-region/AGENTS.md"
 awk -v b="$begin" '{print} $0==b{print "v2 kit line"}' "$kit/AGENTS.md" > "$tmp/a" && mv "$tmp/a" "$kit/AGENTS.md"
 echo 'v2' >> "$kit/.agents/skills/wf-verify/SKILL.md"
@@ -94,7 +94,8 @@ v2=$(git -C "$kit" rev-parse HEAD)
 
 # 업데이트 보존: 키트 영역·키트 스킬은 v2가 되고, 지도·프로젝트 절·역할 스킬은 그대로다
 t="$tmp/up-keep"
-if install --update "$t" \
+if install --update "$t" && [ ! -s "$tmp/err" ] \
+  && [ "$(head -n 2 "$t/AGENTS.md")" = "$(printf '# 프로젝트 머리말\n')" ] \
   && grep -qxF 'v2 kit line' "$t/AGENTS.md" \
   && grep -qxF -- '- 제품 원문·사용자 결정·결정권자: docs/product.md' "$t/AGENTS.md" \
   && grep -qxF -- '- 이 저장소만의 약속' "$t/AGENTS.md" \
@@ -105,6 +106,11 @@ if install --update "$t" \
   && [ "$(grep -cxF "$begin" "$t/AGENTS.md")" = 1 ] \
   && [ "$(tail -c 25 "$t/AGENTS.md")" = 'tail & \1 without newline' ] \
   && [ "$(stat -f %Lp "$t/AGENTS.md" 2>/dev/null || stat -c %a "$t/AGENTS.md")" = 640 ]; then ok "update keeps project parts"; else ng "update keeps project parts"; fi
+
+# 설치 그대로(영역이 첫 줄)인 대상도 경고 없이 업데이트된다
+t="$tmp/up-plain"
+if install --update "$t" && [ ! -s "$tmp/err" ] && grep -qxF 'v2 kit line' "$t/AGENTS.md" && [ "$(head -n 1 "$t/AGENTS.md")" = "$begin" ]; then ok "update quiet when region starts file"; else ng "update quiet when region starts file"; fi
+t="$tmp/up-keep"
 
 # 키트에서 지운 스킬은 빈 폴더까지 정리한다(v3에서 wf-old 삭제)
 git -C "$kit" rm -q -r .agents/skills/wf-old; g commit -qm v3

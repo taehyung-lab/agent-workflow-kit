@@ -75,12 +75,16 @@ install_update() {
     listed "$p" "$old_files" || { [ ! -e "$p" ] && [ ! -L "$p" ]; } || changed="$changed $p(exists)"
   done
   [ -z "$changed" ] || fail "Local change in kit-owned path:$changed. Move project changes to project sections or role skills, then retry."
-  # 영역 밖은 head·tail로 바이트 그대로 두고, 같은 파일에 다시 써서 권한도 유지한다
-  local b e agents
+  # 영역 밖은 바이트 그대로 두고, 각 단계의 실패가 그대로 멈추도록 명령마다 따로 쓴다. 마지막에 같은 파일에 다시 써서 권한을 유지한다
+  local b e assembled
   b=$(grep -nxF -- "$begin" AGENTS.md | cut -d: -f1)
   e=$(grep -nxF -- "$end" AGENTS.md | cut -d: -f1)
-  agents=$({ head -n "$((b - 1))" AGENTS.md; kit show "$new:AGENTS.md" | region; tail -n "+$((e + 1))" AGENTS.md; printf x; })
-  printf '%s' "${agents%x}" > AGENTS.md
+  assembled=$(mktemp)
+  awk -v b="$b" 'NR<b' AGENTS.md > "$assembled"
+  kit show "$new:AGENTS.md" | region >> "$assembled"
+  tail -n "+$((e + 1))" AGENTS.md >> "$assembled"
+  cat "$assembled" > AGENTS.md
+  rm -f "$assembled"
   for p in $old_files; do
     listed "$p" "$new_files" && continue
     rm -- "$p"
