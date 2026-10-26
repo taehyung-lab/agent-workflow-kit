@@ -174,5 +174,12 @@ for link in .agents/skills .agents/skills/wf-verify; do
     && [ "$(snap "$out")" = "$before" ]; then ok "update refuses symlinked $link"; else ng "update refuses symlinked $link"; fi
 done
 
+# 버전 파일 자체가 심링크면 링크를 따라 대상 밖을 고치지 않고 멈춘다
+t="$tmp/up-version-link"; out="$tmp/outside-version"; rm -rf "$t"; mkdir "$t"
+git -C "$kit" checkout -q "$v2"; install "$t"; git -C "$kit" checkout -q -
+mv "$t/.agents/agent-workflow-kit.version" "$out"; ln -s "$out" "$t/.agents/agent-workflow-kit.version"; before=$(cat "$out")
+if ! install --update "$t" && grep -q 'symlink' "$tmp/err" && [ -L "$t/.agents/agent-workflow-kit.version" ] \
+  && [ "$(cat "$out")" = "$before" ]; then ok "update refuses symlinked version file"; else ng "update refuses symlinked version file"; fi
+
 printf '%d passed, %d failed\n' "$pass" "$failed"
 [ "$failed" -eq 0 ]
