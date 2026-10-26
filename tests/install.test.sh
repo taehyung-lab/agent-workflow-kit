@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # install.sh 의 보장을 확인한다: 정상 설치, 충돌·재실행·잘못된 부모·미커밋 키트 거절,
-# 업데이트가 키트 소유 부분만 교체하고 프로젝트 부분을 보존하며, 키트 소유 부분의 로컬 변경은 거절하는지.
+# 업데이트가 키트 소유 부분만 교체하고 프로젝트 부분을 보존하며, 키트 소유 부분의 로컬 변경은 같은 버전에서도 거절하고
+# 부모 심링크를 따라 대상 밖에 쓰지 않는지.
 # 작업 트리의 키트를 임시 git 저장소로 복사해 커밋 v1·v2를 만들어 시험한다.
 set -uo pipefail
 src=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -157,6 +158,20 @@ for case in "0000000000000000000000000000000000000000|not found in kit" "HEAD~1|
   bad=${case%%|*}; want=${case#*|}
   t="$tmp/up-bad"; rm -rf "$t"; mkdir "$t"; install "$t"; echo "$bad" > "$t/.agents/agent-workflow-kit.version"; before=$(snap "$t")
   if ! install --update "$t" && grep -q "$want" "$tmp/err" && [ "$(snap "$t")" = "$before" ]; then ok "update refuses version: $want"; else ng "update refuses version: $want"; fi
+done
+
+# 같은 버전이어도 키트 소유 부분의 로컬 변경은 "이미 최신"으로 넘기지 않고 멈춘다
+t="$tmp/up-same-drift"; mkdir "$t"; install "$t"; echo tampered >> "$t/.agents/skills/wf-verify/SKILL.md"; before=$(snap "$t")
+if ! install --update "$t" && grep -q 'Local change in kit-owned path' "$tmp/err" && ! grep -q 'Already at' "$tmp/out" \
+  && [ "$(snap "$t")" = "$before" ]; then ok "same-version update refuses local change"; else ng "same-version update refuses local change"; fi
+
+# 업데이트도 대상 밖으로 쓰지 않는다: .agents/skills 또는 키트 스킬 폴더가 심링크면 멈추고 링크 대상을 건드리지 않는다
+for link in .agents/skills .agents/skills/wf-verify; do
+  t="$tmp/up-parent-${link//\//_}"; out="$tmp/outside-${link//\//_}"; rm -rf "$t" "$out"; mkdir "$t"
+  git -C "$kit" checkout -q "$v2"; install "$t"; git -C "$kit" checkout -q -
+  mv "$t/$link" "$out"; ln -s "$out" "$t/$link"; before=$(snap "$out")
+  if ! install --update "$t" && grep -q 'Invalid parent' "$tmp/err" && [ -L "$t/$link" ] \
+    && [ "$(snap "$out")" = "$before" ]; then ok "update refuses symlinked $link"; else ng "update refuses symlinked $link"; fi
 done
 
 printf '%d passed, %d failed\n' "$pass" "$failed"
