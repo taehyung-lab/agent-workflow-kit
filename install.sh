@@ -68,6 +68,7 @@ install_fresh() {
 # 업데이트: 키트 소유 부분이 설치 당시 그대로일 때만 새 커밋으로 교체하고, 프로젝트 부분은 건드리지 않는다
 install_update() {
   local p old old_files new_files changed=''
+  [ ! -L "$version_file" ] || fail "$version_file is a symlink; replace it with the plain file it points to"
   [ -f "$version_file" ] || fail "Not installed: $version_file missing"
   old=$(cat "$version_file")
   printf '%s\n' "$old" | grep -qxE '[0-9a-f]{40}' || fail "Invalid version in $version_file: $old"
