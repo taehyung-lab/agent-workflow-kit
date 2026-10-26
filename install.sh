@@ -25,6 +25,17 @@ region() { awk -v b="$begin" -v e="$end" '$0==b{f=1} f{print} $0==e{f=0}'; }
 markers_ok() { awk -v b="$begin" -v e="$end" '$0==b{nb++; if(ne)bad=1} $0==e{ne++} END{exit !(nb==1 && ne==1 && !bad)}' "$1"; }
 # 줄 목록 $2에 줄 $1이 있는지 확인한다
 listed() { printf '%s\n' "$2" | grep -qxF -- "$1"; }
+# 키트가 쓰는 경로 $@의 상위 폴더가 심링크이거나 폴더가 아니면 멈춘다(쓰기가 대상 밖으로 나가지 않게)
+parents_ok() {
+  local p d
+  for p in "$@"; do
+    d=$(dirname -- "$p")
+    while [ "$d" != . ]; do
+      [ ! -L "$d" ] && { [ ! -e "$d" ] || [ -d "$d" ]; } || fail "Invalid parent: $d"
+      d=$(dirname -- "$d")
+    done
+  done
+}
 # 실패하면 조립 중이던 임시 파일을 지우고 부분 설치 가능성을 알린다
 assembled=''
 trap 'rm -f "$assembled"; printf "%s\n" "Install failed; partial files may remain. Inspect before retry." >&2' ERR
@@ -37,9 +48,7 @@ install_fresh() {
   for p in AGENTS.md CLAUDE.md .claude/skills work "$version_file" $skill_dirs; do
     [ ! -e "$p" ] && [ ! -L "$p" ] || fail "Conflict: $p"
   done
-  for p in .agents .agents/skills .claude; do
-    [ ! -L "$p" ] && { [ ! -e "$p" ] || [ -d "$p" ]; } || fail "Invalid parent: $p"
-  done
+  parents_ok .agents/skills/x .claude/x $files
   [ ! -L .gitignore ] && { [ ! -e .gitignore ] || { [ -f .gitignore ] && [ -r .gitignore ] && [ -w .gitignore ]; }; } || fail 'Invalid .gitignore'
   mkdir -p .agents/skills .claude
   set -C
@@ -63,7 +72,6 @@ install_update() {
   old=$(cat "$version_file")
   printf '%s\n' "$old" | grep -qxE '[0-9a-f]{40}' || fail "Invalid version in $version_file: $old"
   kit cat-file -e "$old^{commit}" 2>/dev/null || fail "Installed version $old not found in kit; fetch it first"
-  if [ "$old" = "$new" ]; then printf 'Already at %s\n' "$new"; return; fi
   kit merge-base --is-ancestor "$old" "$new" || fail "Kit HEAD $new is not newer than installed $old"
   [ ! -L AGENTS.md ] || fail 'AGENTS.md is a symlink; update the file it points to by hand'
   [ -f AGENTS.md ] && markers_ok AGENTS.md || fail 'AGENTS.md has no single kit region; see README to mark it once'
@@ -71,6 +79,7 @@ install_update() {
   cmp -s <(region < AGENTS.md) <(kit show "$old:AGENTS.md" | region) || changed="$changed AGENTS.md(kit-region)"
   old_files=$(owned "$old")
   new_files=$(owned "$new")
+  parents_ok "$version_file" $old_files $new_files
   for p in $old_files; do
     [ -f "$p" ] && [ ! -L "$p" ] && cmp -s "$p" <(kit show "$old:$p") || changed="$changed $p"
   done
@@ -78,6 +87,8 @@ install_update() {
     listed "$p" "$old_files" || { [ ! -e "$p" ] && [ ! -L "$p" ]; } || changed="$changed $p(exists)"
   done
   [ -z "$changed" ] || fail "Local change in kit-owned path:$changed. Move project changes to project sections or role skills, then retry."
+  # 같은 버전은 소유 부분이 설치 당시 그대로임을 확인한 뒤에만 무변경으로 끝낸다
+  if [ "$old" = "$new" ]; then printf 'Already at %s\n' "$new"; return; fi
   # 영역 밖은 바이트 그대로 두고, 권한을 복사한 옆 임시 파일에 명령마다 따로 조립한 뒤 한 번에 바꿔 끼운다
   local b e
   b=$(grep -nxF -- "$begin" AGENTS.md | cut -d: -f1)
