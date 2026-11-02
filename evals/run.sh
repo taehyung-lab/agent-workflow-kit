@@ -52,6 +52,8 @@ for i in $(seq 1 "$times"); do
   for n in 2 3 4 5 6 7 8 9; do [ ! -f "$case_dir/prompt$n.txt" ] || turns+=("$case_dir/prompt$n.txt"); done
   start=$(date +%s); rc=0; sid=""; : > "$out.jsonl"; : > "$out.err"
   # Codex 는 전역 지침을 CODEX_HOME 에서 읽는다. 실제 설정을 복사한 임시 홈을 쓰고, 세션을 이어 가도록 모든 턴이 끝날 때까지 둔다.
+  # EVALS_CODEX_NETWORK=1 이면 Codex 작업 공간에 네트워크를 허용한다(세션 안에서 다른 세션을 띄우는 후보를 시험할 때).
+  net=(); [ "${EVALS_CODEX_NETWORK:-0}" != 1 ] || net=(-c sandbox_workspace_write.network_access=true)
   if [ "$harness" = codex ]; then ch=$(mktemp -d); cp ~/.codex/auth.json ~/.codex/config.toml "$ch/" 2>/dev/null; [ ! -f ~/.codex/AGENTS.md ] || cp ~/.codex/AGENTS.md "$ch/"; fi
   t=0
   for turn in "${turns[@]}"; do
@@ -65,11 +67,11 @@ for i in $(seq 1 "$times"); do
       (cd "$work/project" && perl -e 'alarm shift; exec @ARGV' 900 claude -p "$prompt" ${resume[@]+"${resume[@]}"} --output-format stream-json --verbose \
         --dangerously-skip-permissions --max-turns 30 > "$tout.jsonl" 2> "$tout.err")
     elif [ "$t" -eq 1 ]; then
-      CODEX_HOME=$ch perl -e 'alarm shift; exec @ARGV' 900 codex exec --json --skip-git-repo-check --sandbox workspace-write \
+      CODEX_HOME=$ch perl -e 'alarm shift; exec @ARGV' 900 codex exec --json --skip-git-repo-check --sandbox workspace-write ${net[@]+"${net[@]}"} \
         -C "$work/project" "$prompt" > "$tout.jsonl" 2> "$tout.err" < /dev/null
     else
       (cd "$work/project" && CODEX_HOME=$ch perl -e 'alarm shift; exec @ARGV' 900 codex exec resume --json --skip-git-repo-check \
-        -c sandbox_mode='"workspace-write"' "$sid" "$prompt" > "$tout.jsonl" 2> "$tout.err" < /dev/null)
+        -c sandbox_mode='"workspace-write"' ${net[@]+"${net[@]}"} "$sid" "$prompt" > "$tout.jsonl" 2> "$tout.err" < /dev/null)
     fi
     trc=$?
     cat "$tout.jsonl" >> "$out.jsonl"; cat "$tout.err" >> "$out.err"
