@@ -8,6 +8,9 @@
 #       bash evals/run.sh weight-accounting HEAD codex
 # 여러 턴 사례는 prompt2.txt … 를 두면 같은 세션을 이어 가며 차례로 보낸다.
 # 결과 요약: python3 -I evals/report.py evals/results
+# EVALS_VERIFY=1 이면 모든 턴 뒤에 실행기가 별도 검증 세션(같은 하네스의 새 세션)을 띄운다. 검증자는 사용자 원문 그대로·
+# 마지막 사용자 턴의 변경(diff)·구현자의 마지막 답만 받고, 근거 없이 확정된 제품 결과가 있으면 RETURN 으로 돌려보낸다.
+# 돌려보내면 구현자 세션에 반환 턴을 한 번 보낸다. 판정은 반환 턴 뒤의 답과, 마지막 사용자 턴 직전 상태와의 비교로 한다.
 set -uo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 kit=$(cd -- "$here/.." && pwd -P)
@@ -24,7 +27,8 @@ fingerprint() { [ -f "$1" ] && shasum -a 256 "$1" | cut -c1-12 || echo none; }
 # 전역 스킬은 폴더 전체의 SKILL.md 내용으로 지문을 만든다(스킬이 하나 바뀌어도 지문이 달라진다).
 skills_fingerprint() { find -L "$HOME/.agents/skills" "$HOME/.claude/skills" -name SKILL.md 2>/dev/null | sort | xargs shasum -a 256 2>/dev/null | shasum -a 256 | cut -c1-12; }
 out_root=${EVALS_RESULTS:-"$here/results/$(date +%Y%m%d)"}
-mkdir -p "$out_root"
+# 이후 턴은 프로젝트 폴더로 옮겨 실행하므로 결과 폴더는 절대 경로로 바꿔 둔다(상대 경로면 2턴 기록을 쓰지 못한다).
+mkdir -p "$out_root" && out_root=$(cd -- "$out_root" && pwd -P)
 status=0
 for i in $(seq 1 "$times"); do
   work=$(mktemp -d)
@@ -79,6 +83,40 @@ for l in open(sys.argv[1], encoding="utf-8"):
     if [ "$trc" -ne 0 ]; then rc=$trc; break; fi
     if [ "${#turns[@]}" -gt 1 ] && [ -z "$sid" ]; then rc=3; echo "세션 id 를 찾지 못해 다음 턴을 이어 갈 수 없다" >> "$out.err"; break; fi
   done
+  verify_state=off
+  if [ "${EVALS_VERIFY:-0}" = 1 ] && [ "$rc" -eq 0 ]; then
+    # 검증자에게는 사용자 원문 그대로, 마지막 사용자 턴에서 바뀐 내용, 구현자의 마지막 답만 넘긴다(구현자가 정리한 조건은 넘기지 않는다).
+    vprompt=$(cat "$here/verifier-prompt.txt"
+      n=0; for turn in "${turns[@]}"; do n=$((n + 1)); printf '\n\n## 사용자 원문 %s\n' "$n"; cat "$turn"; done
+      printf '\n\n## 마지막 사용자 턴에서 바뀐 내용(diff)\n'; diff -ruN -x .git -x .agents "$work/before-last" "$work/project" | head -c 60000
+      printf '\n\n## 구현자의 마지막 답\n'; python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); from transcript import read; print(read(sys.argv[2])[1])' "$here" "$out.t$t.jsonl")
+    if [ "$harness" = claude ]; then
+      (cd "$work/project" && perl -e 'alarm shift; exec @ARGV' 900 claude -p "$vprompt" --output-format stream-json --verbose \
+        --allowedTools Read,Grep,Glob --max-turns 30 > "$out.verify.jsonl" 2>> "$out.err")
+    else
+      vh=$(mktemp -d); cp ~/.codex/auth.json ~/.codex/config.toml "$vh/" 2>/dev/null; [ ! -f ~/.codex/AGENTS.md ] || cp ~/.codex/AGENTS.md "$vh/"
+      CODEX_HOME=$vh perl -e 'alarm shift; exec @ARGV' 900 codex exec --json --skip-git-repo-check --sandbox read-only \
+        -C "$work/project" "$vprompt" > "$out.verify.jsonl" 2>> "$out.err" < /dev/null
+      rm -rf "${vh:?}"
+    fi
+    vrc=$?
+    vfinal=$(python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); from transcript import read; print(read(sys.argv[2])[1])' "$here" "$out.verify.jsonl")
+    if [ "$vrc" -ne 0 ]; then rc=$vrc; verify_state=crashed
+    elif printf '%s' "$vfinal" | head -1 | grep -q RETURN; then
+      verify_state=returned; t=$((t + 1)); tout="$out.t$t"
+      # 반환 턴은 사용자 턴이 아니므로 before-last 를 덮지 않는다(판정은 마지막 사용자 턴 직전과 비교).
+      rprompt=$(printf '별도 검증자가 다음 사유로 돌려보냈습니다. 검증자의 판단을 그대로 따르지 말고, 사용자 원문과 작업 기준에 비추어 판단해 다시 답하세요.\n\n%s' "$vfinal")
+      if [ "$harness" = claude ]; then
+        (cd "$work/project" && perl -e 'alarm shift; exec @ARGV' 900 claude -p "$rprompt" --resume "$sid" --output-format stream-json --verbose \
+          --dangerously-skip-permissions --max-turns 30 > "$tout.jsonl" 2> "$tout.err")
+      else
+        (cd "$work/project" && CODEX_HOME=$ch perl -e 'alarm shift; exec @ARGV' 900 codex exec resume --json --skip-git-repo-check \
+          -c sandbox_mode='"workspace-write"' "$sid" "$rprompt" > "$tout.jsonl" 2> "$tout.err" < /dev/null)
+      fi
+      trc=$?; cat "$tout.jsonl" >> "$out.jsonl"; cat "$tout.err" >> "$out.err"; [ "$trc" -eq 0 ] || rc=$trc
+    else verify_state=ok
+    fi
+  fi
   [ "$harness" != codex ] || rm -rf "${ch:?}"
   seconds=$(( $(date +%s) - start ))
   # 판정 검사는 0=통과, 1=실패, 2=검토 필요(원문을 사람이 판정)를 돌려준다.
@@ -93,13 +131,13 @@ for l in open(sys.argv[1], encoding="utf-8"):
   # 값은 환경 변수로 넘겨 따옴표·줄바꿈이 섞인 판정 문구도 그대로 기록한다.
   E_CASE=$case_name E_REF=$ref E_COMMIT=$commit E_HARNESS=$harness E_RUN=$i E_RC=$rc E_SEC=$seconds \
   E_VERSION=$("$harness" --version 2>/dev/null | head -1) E_BYTES=$agents_bytes E_CHECK_RC=$check_rc E_VERDICT=$verdict \
-  E_G1=$(fingerprint ~/.claude/CLAUDE.md) E_G2=$(fingerprint ~/.agents/USER.md) E_G3=$(fingerprint ~/.codex/AGENTS.md) E_G4=$(skills_fingerprint) E_OBS=$observed \
+  E_G1=$(fingerprint ~/.claude/CLAUDE.md) E_G2=$(fingerprint ~/.agents/USER.md) E_G3=$(fingerprint ~/.codex/AGENTS.md) E_G4=$(skills_fingerprint) E_OBS=$observed E_VSTATE=$verify_state \
   python3 -I -c '
 import json, os, sys
 e = os.environ
 json.dump({"case": e["E_CASE"], "kit_ref": e["E_REF"], "kit_commit": e["E_COMMIT"], "harness": e["E_HARNESS"],
   "run": int(e["E_RUN"]), "harness_version": e["E_VERSION"], "exit_code": int(e["E_RC"]), "seconds": int(e["E_SEC"]),
-  "agents_md_bytes": int(e["E_BYTES"]), "check_passed": e["E_CHECK_RC"] == "0", "check_needs_review": e["E_CHECK_RC"] == "2", "check_output": e["E_VERDICT"], "observed": json.loads(e["E_OBS"] or "{}"),
+  "agents_md_bytes": int(e["E_BYTES"]), "check_passed": e["E_CHECK_RC"] == "0", "check_needs_review": e["E_CHECK_RC"] == "2", "check_output": e["E_VERDICT"], "observed": json.loads(e["E_OBS"] or "{}"), "verifier": e["E_VSTATE"],
   "global_instructions": {"~/.claude/CLAUDE.md": e["E_G1"], "~/.agents/USER.md": e["E_G2"], "~/.codex/AGENTS.md": e["E_G3"], "global skills": e["E_G4"]}},
   open(sys.argv[1], "w"), ensure_ascii=False, indent=1)' "$out.meta.json"
   printf '%s exit=%s check=%s %s\n' "$name" "$rc" "$([ $check_rc -eq 0 ] && echo PASS || echo FAIL)" "$(printf '%s' "$verdict" | head -1)"
