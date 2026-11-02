@@ -77,7 +77,11 @@ for l in open(sys.argv[1], encoding="utf-8"):
   [ "$harness" != codex ] || rm -rf "${ch:?}"
   seconds=$(( $(date +%s) - start ))
   # 판정 검사는 0=통과, 1=실패, 2=검토 필요(원문을 사람이 판정)를 돌려준다.
-  verdict=$(EVALS_BEFORE_LAST_TURN="$work/before-last" python3 -I "$case_dir/check.py" "$work/project" "$out.jsonl" 2>&1); check_rc=$?
+  if [ "$rc" -ne 0 ]; then
+    verdict="FAIL 하네스가 종료 코드 $rc 로 끝나 판정하지 않았다"; check_rc=1
+  else
+    verdict=$(EVALS_BEFORE_LAST_TURN="$work/before-last" python3 -I "$case_dir/check.py" "$work/project" "$out.jsonl" 2>&1); check_rc=$?
+  fi
   agents_bytes=$(wc -c < "$work/project/AGENTS.md" | tr -d ' ')
   # 값은 환경 변수로 넘겨 따옴표·줄바꿈이 섞인 판정 문구도 그대로 기록한다.
   E_CASE=$case_name E_REF=$ref E_COMMIT=$commit E_HARNESS=$harness E_RUN=$i E_RC=$rc E_SEC=$seconds \
@@ -93,6 +97,8 @@ json.dump({"case": e["E_CASE"], "kit_ref": e["E_REF"], "kit_commit": e["E_COMMIT
   open(sys.argv[1], "w"), ensure_ascii=False, indent=1)' "$out.meta.json"
   printf '%s exit=%s check=%s %s\n' "$name" "$rc" "$([ $check_rc -eq 0 ] && echo PASS || echo FAIL)" "$(printf '%s' "$verdict" | head -1)"
   # 판정 검사를 고친 뒤 다시 판정할 수 있게, 끝난 프로젝트의 작업 파일(설치된 키트·git 제외)을 남긴다.
+  # 같은 이름으로 다시 실행해도 지난 실행의 파일이 섞이지 않게 먼저 비운다.
+  rm -rf "${out:?}.files" "${out:?}.before-last"
   mkdir -p "$out.files" && (cd "$work/project" && tar cf - --exclude=./.git --exclude=./.agents .) | tar xf - -C "$out.files"
   # 마지막 턴 직전 상태도 남긴다. 다시 판정할 때 EVALS_BEFORE_LAST_TURN 으로 넘긴다.
   [ ! -d "$work/before-last" ] || cp -R "$work/before-last" "$out.before-last"
