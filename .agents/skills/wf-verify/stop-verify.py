@@ -49,11 +49,13 @@ def main():
     if os.environ.get("AWK_VERIFYING"):
         return 0
     data = json.load(sys.stdin)
+    log({"start": data.get("hook_event_name"), "cwd": data.get("cwd"), "transcript": bool(data.get("transcript_path"))})
     if data.get("stop_hook_active"):
         log({"skip": "continued"})
         return 0
     root = git(data.get("cwd") or ".", "rev-parse", "--show-toplevel").strip()
     if not root:
+        log({"skip": "no-git-root"})
         return 0
     spec = ["--", ".", ":(exclude).agents", ":(exclude)work", ":(exclude).codex", ":(exclude).claude"]
     diff = git(root, "diff", "HEAD", *spec)
@@ -69,6 +71,7 @@ def main():
         return 0
     originals = user_messages(data["transcript_path"]) if data.get("transcript_path") else []
     if not originals:
+        log({"skip": "no-user-message"})
         print("stop-verify: 사용자 원문을 찾지 못해 검증하지 않았다", file=sys.stderr)
         return 0
     prompt = (HERE / "verifier.md").read_text(encoding="utf-8")
@@ -103,4 +106,9 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception as e:  # 훅 오류로 답이 막히지 않게 하고, 원인은 기록에 남긴다.
+        log({"error": repr(e)})
+        print(f"stop-verify: {e!r}", file=sys.stderr)
+        sys.exit(0)
