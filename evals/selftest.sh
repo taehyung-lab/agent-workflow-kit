@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# 모델을 부르지 않고 evals 자체를 확인한다(CI 에서 실행).
+# 사례마다 통과 표본은 통과, 실패 표본은 실패로 판정하는지 본다. 판정 검사가 위반을 실제로 잡는지 확인하는 단계다.
+set -uo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+pass=0; failed=0
+ok() { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
+ng() { failed=$((failed+1)); printf 'FAIL %s\n' "$1"; }
+for dir in "$here"/cases/*/; do
+  name=$(basename "$dir")
+  for f in prompt.txt check.py samples/pass/transcript.jsonl samples/fail/transcript.jsonl; do
+    [ -f "$dir$f" ] || ng "$name: $f 없음"
+  done
+  for sample in "$dir"/samples/*/; do
+    sample=${sample%/}; kind=$(basename "$sample"); kind=${kind%%-*}
+    project=$(mktemp -d); printf '# 샘플\n' > "$project/README.md"
+    [ ! -d "$sample/files" ] || cp -R "$sample/files/." "$project/"
+    python3 -I "$dir/check.py" "$project" "$sample/transcript.jsonl" >/dev/null 2>&1; rc=$?
+    if [ "$kind" = pass ]; then [ $rc -eq 0 ] && ok "$name: 통과 표본을 통과로" || ng "$name: 통과 표본을 실패로 판정(rc=$rc)"
+    else [ $rc -ne 0 ] && ok "$name: 실패 표본을 실패로" || ng "$name: 실패 표본을 통과로 판정"; fi
+    rm -rf "${project:?}"
+  done
+done
+# 실행기: 문법과, 잘못된 인자에서 모델을 부르지 않고 실패하는지
+bash -n "$here/run.sh" && ok "run.sh 문법" || ng "run.sh 문법"
+bash "$here/run.sh" no-such-case HEAD claude >/dev/null 2>&1; rc=$?
+[ $rc -eq 2 ] && ok "없는 사례는 실행 전에 거절(rc=2)" || ng "없는 사례 처리(rc=$rc)"
+bash "$here/run.sh" weight-disposable no-such-ref claude >/dev/null 2>&1; rc=$?
+[ $rc -eq 2 ] && ok "없는 키트 커밋은 실행 전에 거절(rc=2)" || ng "없는 커밋 처리(rc=$rc)"
+# 실행기 계약: 가짜 하네스(종료 코드 7, 파일 하나를 만듦)로 종료 코드를 그대로 돌려주는지와 끝난 프로젝트 파일·메타데이터를 남기는지 본다.
+fake=$(mktemp -d); results=$(mktemp -d)
+printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho made > made-by-fake.txt\nexit 7\n' > "$fake/claude"; chmod +x "$fake/claude"
+EVALS_RESULTS=$results PATH="$fake:$PATH" bash "$here/run.sh" weight-disposable HEAD claude >/dev/null 2>&1; rc=$?
+[ $rc -eq 7 ] && ok "하네스 종료 코드 7을 그대로 반환" || ng "하네스 종료 코드 반환(rc=$rc)"
+snap=$(ls -d "$results"/weight-disposable-*-claude-1.files 2>/dev/null | tail -1)
+[ -f "$snap/made-by-fake.txt" ] && ok "끝난 프로젝트 파일 보존" || ng "끝난 프로젝트 파일이 남지 않음"
+grep -q '"exit_code": 7' "${snap%.files}.meta.json" 2>/dev/null && ok "메타데이터에 종료 코드 기록" || ng "메타데이터 종료 코드"
+rm -rf "${fake:?}" "${results:?}"
+printf '%d passed, %d failed\n' "$pass" "$failed"
+[ "$failed" -eq 0 ]

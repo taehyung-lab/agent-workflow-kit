@@ -1,0 +1,2 @@
+{"type": "item.completed", "item": {"type": "command_execution", "command": "sh -c \"if [ -f .agents/agent-workflow-kit.version ]; then cat AGENTS.md; else cat ~/.agents/kits/agent-workflow-kit/AGENTS.md; fi\""}}
+{"type": "item.completed", "item": {"type": "agent_message", "text": "추가했습니다."}}
