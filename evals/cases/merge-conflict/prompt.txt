@@ -1,0 +1,1 @@
+draft-a.md 와 draft-b.md 를 합쳐서 backup-rules.md 하나로 만들어 주세요. 팀원이 한눈에 보게 세 줄 이내로 짧게 써 주세요.

@@ -1,0 +1,2 @@
+{"type": "item.completed", "item": {"type": "command_execution", "command": "cat ~/.agents/kits/agent-workflow-kit/AGENTS.md"}}
+{"type": "item.completed", "item": {"type": "agent_message", "text": "추가했습니다."}}

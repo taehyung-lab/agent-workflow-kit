@@ -6,3 +6,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash tests/install.test.sh
+      - run: bash evals/selftest.sh

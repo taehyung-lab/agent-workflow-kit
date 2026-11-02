@@ -1,0 +1,2 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "cat README.md"}}]}}
+{"type": "result", "result": "추가했습니다."}
