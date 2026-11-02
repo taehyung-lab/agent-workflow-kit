@@ -6,6 +6,7 @@
 # 사용: bash evals/run.sh <사례> <키트 커밋·태그> <claude|codex> [반복 수]
 #   예: bash evals/run.sh weight-accounting v1.0.0 claude 2
 #       bash evals/run.sh weight-accounting HEAD codex
+# 여러 턴 사례는 prompt2.txt … 를 두면 같은 세션을 이어 가며 차례로 보낸다.
 # 결과 요약: python3 -I evals/report.py evals/results
 set -uo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
@@ -37,20 +38,40 @@ for i in $(seq 1 "$times"); do
 
   name="$case_name-$(printf %.7s "$commit")-$harness-$i"
   out="$out_root/$name"
-  prompt=$(cat "$case_dir/prompt.txt")
-  start=$(date +%s)
-  if [ "$harness" = claude ]; then
-    (cd "$work/project" && perl -e 'alarm shift; exec @ARGV' 900 claude -p "$prompt" --output-format stream-json --verbose \
-      --dangerously-skip-permissions --max-turns 30 > "$out.jsonl" 2> "$out.err")
-    rc=$?
-  else
-    # Codex 는 전역 지침을 CODEX_HOME 에서 읽는다. 실제 설정을 복사한 임시 홈을 써서 실행이 실제 홈을 바꾸지 않게 한다.
-    ch=$(mktemp -d); cp ~/.codex/auth.json ~/.codex/config.toml "$ch/" 2>/dev/null; [ ! -f ~/.codex/AGENTS.md ] || cp ~/.codex/AGENTS.md "$ch/"
-    CODEX_HOME=$ch perl -e 'alarm shift; exec @ARGV' 900 codex exec --json --skip-git-repo-check --sandbox workspace-write \
-      -C "$work/project" "$prompt" > "$out.jsonl" 2> "$out.err" < /dev/null
-    rc=$?
-    rm -rf "${ch:?}"
-  fi
+  # 사례의 턴: prompt.txt 가 첫 턴, prompt2.txt·prompt3.txt … 가 같은 세션을 이어 가는 다음 턴이다.
+  # 턴마다 원시 기록을 .tN.jsonl 로 남기고, 판정용 .jsonl 은 모든 턴을 순서대로 이은 것이다(마지막 답 = 마지막 턴의 답).
+  turns=("$case_dir/prompt.txt")
+  for n in 2 3 4 5 6 7 8 9; do [ ! -f "$case_dir/prompt$n.txt" ] || turns+=("$case_dir/prompt$n.txt"); done
+  start=$(date +%s); rc=0; sid=""; : > "$out.jsonl"; : > "$out.err"
+  # Codex 는 전역 지침을 CODEX_HOME 에서 읽는다. 실제 설정을 복사한 임시 홈을 쓰고, 세션을 이어 가도록 모든 턴이 끝날 때까지 둔다.
+  if [ "$harness" = codex ]; then ch=$(mktemp -d); cp ~/.codex/auth.json ~/.codex/config.toml "$ch/" 2>/dev/null; [ ! -f ~/.codex/AGENTS.md ] || cp ~/.codex/AGENTS.md "$ch/"; fi
+  t=0
+  for turn in "${turns[@]}"; do
+    t=$((t + 1)); prompt=$(cat "$turn"); tout="$out.t$t"
+    if [ "$harness" = claude ]; then
+      resume=(); [ "$t" -eq 1 ] || resume=(--resume "$sid")
+      (cd "$work/project" && perl -e 'alarm shift; exec @ARGV' 900 claude -p "$prompt" ${resume[@]+"${resume[@]}"} --output-format stream-json --verbose \
+        --dangerously-skip-permissions --max-turns 30 > "$tout.jsonl" 2> "$tout.err")
+    elif [ "$t" -eq 1 ]; then
+      CODEX_HOME=$ch perl -e 'alarm shift; exec @ARGV' 900 codex exec --json --skip-git-repo-check --sandbox workspace-write \
+        -C "$work/project" "$prompt" > "$tout.jsonl" 2> "$tout.err" < /dev/null
+    else
+      (cd "$work/project" && CODEX_HOME=$ch perl -e 'alarm shift; exec @ARGV' 900 codex exec resume --json --skip-git-repo-check \
+        -c sandbox_mode='"workspace-write"' "$sid" "$prompt" > "$tout.jsonl" 2> "$tout.err" < /dev/null)
+    fi
+    trc=$?
+    cat "$tout.jsonl" >> "$out.jsonl"; cat "$tout.err" >> "$out.err"
+    # 다음 턴이 이어 갈 세션 id: Claude 는 session_id, Codex 는 thread_id 를 첫 턴 기록에서 읽는다.
+    [ -n "$sid" ] || sid=$(python3 -I -c 'import json,sys
+for l in open(sys.argv[1], encoding="utf-8"):
+    try: e = json.loads(l)
+    except ValueError: continue
+    v = e.get("session_id") or e.get("thread_id")
+    if v: print(v); break' "$tout.jsonl")
+    if [ "$trc" -ne 0 ]; then rc=$trc; break; fi
+    if [ "${#turns[@]}" -gt 1 ] && [ -z "$sid" ]; then rc=3; echo "세션 id 를 찾지 못해 다음 턴을 이어 갈 수 없다" >> "$out.err"; break; fi
+  done
+  [ "$harness" != codex ] || rm -rf "${ch:?}"
   seconds=$(( $(date +%s) - start ))
   verdict=$(python3 -I "$case_dir/check.py" "$work/project" "$out.jsonl" 2>&1); check_rc=$?
   agents_bytes=$(wc -c < "$work/project/AGENTS.md" | tr -d ' ')
