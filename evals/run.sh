@@ -54,7 +54,14 @@ for i in $(seq 1 "$times"); do
   # Codex 는 전역 지침을 CODEX_HOME 에서 읽는다. 실제 설정을 복사한 임시 홈을 쓰고, 세션을 이어 가도록 모든 턴이 끝날 때까지 둔다.
   # EVALS_CODEX_NETWORK=1 이면 Codex 작업 공간에 네트워크를 허용한다(세션 안에서 다른 세션을 띄우는 후보를 시험할 때).
   net=(); [ "${EVALS_CODEX_NETWORK:-0}" != 1 ] || net=(-c sandbox_workspace_write.network_access=true)
-  if [ "$harness" = codex ]; then ch=$(mktemp -d); cp ~/.codex/auth.json ~/.codex/config.toml "$ch/" 2>/dev/null; [ ! -f ~/.codex/AGENTS.md ] || cp ~/.codex/AGENTS.md "$ch/"; fi
+  # EVALS_HOOK=1 이면 설치된 키트의 Stop 훅(.agents/skills/wf-verify/stop-verify.py)을 하네스에 등록한다.
+  # 사용자 전역 설정은 건드리지 않는다: Codex 는 임시 홈의 hooks.json, Claude 는 --settings 로만 등록한다.
+  hookcmd='python3 "$(git rev-parse --show-toplevel)/.agents/skills/wf-verify/stop-verify.py"'
+  hookjson=$(HOOKCMD=$hookcmd python3 -I -c 'import json,os; print(json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": os.environ["HOOKCMD"], "timeout": 900}]}]}}))')
+  limit=900; [ "${EVALS_HOOK:-0}" != 1 ] || limit=2400
+  csettings=(); [ "${EVALS_HOOK:-0}" != 1 ] || { net+=(--dangerously-bypass-hook-trust); csettings=(--settings "$hookjson"); }
+  if [ "$harness" = codex ]; then ch=$(mktemp -d); cp ~/.codex/auth.json ~/.codex/config.toml "$ch/" 2>/dev/null; [ ! -f ~/.codex/AGENTS.md ] || cp ~/.codex/AGENTS.md "$ch/"
+    [ "${EVALS_HOOK:-0}" != 1 ] || printf '%s\n' "$hookjson" > "$ch/hooks.json"; fi
   t=0
   for turn in "${turns[@]}"; do
     t=$((t + 1)); prompt=$(cat "$turn"); tout="$out.t$t"
@@ -64,13 +71,13 @@ for i in $(seq 1 "$times"); do
       && (cd "$work/project" && tar cf - --exclude=./.git --exclude=./.agents . 2>/dev/null) | tar xf - -C "$work/before-last"
     if [ "$harness" = claude ]; then
       resume=(); [ "$t" -eq 1 ] || resume=(--resume "$sid")
-      (cd "$work/project" && perl -e 'alarm shift; exec @ARGV' 900 claude -p "$prompt" ${resume[@]+"${resume[@]}"} --output-format stream-json --verbose \
+      (cd "$work/project" && perl -e 'alarm shift; exec @ARGV' "$limit" claude -p "$prompt" ${resume[@]+"${resume[@]}"} ${csettings[@]+"${csettings[@]}"} --output-format stream-json --verbose \
         --dangerously-skip-permissions --max-turns 30 > "$tout.jsonl" 2> "$tout.err")
     elif [ "$t" -eq 1 ]; then
-      CODEX_HOME=$ch perl -e 'alarm shift; exec @ARGV' 900 codex exec --json --skip-git-repo-check --sandbox workspace-write ${net[@]+"${net[@]}"} \
+      CODEX_HOME=$ch perl -e 'alarm shift; exec @ARGV' "$limit" codex exec --json --skip-git-repo-check --sandbox workspace-write ${net[@]+"${net[@]}"} \
         -C "$work/project" "$prompt" > "$tout.jsonl" 2> "$tout.err" < /dev/null
     else
-      (cd "$work/project" && CODEX_HOME=$ch perl -e 'alarm shift; exec @ARGV' 900 codex exec resume --json --skip-git-repo-check \
+      (cd "$work/project" && CODEX_HOME=$ch perl -e 'alarm shift; exec @ARGV' "$limit" codex exec resume --json --skip-git-repo-check \
         -c sandbox_mode='"workspace-write"' ${net[@]+"${net[@]}"} "$sid" "$prompt" > "$tout.jsonl" 2> "$tout.err" < /dev/null)
     fi
     trc=$?
@@ -112,7 +119,7 @@ for l in open(sys.argv[1], encoding="utf-8"):
         (cd "$work/project" && perl -e 'alarm shift; exec @ARGV' 900 claude -p "$rprompt" --resume "$sid" --output-format stream-json --verbose \
           --dangerously-skip-permissions --max-turns 30 > "$tout.jsonl" 2> "$tout.err")
       else
-        (cd "$work/project" && CODEX_HOME=$ch perl -e 'alarm shift; exec @ARGV' 900 codex exec resume --json --skip-git-repo-check \
+        (cd "$work/project" && CODEX_HOME=$ch perl -e 'alarm shift; exec @ARGV' "$limit" codex exec resume --json --skip-git-repo-check \
           -c sandbox_mode='"workspace-write"' "$sid" "$rprompt" > "$tout.jsonl" 2> "$tout.err" < /dev/null)
       fi
       trc=$?; cat "$tout.jsonl" >> "$out.jsonl"; cat "$tout.err" >> "$out.err"; [ "$trc" -eq 0 ] || rc=$trc
