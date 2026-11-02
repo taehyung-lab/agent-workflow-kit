@@ -1,3 +1,4 @@
 /work/
 /evals/results/
 .DS_Store
+__pycache__/
