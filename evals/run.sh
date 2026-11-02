@@ -59,6 +59,7 @@ for i in $(seq 1 "$times"); do
   hookcmd='python3 "$(git rev-parse --show-toplevel)/.agents/skills/wf-verify/stop-verify.py"'
   hookjson=$(HOOKCMD=$hookcmd python3 -I -c 'import json,os; print(json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": os.environ["HOOKCMD"], "timeout": 900}]}]}}))')
   limit=900; [ "${EVALS_HOOK:-0}" != 1 ] || limit=2400
+  export AWK_VERIFY_LOG="$out.hook.log"
   csettings=(); [ "${EVALS_HOOK:-0}" != 1 ] || { net+=(--dangerously-bypass-hook-trust); csettings=(--settings "$hookjson"); }
   if [ "$harness" = codex ]; then ch=$(mktemp -d); cp ~/.codex/auth.json ~/.codex/config.toml "$ch/" 2>/dev/null; [ ! -f ~/.codex/AGENTS.md ] || cp ~/.codex/AGENTS.md "$ch/"
     [ "${EVALS_HOOK:-0}" != 1 ] || printf '%s\n' "$hookjson" > "$ch/hooks.json"; fi
