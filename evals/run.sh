@@ -55,7 +55,7 @@ for i in $(seq 1 "$times"); do
     # 턴마다 직전 작업 파일(설치된 키트·git 제외)을 덮어 남긴다. 끝나면 "마지막으로 실행한 턴의 직전 상태"가 되어,
     # 판정은 그 턴에서 무엇을 바꿨나를 보고, 하네스가 중간에 실패해도 실패한 턴의 직전 상태가 남는다.
     rm -rf "${work:?}/before-last"; mkdir "$work/before-last" \
-      && (cd "$work/project" && tar cf - --exclude=./.git --exclude=./.agents .) | tar xf - -C "$work/before-last"
+      && (cd "$work/project" && tar cf - --exclude=./.git --exclude=./.agents . 2>/dev/null) | tar xf - -C "$work/before-last"
     if [ "$harness" = claude ]; then
       resume=(); [ "$t" -eq 1 ] || resume=(--resume "$sid")
       (cd "$work/project" && perl -e 'alarm shift; exec @ARGV' 900 claude -p "$prompt" ${resume[@]+"${resume[@]}"} --output-format stream-json --verbose \
@@ -87,7 +87,8 @@ for l in open(sys.argv[1], encoding="utf-8"):
   else
     verdict=$(EVALS_BEFORE_LAST_TURN="$work/before-last" python3 -I "$case_dir/check.py" "$work/project" "$out.jsonl" 2>&1); check_rc=$?
   fi
-  agents_bytes=$(wc -c < "$work/project/AGENTS.md" | tr -d ' ')
+  # 사례가 AGENTS.md 를 읽을 수 없게 만들었으면 바이트는 설치에 쓴 키트 checkout 에서 잰다.
+  agents_bytes=$( { wc -c < "$work/project/AGENTS.md" || wc -c < "$work/kit/AGENTS.md"; } 2>/dev/null | tr -d ' ')
   # 값은 환경 변수로 넘겨 따옴표·줄바꿈이 섞인 판정 문구도 그대로 기록한다.
   E_CASE=$case_name E_REF=$ref E_COMMIT=$commit E_HARNESS=$harness E_RUN=$i E_RC=$rc E_SEC=$seconds \
   E_VERSION=$("$harness" --version 2>/dev/null | head -1) E_BYTES=$agents_bytes E_CHECK_RC=$check_rc E_VERDICT=$verdict \
@@ -104,7 +105,7 @@ json.dump({"case": e["E_CASE"], "kit_ref": e["E_REF"], "kit_commit": e["E_COMMIT
   # 판정 검사를 고친 뒤 다시 판정할 수 있게, 끝난 프로젝트의 작업 파일(설치된 키트·git 제외)을 남긴다.
   # 같은 이름으로 다시 실행해도 지난 실행의 파일이 섞이지 않게 먼저 비운다.
   rm -rf "${out:?}.files" "${out:?}.before-last"
-  mkdir -p "$out.files" && (cd "$work/project" && tar cf - --exclude=./.git --exclude=./.agents .) | tar xf - -C "$out.files"
+  mkdir -p "$out.files" && (cd "$work/project" && tar cf - --exclude=./.git --exclude=./.agents . 2>/dev/null) | tar xf - -C "$out.files"
   # 마지막 턴 직전 상태도 남긴다. 다시 판정할 때 EVALS_BEFORE_LAST_TURN 으로 넘긴다.
   [ ! -d "$work/before-last" ] || cp -R "$work/before-last" "$out.before-last"
   # 하네스가 실패했으면 판정과 관계없이, 처음 실패한 실행의 종료 코드를 그대로 돌려준다.
