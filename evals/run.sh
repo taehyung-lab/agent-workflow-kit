@@ -48,9 +48,10 @@ for i in $(seq 1 "$times"); do
   t=0
   for turn in "${turns[@]}"; do
     t=$((t + 1)); prompt=$(cat "$turn"); tout="$out.t$t"
-    # 마지막 턴 직전의 작업 파일(설치된 키트·git 제외)을 남겨, 판정이 "마지막 턴에서 무엇을 바꿨나"를 볼 수 있게 한다.
-    if [ "$t" -eq "${#turns[@]}" ]; then rm -rf "${work:?}/before-last"; mkdir "$work/before-last" \
-      && (cd "$work/project" && tar cf - --exclude=./.git --exclude=./.agents .) | tar xf - -C "$work/before-last"; fi
+    # 턴마다 직전 작업 파일(설치된 키트·git 제외)을 덮어 남긴다. 끝나면 "마지막으로 실행한 턴의 직전 상태"가 되어,
+    # 판정은 그 턴에서 무엇을 바꿨나를 보고, 하네스가 중간에 실패해도 실패한 턴의 직전 상태가 남는다.
+    rm -rf "${work:?}/before-last"; mkdir "$work/before-last" \
+      && (cd "$work/project" && tar cf - --exclude=./.git --exclude=./.agents .) | tar xf - -C "$work/before-last"
     if [ "$harness" = claude ]; then
       resume=(); [ "$t" -eq 1 ] || resume=(--resume "$sid")
       (cd "$work/project" && perl -e 'alarm shift; exec @ARGV' 900 claude -p "$prompt" ${resume[@]+"${resume[@]}"} --output-format stream-json --verbose \
