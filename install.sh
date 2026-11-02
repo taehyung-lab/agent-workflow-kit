@@ -62,7 +62,7 @@ install_fresh() {
   if ! grep -qxF '/work/' .gitignore 2>/dev/null; then
     printf '\n/work/\n' >> .gitignore
   fi
-  printf '%s\n' 'Files installed. Fill the project map and verify skill discovery in a new session.'
+  printf '%s\n' 'Files installed. Next, in a new session: survey this repository, fill the 4 project-map lines in AGENTS.md (leave 미확인 where no evidence), decide keep/move/remove for existing agent docs, then confirm with one small real request.'
 }
 
 # 업데이트: 키트 소유 부분이 설치 당시 그대로일 때만 새 커밋으로 교체하고, 프로젝트 부분은 건드리지 않는다

@@ -188,7 +188,8 @@ bash evals/selftest.sh                             # 모델 없이: 판정 검�
 다른 설치·편집이 없는 대상에서 실행한다. 권한·I/O 실패 때 일부 신규 파일이 남을 수 있으므로 종료 코드와 대상을 확인하고 병합 범위를 정한다.
 CLAUDE.md는 `@AGENTS.md`, `.claude/skills`는 `.agents/skills`를 가리킨다.
 키트가 관리하는 부분은 AGENTS.md의 `agent-workflow-kit:begin`~`end` 표시 영역, CLAUDE.md, 키트가 설치한 `.agents/skills/wf-*` 파일이다. 프로젝트는 이 부분을 고치지 않고, 지도·저장소별 절·역할 스킬은 표시 영역 밖에 둔다. 설치한 키트 커밋은 `.agents/agent-workflow-kit.version`에 남고, 프로젝트는 이 고정 버전을 따른다. 이 키트는 세션을 자동 생성하지 않는다.
-에이전트에게 맡길 때: "https://github.com/taehyung-lab/agent-workflow-kit 를 clone해 install.sh로 이 저장소에 설치하고, AGENTS.md 지도를 이 저장소를 조사해 채워줘. 설치기가 멈추면 병합안을 먼저 보여줘."
+도입은 다섯 걸음이다: 설치 → 저장소 관찰 → 지도 네 칸 채우기(근거가 없으면 `미확인`) → 기존 에이전트 문서마다 유지·이동·폐기 결정 → 다음 작은 실제 요청 하나로 지도와 스킬 선택이 맞는지 확인.
+에이전트에게 맡길 때: "https://github.com/taehyung-lab/agent-workflow-kit 를 clone해 install.sh로 이 저장소에 설치하고, 저장소를 조사해 AGENTS.md 지도 네 칸을 채워줘. 근거가 없는 칸은 미확인으로 두고, 기존 에이전트 문서는 유지·이동·폐기안을 보여줘. 설치기가 멈추면 병합안을 먼저 보여줘."
 
 ### 새 프로젝트의 지도
 
