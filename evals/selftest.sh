@@ -53,8 +53,8 @@ grep -q '"exit_code": 7' "${snap%.files}.meta.json" 2>/dev/null && ok "메타데
 : > "$fake/log"; FAKE_RC=0 FAKE_LOG=$fake/log EVALS_RESULTS=$results PATH="$fake:$PATH" bash "$here/run.sh" archive-after-correction HEAD claude >/dev/null 2>&1; rc=$?
 [ $rc -eq 0 ] && [ "$(grep -c '' "$fake/log")" -eq 2 ] && sed -n 2p "$fake/log" | grep -q -- '--resume fake-sid' && ok "여러 턴: 두 번째 턴이 같은 세션을 이어 감" || ng "여러 턴 이어 가기(rc=$rc, 호출 $(grep -c '' "$fake/log")회)"
 rm -rf "${fake:?}" "${results:?}"
-# Stop 훅(모델 없음): 이진 파일·원문 추출·캐시 지문·반환 뒤 재검토·검증 실패·막는 횟수 한도
-python3 -I "$here/hooktest.py" > "${TMPDIR:-/tmp}/hooktest.$$" 2>&1 && ok "Stop 훅 시험 $(tail -1 "${TMPDIR:-/tmp}/hooktest.$$")" || { ng "Stop 훅 시험"; grep -v '^ok' "${TMPDIR:-/tmp}/hooktest.$$"; }
-rm -f "${TMPDIR:-/tmp}/hooktest.$$"
+# 결정 표 훅(모델 없음): 표 없음·원문 인용·계약 경로·미확인과 질문·되돌림·막는 횟수
+python3 -I "$here/gatetest.py" > "${TMPDIR:-/tmp}/gatetest.$$" 2>&1 && ok "결정 표 훅 시험 $(tail -1 "${TMPDIR:-/tmp}/gatetest.$$")" || { ng "결정 표 훅 시험"; grep -v '^ok' "${TMPDIR:-/tmp}/gatetest.$$"; }
+rm -f "${TMPDIR:-/tmp}/gatetest.$$"
 printf '%d passed, %d failed\n' "$pass" "$failed"
 [ "$failed" -eq 0 ]
