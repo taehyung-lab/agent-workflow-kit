@@ -29,12 +29,15 @@ bash "$here/run.sh" weight-disposable no-such-ref claude >/dev/null 2>&1; rc=$?
 [ $rc -eq 2 ] && ok "없는 키트 커밋은 실행 전에 거절(rc=2)" || ng "없는 커밋 처리(rc=$rc)"
 # 실행기 계약: 가짜 하네스(종료 코드 7, 파일 하나를 만듦)로 종료 코드를 그대로 돌려주는지와 끝난 프로젝트 파일·메타데이터를 남기는지 본다.
 fake=$(mktemp -d); results=$(mktemp -d)
-printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho made > made-by-fake.txt\nexit 7\n' > "$fake/claude"; chmod +x "$fake/claude"
-EVALS_RESULTS=$results PATH="$fake:$PATH" bash "$here/run.sh" weight-disposable HEAD claude >/dev/null 2>&1; rc=$?
+printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho "$*" >> "$FAKE_LOG"\necho \x27{"session_id": "fake-sid"}\x27\necho made > made-by-fake.txt\nexit "${FAKE_RC:-7}"\n' > "$fake/claude"; chmod +x "$fake/claude"
+FAKE_LOG=$fake/log EVALS_RESULTS=$results PATH="$fake:$PATH" bash "$here/run.sh" weight-disposable HEAD claude >/dev/null 2>&1; rc=$?
 [ $rc -eq 7 ] && ok "하네스 종료 코드 7을 그대로 반환" || ng "하네스 종료 코드 반환(rc=$rc)"
 snap=$(ls -d "$results"/weight-disposable-*-claude-1.files 2>/dev/null | tail -1)
 [ -f "$snap/made-by-fake.txt" ] && ok "끝난 프로젝트 파일 보존" || ng "끝난 프로젝트 파일이 남지 않음"
 grep -q '"exit_code": 7' "${snap%.files}.meta.json" 2>/dev/null && ok "메타데이터에 종료 코드 기록" || ng "메타데이터 종료 코드"
+# 여러 턴: 두 번째 턴이 첫 턴의 세션 id 로 이어 가는지(가짜 하네스가 받은 인자로 확인)
+: > "$fake/log"; FAKE_RC=0 FAKE_LOG=$fake/log EVALS_RESULTS=$results PATH="$fake:$PATH" bash "$here/run.sh" archive-after-correction HEAD claude >/dev/null 2>&1; rc=$?
+[ $rc -eq 0 ] && [ "$(grep -c '' "$fake/log")" -eq 2 ] && sed -n 2p "$fake/log" | grep -q -- '--resume fake-sid' && ok "여러 턴: 두 번째 턴이 같은 세션을 이어 감" || ng "여러 턴 이어 가기(rc=$rc, 호출 $(grep -c '' "$fake/log")회)"
 rm -rf "${fake:?}" "${results:?}"
 printf '%d passed, %d failed\n' "$pass" "$failed"
 [ "$failed" -eq 0 ]
