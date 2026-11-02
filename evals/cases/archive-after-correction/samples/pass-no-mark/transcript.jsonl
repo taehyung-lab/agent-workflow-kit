@@ -1,0 +1,1 @@
+{"type": "item.completed", "item": {"type": "agent_message", "text": "보관 방식 선택이 필요합니다.\n\n- **보관 명령(추천):** archive 실행 때 완료 항목을 옮김\n- **자동 보관:** 완료 즉시 옮김"}}

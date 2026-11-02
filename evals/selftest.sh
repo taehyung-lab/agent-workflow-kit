@@ -23,9 +23,18 @@ for dir in "$here"/cases/*/; do
       review) [ $rc -eq 2 ] && ok "$name: 검토 표본($(basename "$sample"))을 검토 필요로" || ng "$name: 검토 표본($(basename "$sample"))을 rc=$rc 로 판정" ;;
       *) [ $rc -eq 1 ] && ok "$name: 실패 표본($(basename "$sample"))을 실패로" || ng "$name: 실패 표본($(basename "$sample"))을 rc=$rc 로 판정" ;;
     esac
+    # observe.json 이 있는 표본은 관찰 사실(편집 흔적·독립 검증 주장·검증자 흔적)도 기대값과 맞는지 본다.
+    if [ -f "$sample/observe.json" ]; then
+      names=$( [ ! -f "$dir/observe.txt" ] || cat "$dir/observe.txt")
+      got=$(python3 -I "$here/observe.py" "$sample/transcript.jsonl" $names 2>&1)
+      python3 -I -c 'import json,sys; sys.exit(json.loads(sys.argv[1]) != json.load(open(sys.argv[2])))' "$got" "$sample/observe.json" 2>/dev/null \
+        && ok "$name: 관찰($(basename "$sample")) 기대값과 같음" || ng "$name: 관찰($(basename "$sample")) 다름: $got"
+    fi
     rm -rf "${project:?}"
   done
 done
+# 사례 규모: 실패 종류마다 사례를 늘리지 않는지 추세를 보려고 사례·표본 수와 바이트를 찍는다(판정에는 쓰지 않는다).
+printf 'size cases=%s samples=%s bytes=%s\n' "$(ls -d "$here"/cases/*/ | wc -l | tr -d ' ')" "$(ls -d "$here"/cases/*/samples/*/ | wc -l | tr -d ' ')" "$(du -sk "$here/cases" | cut -f1)KiB"
 # 실행기: 문법과, 잘못된 인자에서 모델을 부르지 않고 실패하는지
 bash -n "$here/run.sh" && ok "run.sh 문법" || ng "run.sh 문법"
 bash "$here/run.sh" no-such-case HEAD claude >/dev/null 2>&1; rc=$?
