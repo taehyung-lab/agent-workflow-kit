@@ -114,9 +114,12 @@ bash agent-workflow-kit/install.sh /path/to/my-project
 ```bash
 bash evals/run.sh weight-accounting v1.1.0 claude   # 바꾸기 전 커밋
 bash evals/run.sh weight-accounting HEAD claude     # 바꾼 뒤(커밋한 상태). Codex 도 같은 두 줄을 codex 로
-python3 -I evals/report.py evals/results           # 사례·하네스·커밋별 통과 수·시간·AGENTS.md 바이트
+python3 -I evals/report.py evals/results           # 사례·하네스·커밋별 통과·검토 필요 수·시간·AGENTS.md 바이트
+python3 -I evals/rejudge.py evals/results/<폴더>    # 판정 검사를 고친 뒤, 저장된 결과를 다시 판정
 bash evals/selftest.sh                             # 모델 없이: 판정 검사가 표본을 구별하는지
 ```
+
+판정은 세 가지다: **통과**, **실패**, **검토 필요**(검사가 자동으로 가를 수 없어 원시 기록을 사람이 본다). 사례 폴더에 `prompt2.txt`·`prompt3.txt` 를 두면 같은 세션을 이어 가는 여러 턴 사례가 된다(예: 구현 뒤 사용자가 정정하는 상황).
 
 `run.sh` 는 `claude` 또는 `codex` CLI 가 설치·로그인되어 있어야 하고, 실제 모델 세션을 임시 프로젝트 폴더에서 실행한다(Claude 는 권한 확인 없이, Codex 는 그 폴더 쓰기 허용으로, 한 번에 최대 15분).
 
