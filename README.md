@@ -55,9 +55,11 @@ flowchart TD
 
 에이전트는 일을 받으면 구현부터 하지 않는다. 요구를 **관찰할 수 있는 조건**(예: "저장 버튼을 누르면 목록 맨 위에 새 항목이 보인다")으로 바꾸고, 그 조건을 확인할 검사를 먼저 정한다. 판정은 조건마다 충족·미충족·미확인 중 하나이고, 필수 조건에 미충족이나 미확인이 남으면 완료가 아니다.
 
+"확정"은 원문·사용자 결정·외부 계약으로 뒷받침되는 결과만 뜻한다. 사용자가 정정하거나 덧붙인 요청도 명시한 부분만 확정이고, 에이전트가 고른 안이나 이미 만든 구현은 승인 근거가 아니다. 그래서 정정 뒤에도 결과가 갈리는 선택이 남으면 추천과 함께 묻는다.
+
 모든 일에 같은 절차를 강제하지도 않는다. 일을 시작할 때, 그리고 작업 중 연결·권한·검사가 바뀔 때마다 한 줄로 무게를 잰다.
 
-> 조건 확정 여부 / 연결 영향(결과에 기대는 사람·시스템) / 틀린 결과가 사용자·데이터·권한에 미치는 영향(되돌리거나 계속 고치는 비용 포함) → 필요한 단계
+> 확정 결과와 원문 근거 / 남은 결과 선택 / 연결 영향(결과에 기대는 사람·시스템) / 틀린 결과의 영향(사용자·데이터·권한과 회복 비용) → 필요한 단계
 
 | 상황 | 단계 | 예 |
 | --- | --- | --- |
@@ -99,7 +101,7 @@ flowchart LR
 ## 5분 시작
 
 ```bash
-git clone --branch v1.2.0 https://github.com/taehyung-lab/agent-workflow-kit
+git clone --branch v1.3.0 https://github.com/taehyung-lab/agent-workflow-kit
 bash agent-workflow-kit/install.sh /path/to/my-project
 ```
 
@@ -114,9 +116,12 @@ bash agent-workflow-kit/install.sh /path/to/my-project
 ```bash
 bash evals/run.sh weight-accounting v1.1.0 claude   # 바꾸기 전 커밋
 bash evals/run.sh weight-accounting HEAD claude     # 바꾼 뒤(커밋한 상태). Codex 도 같은 두 줄을 codex 로
-python3 -I evals/report.py evals/results           # 사례·하네스·커밋별 통과 수·시간·AGENTS.md 바이트
+python3 -I evals/report.py evals/results           # 사례·하네스·커밋별 통과·검토 필요 수·시간·AGENTS.md 바이트
+python3 -I evals/rejudge.py evals/results/<폴더>    # 판정 검사를 고친 뒤, 저장된 결과를 다시 판정
 bash evals/selftest.sh                             # 모델 없이: 판정 검사가 표본을 구별하는지
 ```
+
+판정은 세 가지다: **통과**, **실패**, **검토 필요**(검사가 자동으로 가를 수 없어 원시 기록을 사람이 본다). 사례 폴더에 `prompt2.txt`·`prompt3.txt` 를 두면 같은 세션을 이어 가는 여러 턴 사례가 된다(예: 구현 뒤 사용자가 정정하는 상황).
 
 `run.sh` 는 `claude` 또는 `codex` CLI 가 설치·로그인되어 있어야 하고, 실제 모델 세션을 임시 프로젝트 폴더에서 실행한다(Claude 는 권한 확인 없이, Codex 는 그 폴더 쓰기 허용으로, 한 번에 최대 15분).
 
