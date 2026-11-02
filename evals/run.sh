@@ -48,6 +48,9 @@ for i in $(seq 1 "$times"); do
   t=0
   for turn in "${turns[@]}"; do
     t=$((t + 1)); prompt=$(cat "$turn"); tout="$out.t$t"
+    # 마지막 턴 직전의 작업 파일(설치된 키트·git 제외)을 남겨, 판정이 "마지막 턴에서 무엇을 바꿨나"를 볼 수 있게 한다.
+    if [ "$t" -eq "${#turns[@]}" ]; then rm -rf "${work:?}/before-last"; mkdir "$work/before-last" \
+      && (cd "$work/project" && tar cf - --exclude=./.git --exclude=./.agents .) | tar xf - -C "$work/before-last"; fi
     if [ "$harness" = claude ]; then
       resume=(); [ "$t" -eq 1 ] || resume=(--resume "$sid")
       (cd "$work/project" && perl -e 'alarm shift; exec @ARGV' 900 claude -p "$prompt" ${resume[@]+"${resume[@]}"} --output-format stream-json --verbose \
@@ -73,7 +76,8 @@ for l in open(sys.argv[1], encoding="utf-8"):
   done
   [ "$harness" != codex ] || rm -rf "${ch:?}"
   seconds=$(( $(date +%s) - start ))
-  verdict=$(python3 -I "$case_dir/check.py" "$work/project" "$out.jsonl" 2>&1); check_rc=$?
+  # 판정 검사는 0=통과, 1=실패, 2=검토 필요(원문을 사람이 판정)를 돌려준다.
+  verdict=$(EVALS_BEFORE_LAST_TURN="$work/before-last" python3 -I "$case_dir/check.py" "$work/project" "$out.jsonl" 2>&1); check_rc=$?
   agents_bytes=$(wc -c < "$work/project/AGENTS.md" | tr -d ' ')
   # 값은 환경 변수로 넘겨 따옴표·줄바꿈이 섞인 판정 문구도 그대로 기록한다.
   E_CASE=$case_name E_REF=$ref E_COMMIT=$commit E_HARNESS=$harness E_RUN=$i E_RC=$rc E_SEC=$seconds \
@@ -84,12 +88,14 @@ import json, os, sys
 e = os.environ
 json.dump({"case": e["E_CASE"], "kit_ref": e["E_REF"], "kit_commit": e["E_COMMIT"], "harness": e["E_HARNESS"],
   "run": int(e["E_RUN"]), "harness_version": e["E_VERSION"], "exit_code": int(e["E_RC"]), "seconds": int(e["E_SEC"]),
-  "agents_md_bytes": int(e["E_BYTES"]), "check_passed": e["E_CHECK_RC"] == "0", "check_output": e["E_VERDICT"],
+  "agents_md_bytes": int(e["E_BYTES"]), "check_passed": e["E_CHECK_RC"] == "0", "check_needs_review": e["E_CHECK_RC"] == "2", "check_output": e["E_VERDICT"],
   "global_instructions": {"~/.claude/CLAUDE.md": e["E_G1"], "~/.agents/USER.md": e["E_G2"], "~/.codex/AGENTS.md": e["E_G3"], "global skills": e["E_G4"]}},
   open(sys.argv[1], "w"), ensure_ascii=False, indent=1)' "$out.meta.json"
   printf '%s exit=%s check=%s %s\n' "$name" "$rc" "$([ $check_rc -eq 0 ] && echo PASS || echo FAIL)" "$(printf '%s' "$verdict" | head -1)"
   # 판정 검사를 고친 뒤 다시 판정할 수 있게, 끝난 프로젝트의 작업 파일(설치된 키트·git 제외)을 남긴다.
   mkdir -p "$out.files" && (cd "$work/project" && tar cf - --exclude=./.git --exclude=./.agents .) | tar xf - -C "$out.files"
+  # 마지막 턴 직전 상태도 남긴다. 다시 판정할 때 EVALS_BEFORE_LAST_TURN 으로 넘긴다.
+  [ ! -d "$work/before-last" ] || cp -R "$work/before-last" "$out.before-last"
   # 하네스가 실패했으면 판정과 관계없이, 처음 실패한 실행의 종료 코드를 그대로 돌려준다.
   [ "$rc" -eq 0 ] || [ "$status" -ne 0 ] || status=$rc
   rm -rf "${work:?}"

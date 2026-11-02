@@ -15,9 +15,14 @@ for dir in "$here"/cases/*/; do
     sample=${sample%/}; kind=$(basename "$sample"); kind=${kind%%-*}
     project=$(mktemp -d); printf '# 샘플\n' > "$project/README.md"
     [ ! -d "$sample/files" ] || cp -R "$sample/files/." "$project/"
-    python3 -I "$dir/check.py" "$project" "$sample/transcript.jsonl" >/dev/null 2>&1; rc=$?
-    if [ "$kind" = pass ]; then [ $rc -eq 0 ] && ok "$name: 통과 표본을 통과로" || ng "$name: 통과 표본을 실패로 판정(rc=$rc)"
-    else [ $rc -ne 0 ] && ok "$name: 실패 표본을 실패로" || ng "$name: 실패 표본을 통과로 판정"; fi
+    # before/ 가 있는 표본은 마지막 턴 직전 상태를 흉내 낸다(없으면 비교하지 않음).
+    before=""; [ ! -d "$sample/before" ] || before="$sample/before"
+    EVALS_BEFORE_LAST_TURN=$before python3 -I "$dir/check.py" "$project" "$sample/transcript.jsonl" >/dev/null 2>&1; rc=$?
+    case "$kind" in
+      pass) [ $rc -eq 0 ] && ok "$name: 통과 표본($(basename "$sample"))을 통과로" || ng "$name: 통과 표본($(basename "$sample"))을 rc=$rc 로 판정" ;;
+      review) [ $rc -eq 2 ] && ok "$name: 검토 표본($(basename "$sample"))을 검토 필요로" || ng "$name: 검토 표본($(basename "$sample"))을 rc=$rc 로 판정" ;;
+      *) [ $rc -eq 1 ] && ok "$name: 실패 표본($(basename "$sample"))을 실패로" || ng "$name: 실패 표본($(basename "$sample"))을 rc=$rc 로 판정" ;;
+    esac
     rm -rf "${project:?}"
   done
 done
