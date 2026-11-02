@@ -1,0 +1,9 @@
+{
+ "final_question": false,
+ "last_turn_edits": [
+  "accounts.py"
+ ],
+ "claims_independent_verification": true,
+ "verifier_observed": false,
+ "independent_claim_unverified": true
+}
