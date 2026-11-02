@@ -35,6 +35,10 @@ for i in $(seq 1 "$times"); do
     && git add -A && git -c user.name=evals -c user.email=evals@invalid commit -qm fixture) || fail "사례 준비 실패"
   bash "$work/kit/install.sh" "$work/project" >/dev/null 2>&1 || fail "키트 설치 실패: $commit"
   (cd "$work/project" && git add -A && git -c user.name=evals -c user.email=evals@invalid commit -qm kit)
+  # 설치 뒤 준비(선택): 설치된 상태를 바꿔야 하는 사례(예: 키트 본문을 읽을 수 없게, 다른 저장소를 옆에 두기)가 쓴다.
+  # 설치 커밋 뒤에 실행하므로 그 변경은 세션이 보는 작업 트리에만 남는다. EVALS_KIT 는 설치에 쓴 키트 checkout 이다.
+  [ ! -f "$case_dir/after-install.sh" ] || (cd "$work/project" && EVALS_KIT="$work/kit" bash "$case_dir/after-install.sh") \
+    || fail "설치 뒤 준비 실패: $case_dir/after-install.sh"
 
   name="$case_name-$(printf %.7s "$commit")-$harness-$i"
   out="$out_root/$name"
