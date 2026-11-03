@@ -197,6 +197,11 @@ exit 0
     rc, out, prompt = verify("E", [OK])
     check("결함5: 시작 때 내용을 보존하지 못한 파일이 있으면 unverified", out.get("state") == "unverified" and "보존하지 못한" in out.get("reason", "") and prompt == "")
     (proj / "secret.bin").unlink()
+    hooks = t / "fail-hooks"; hooks.mkdir(); (hooks / "pre-commit").write_text("#!/bin/sh\nexit 1\n"); (hooks / "pre-commit").chmod(0o755)
+    hook("prompt", "E", prompt="승인합니다.")
+    rc, out, prompt = verify("E", [OK], GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="core.hooksPath", GIT_CONFIG_VALUE_0=str(hooks))
+    check("판정 대상 고정(git commit)이 실패하면 빈 대상으로 판정하지 않고 unverified(검증자를 띄우지 않음)",
+          rc == 5 and out.get("state") == "unverified" and "고정 실패" in out.get("reason", "") and out.get("target") is None and prompt == "")
 
     # ---- 증거 보존 회귀 표본(ac32c52): 기존 증거·사용자 폴더를 지우거나 덮지 않는다 ----
     hook("prompt", "F", prompt="로그인 버튼 글자를 '로그인하기'로 바꿔 주세요")

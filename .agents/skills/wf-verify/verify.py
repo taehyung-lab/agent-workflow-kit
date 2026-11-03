@@ -200,8 +200,15 @@ def freeze(root, dest):
         else:
             shutil.copy2(src, dst)
     g = ["git", "-c", "user.name=verify", "-c", "user.email=verify@invalid", "-c", "commit.gpgsign=false"]
-    run(g + ["init", "-q"], cwd=dest); run(g + ["add", "-A"], cwd=dest); run(g + ["commit", "-qm", "verify-target", "--allow-empty"], cwd=dest)
-    return run(["git", "rev-parse", "HEAD"], cwd=dest).stdout.decode().strip()
+    # 하나라도 실패하면(쓰기 경계·git 설정·훅 등) 빈 대상으로 판정하지 않도록 멈춘다. 호출한 쪽이 미확인으로 처리한다.
+    for step in (["init", "-q"], ["add", "-A"], ["commit", "-qm", "verify-target", "--allow-empty"]):
+        r = run(g + step, cwd=dest)
+        if r.returncode != 0:
+            raise RuntimeError(f"판정 대상 고정 실패(git {step[0]} 종료 코드 {r.returncode}): {r.stderr.decode('utf-8', 'replace').strip()[:300]}")
+    head = run(["git", "rev-parse", "--verify", "HEAD^{commit}"], cwd=dest)
+    if head.returncode != 0 or not head.stdout.strip():
+        raise RuntimeError("판정 대상 고정 실패: 고정 커밋을 읽지 못했다")
+    return head.stdout.decode().strip()
 
 
 def materialize_base(root, base_json, dest):
@@ -375,7 +382,12 @@ def main(args):
         if not requests:
             problems.append("사용자 원문이 없다")
         vdir = keep / "target"
-        target = freeze(root, vdir)
+        try:
+            target = freeze(root, vdir)
+        except RuntimeError as e:  # 고정 대상이 없으면 검증자를 띄우지 않고 미확인(남긴 폴더에 그대로 둔다)
+            target = None
+            problems.append(str(e))
+            vdir.mkdir(parents=True, exist_ok=True)
         base = keep / "base"
         unsaved = []
         if opt(args, "--base-dir"):
