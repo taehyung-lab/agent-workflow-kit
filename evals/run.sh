@@ -9,8 +9,9 @@
 # 여러 턴 사례는 prompt2.txt … 를 두면 같은 세션을 이어 가며 차례로 보낸다.
 # 결과 요약: python3 -I evals/report.py evals/results
 # EVALS_VERIFY=1 이면 모든 턴 뒤에 실행기가 별도 검증 세션(같은 하네스의 새 세션)을 판정 대상의 복사본에서 띄운다.
+# 검증 라운드는 설치되는 독립 검증 실행기(.agents/skills/wf-verify/verify.py, 일반 작업도 같은 것을 쓴다)가 맡는다.
 # 검증자는 사용자 원문 그대로(승인 턴 포함)·승인 원문이 가리키는 계획(승인 바로 앞 답)·승인 때의 작업 지도 `## 기준`·필수 조건·대상 버전·작업 시작부터의 변경(diff)·실행 방법만 받는다.
-# 구현자의 답·지도의 증거(자기평가)는 넘기지 않는다. 판정은 verdict.py 가 정해진 결과 형식(JSON)으로만 읽는다:
+# 구현자의 답·지도의 증거(자기평가)는 넘기지 않는다. 판정은 정해진 결과 형식(JSON)으로만 읽는다:
 #   ok → 완료, returned → 구현자에게 돌려보내고 새 버전을 다시 판정(EVALS_VERIFY_ROUNDS 번까지, 기본 2), 그 밖(빈 답·형식 오류·
 #   조건 누락·OK 인데 미충족)·검증자 하네스 오류·검증자가 추적 파일을 바꿈 → 미확인. 한도에 닿으면 미완료. 미확인·미완료는 완료가 아니다.
 # EVALS_LANG=<언어> 는 사례의 setup.sh 에 넘겨 같은 사례를 다른 제품 언어로 만든다(사례가 지원할 때). meta 의 lang 에 남는다.
@@ -103,13 +104,11 @@ for l in open(sys.argv[1], encoding="utf-8"):
   verify_state=off; verify_reason=""; verify_rounds=0; verifier_rc=""; vjson='{}'; baseline_changed=false
   if [ "${EVALS_VERIFY:-0}" = 1 ] && [ "$rc" -eq 0 ]; then
     max_rounds=${EVALS_VERIFY_ROUNDS:-2}
-    # 필수 조건: 사례의 verify-conditions.txt 와 작업 지도 `## 기준` 표의 ID.
-    conditions=$( [ ! -f "$case_dir/verify-conditions.txt" ] || cat "$case_dir/verify-conditions.txt")
+    # 필수 조건: 사례의 verify-conditions.txt 와 작업 지도 `## 기준` 표의 ID(검증 실행기가 둘에서 모은다).
     # 검증 기준은 사용자가 승인한 지도 기준으로 고정한다. 승인 입력이면 승인 턴 직전 상태(before-last)의 지도, 아니면 사용자 턴이 끝난 때의 지도.
     # 재검증 때 구현자가 고친 지금의 지도를 새 기준으로 읽지 않는다. 바뀌었으면 그 사실만 검증자에게 알린다(승인받지 않은 기준 변경).
     if [ "$input" = with-approval ]; then baseline=$(python3 -I "$here/verdict.py" baseline "$work/before-last")
     else baseline=$(python3 -I "$here/verdict.py" baseline "$work/project"); fi
-    required=$( { printf '%s\n' "$conditions"; printf '%s\n' "$baseline"; } | python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); from verdict import ids; print(" ".join(ids(sys.stdin.read())))' "$here")
     baseline_changed=false
     # 승인 원문이 가리키는 계획: 승인 입력이면 승인 턴 바로 앞 턴의 구현자 답(사용자가 보고 승인한 추천안)을 넘긴다.
     # 승인 뒤 구현 턴의 답(자기평가)은 넘기지 않는다. 추출하지 못하면 성공처럼 비워 두지 않고 그 사실을 적는다.
@@ -118,53 +117,34 @@ for l in open(sys.argv[1], encoding="utf-8"):
       approved_plan=$(python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); from transcript import read; print(read(sys.argv[2])[1])' "$here" "$out.t$(( ${#turns[@]} - 1 )).jsonl" 2>/dev/null)
       [ -n "$approved_plan" ] || approved_plan="(추출 실패: 승인 직전 답을 기록에서 읽지 못했다. 승인 원문이 가리키는 계획에 기대는 조건은 미확인으로 둔다)"
     fi
+    # 검증 실행기는 일반 설치와 같은 것(설치된 키트의 .agents/skills/wf-verify/verify.py)을 쓴다. 고정 복사본·검증자 입력·결과 형식 판정·
+    # 재검증 한도를 그 실행기가 맡고, 실행기는 반환 턴만 보낸다. 그 커밋의 키트에 실행기가 없으면 이 저장소의 것을 쓴다(meta.verifier_tool).
+    # 하네스가 실행기 밖에서 돌기 때문에 관문 기록 대신 사용자 원문·계획·기준·작업 시작 상태를 파일로 넘긴다.
+    verifier_tool="$work/project/.agents/skills/wf-verify/verify.py"; [ -f "$verifier_tool" ] || verifier_tool="$kit/.agents/skills/wf-verify/verify.py"
+    reqs=(); for turn in "${turns[@]}"; do reqs+=(--request "$turn"); done
+    vargs=(--criteria "$work/criteria.txt" --base-dir "$work/before-task" --state "$work/verify-state.json")
+    printf '%s' "$baseline" > "$work/criteria.txt"
+    [ -z "$approved_plan" ] || { printf '%s' "$approved_plan" > "$work/approved-plan.txt"; vargs+=(--plan "$work/approved-plan.txt"); }
+    [ ! -f "$case_dir/verify-conditions.txt" ] || vargs+=(--conditions "$case_dir/verify-conditions.txt")
+    vget() { printf '%s' "$vjson" | python3 -I -c 'import json,sys
+v = json.load(sys.stdin).get(sys.argv[1])
+print("" if v is None else str(v).lower() if isinstance(v, bool) else v)' "$1" 2>/dev/null; }
     while :; do
       verify_rounds=$((verify_rounds + 1))
-      # 판정 대상 버전을 복사본으로 고정한다. 지도는 `## 기준` 만 프롬프트로 넘기고 복사본에서는 뺀다(증거·자기평가를 보지 않게).
-      vdir="$work/verify-$verify_rounds"; rm -rf "$vdir"; cp -R "$work/project" "$vdir"
-      current=$(python3 -I "$here/verdict.py" baseline "$vdir"); changed_note=""
-      if [ "$current" != "$baseline" ]; then baseline_changed=true
-        changed_note=$(printf '\n주의: 구현자가 승인 뒤 작업 지도의 기준을 바꿨다. 바뀐 기준은 사용자가 승인한 것이 아니므로 판정 기준으로 쓰지 않는다. 지금 지도의 기준:\n%s\n' "${current:-(없음)}"); fi
-      rm -rf "$vdir/work"
-      (cd "$vdir" && git add -A && git -c user.name=evals -c user.email=evals@invalid commit -qm verify-target --allow-empty) >/dev/null 2>&1
-      target=$(git -C "$vdir" rev-parse HEAD 2>/dev/null)
-      vprompt=$(cat "$here/verifier-prompt.txt"
-        n=0; for turn in "${turns[@]}"; do n=$((n + 1)); printf '\n\n## 사용자 원문 %s\n' "$n"; cat "$turn"; done
-        [ -z "$approved_plan" ] || printf '\n\n## 승인 원문이 가리키는 계획(승인 바로 앞 구현자 답. 사용자가 이 추천안을 승인했다. 원문과 대조하며, 구현 뒤 자기평가가 아니다)\n%s\n' "$approved_plan"
-        printf '\n\n## 필수 조건\n%s\n' "${conditions:-(사례가 정하지 않음. 원문에서 세운다)}"
-        printf '\n\n## 작업 지도의 기준(사용자가 승인한 때의 지도. 구현자가 쓴 합의 조건이므로 원문과 대조한다)\n%s\n%s' "${baseline:-(없음)}" "$changed_note"
-        printf '\n\n## 대상 버전\n이 폴더의 git 커밋 %s\n' "$target"
-        printf '\n\n## 실행 방법\n저장소 README 와 AGENTS.md 프로젝트 지도에 적힌 실행·검사 명령을 이 폴더에서 실행한다.\n'
-        printf '\n\n## 작업 시작부터 바뀐 내용(diff, 작업 지도 제외)\n'
-        diff -ruN -x .git -x .agents -x work "$work/before-task" "$work/project" | head -c 60000)
-      vlog="$out.verify$verify_rounds.jsonl"
-      if [ "$harness" = claude ]; then
-        (cd "$vdir" && perl -e 'alarm shift; exec @ARGV' 900 claude -p "$vprompt" --output-format stream-json --verbose \
-          --allowedTools Read,Grep,Glob,Bash --max-turns 30 > "$vlog" 2>> "$out.err")
-        vrc=$?
-      else
-        vh=$(mktemp -d); cp ~/.codex/auth.json ~/.codex/config.toml "$vh/" 2>/dev/null; [ ! -f ~/.codex/AGENTS.md ] || cp ~/.codex/AGENTS.md "$vh/"
-        CODEX_HOME=$vh perl -e 'alarm shift; exec @ARGV' 900 codex exec --json --skip-git-repo-check --sandbox workspace-write \
-          -C "$vdir" "$vprompt" > "$vlog" 2>> "$out.err" < /dev/null
-        vrc=$?  # 임시 홈을 지우기 전에 검증자의 종료 코드를 읽는다
-        rm -rf "${vh:?}"
-      fi
-      cp "$vlog" "$out.verify.jsonl"  # 마지막 판정 기록(이전 판정은 .verifyN.jsonl 로 남는다)
-      # 검증자가 추적 파일(제품·검사·기준)을 바꿨는지: 복사본의 커밋과 비교한다. 새로 생긴 파일(검사 산출물·캐시)은 기록만 한다.
-      touched=$(git -C "$vdir" status --porcelain --untracked-files=all 2>/dev/null | grep -v '^??' | head -5 | tr '\n' ' ')
-      artifacts=$(git -C "$vdir" status --porcelain --untracked-files=all 2>/dev/null | grep -c '^??')
-      vjson=$(python3 -I "$here/verdict.py" judge "$vlog" $required)
-      vstate=$(printf '%s' "$vjson" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["state"])')
-      verify_reason=$(printf '%s' "$vjson" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["reason"])')
-      if [ "$vrc" -ne 0 ]; then verifier_rc=$vrc; verify_state=unverified; verify_reason="검증자 하네스 종료 코드 $vrc"; break
-      elif [ -n "$touched" ]; then verify_state=unverified; verify_reason="검증자가 판정 대상의 추적 파일을 바꿨다: $touched"; break
-      elif [ "$vstate" = ok ]; then verify_state=ok; break
-      elif [ "$vstate" != returned ]; then verify_state=unverified; break
-      elif [ "$verify_rounds" -ge "$max_rounds" ]; then verify_state=incomplete; verify_reason="재검증 한도($max_rounds)에 닿았다: 마지막 판정 RETURN"; break
-      fi
+      vlog="$out.verify$verify_rounds.jsonl"; vh=""
+      if [ "$harness" = codex ]; then vh=$(mktemp -d); cp ~/.codex/auth.json ~/.codex/config.toml "$vh/" 2>/dev/null; [ ! -f ~/.codex/AGENTS.md ] || cp ~/.codex/AGENTS.md "$vh/"; fi
+      vjson=$(cd "$work/project" && env ${vh:+CODEX_HOME=$vh} python3 -I "$verifier_tool" --harness "$harness" --rounds "$max_rounds" --log "$vlog" \
+        "${reqs[@]}" "${vargs[@]}" 2>> "$out.err" | tail -1)
+      [ -z "$vh" ] || rm -rf "${vh:?}"
+      [ ! -f "$vlog" ] || cp "$vlog" "$out.verify.jsonl"  # 마지막 판정 기록(이전 판정은 .verifyN.jsonl 로 남는다)
+      vstate=$(vget state); verify_reason=$(vget reason); vrc=$(vget verifier_exit_code)
+      [ "$(vget baseline_changed_after_approval)" != true ] || baseline_changed=true
+      [ -z "$vrc" ] || [ "$vrc" = 0 ] || verifier_rc=$vrc
+      if [ -z "$vstate" ]; then verify_state=unverified; verify_reason="검증 실행기가 결과를 내지 못했다"; vjson='{}'; break; fi
+      case "$vstate" in ok|unverified|incomplete) verify_state=$vstate; break;; esac
       # 돌려보냄: 구현자 세션에 반환 턴을 보낸다. 반환 턴은 사용자 턴이 아니므로 before-last 를 덮지 않는다.
       t=$((t + 1)); tout="$out.t$t"
-      vfinal=$(python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); from transcript import read; print(read(sys.argv[2])[1])' "$here" "$vlog")
+      vfinal=$(vget final)
       rprompt=$(printf '별도 검증자가 다음 사유로 돌려보냈습니다. 검증자의 판단을 그대로 따르지 말고, 사용자 원문과 작업 기준에 비추어 판단해 다시 답하세요.\n\n%s' "$vfinal")
       if [ "$harness" = claude ]; then
         # 반환 턴은 사용자 메시지가 아니다: 관문에 발신 구분을 넘겨 글 속 "승인합니다"·"취소합니다"로 승인 상태가 바뀌지 않게 한다.
@@ -178,7 +158,14 @@ for l in open(sys.argv[1], encoding="utf-8"):
       if [ "$trc" -ne 0 ]; then rc=$trc; verify_state=incomplete; verify_reason="교정 턴의 구현자 하네스 종료 코드 $trc"; break; fi
     done
   fi
-  # Codex 의 exec 기록(--json)에는 하위 에이전트 생성(spawn_agent)이 남지 않는다. 관찰용으로 이 세션의 원본 기록(rollout)을 남긴다.
+  # 끝난 때 관문이 사용자 답을 기다리는지(승인 전이거나 사용자 철회·기준 변경으로 닫힘): 구현 실패·검증 실패와 구별해 센다.
+  # 관문 기록이 없으면(관문 없는 커밋·훅이 돌지 않음) 알 수 없으므로 대기로 세지 않는다.
+  gate_waiting=$( [ -z "$sid" ] || (cd "$work/project" && python3 -I .agents/skills/wf-design/approval-gate.py status --session "$sid" < /dev/null 2>/dev/null) \
+    | python3 -I -c 'import json,sys
+try: d = json.load(sys.stdin)
+except ValueError: d = {}
+print("true" if d.get("task") and d.get("approval") != "open" and d.get("closed_kind") not in ("done", "new-task") else "false")' 2>/dev/null)
+    # Codex 의 exec 기록(--json)에는 하위 에이전트 생성(spawn_agent)이 남지 않는다. 관찰용으로 이 세션의 원본 기록(rollout)을 남긴다.
   [ "$harness" != codex ] || { [ -z "$sid" ] || find "$ch/sessions" -name "rollout-*$sid.jsonl" -exec cat {} + > "$out.rollout.jsonl" 2>/dev/null; rm -rf "${ch:?}"; }
   seconds=$(( $(date +%s) - start ))
   observed=$(python3 -I "$here/observe.py" "$out.jsonl" $( [ ! -f "$case_dir/observe.txt" ] || cat "$case_dir/observe.txt") 2>/dev/null || echo '{}')
@@ -206,7 +193,7 @@ for l in open(sys.argv[1], encoding="utf-8"):
   # 값은 환경 변수로 넘겨 따옴표·줄바꿈이 섞인 판정 문구도 그대로 기록한다.
   E_HERE=$here E_CASE=$case_name E_REF=$ref E_COMMIT=$commit E_HARNESS=$harness E_RUN=$i E_RC=$rc E_SEC=$seconds \
   E_VERSION=$("$harness" --version 2>/dev/null | head -1) E_BYTES=$agents_bytes E_CHECK_RC=$check_rc E_VERDICT=$verdict \
-  E_G1=$(fingerprint ~/.claude/CLAUDE.md) E_G2=$(fingerprint ~/.agents/USER.md) E_G3=$(fingerprint ~/.codex/AGENTS.md) E_G4=$(skills_fingerprint) E_OBS=$observed E_VSTATE=$verify_state E_BCHANGED=${baseline_changed:-false} E_VREASON=$verify_reason E_VROUNDS=$verify_rounds E_VRC=$verifier_rc E_VJSON=$vjson E_LANG=${EVALS_LANG:-} E_JUDGE=$(cd "$here" && shasum -a 256 "cases/$case_name/check.py" judge.py observe.py transcript.py verdict.py 2>/dev/null | shasum -a 256 | cut -c1-12) E_GATE=$gate E_INPUT=$input E_TURNS=$sent E_PLANNED=${#turns[@]} E_WAIT=$(python3 -I -c 'import json,sys
+  E_G1=$(fingerprint ~/.claude/CLAUDE.md) E_G2=$(fingerprint ~/.agents/USER.md) E_G3=$(fingerprint ~/.codex/AGENTS.md) E_G4=$(skills_fingerprint) E_OBS=$observed E_VSTATE=$verify_state E_BCHANGED=${baseline_changed:-false} E_VREASON=$verify_reason E_VROUNDS=$verify_rounds E_VRC=$verifier_rc E_VJSON=$vjson E_LANG=${EVALS_LANG:-} E_JUDGE=$(cd "$here" && shasum -a 256 "cases/$case_name/check.py" judge.py observe.py transcript.py verdict.py ../.agents/skills/wf-verify/verify.py 2>/dev/null | shasum -a 256 | cut -c1-12) E_GATE=$gate E_WAITING=${gate_waiting:-false} E_VTOOL=${verifier_tool:-} E_INPUT=$input E_TURNS=$sent E_PLANNED=${#turns[@]} E_WAIT=$(python3 -I -c 'import json,sys
 n = seen = 0
 try:
     for line in open(sys.argv[1], encoding="utf-8"):
@@ -234,7 +221,9 @@ json.dump({"case": e["E_CASE"], "kit_ref": e["E_REF"], "kit_commit": e["E_COMMIT
   "stage": "after-approval" if e["E_INPUT"] == "with-approval" else "original-input",
   # 검증자가 OK 여도 사례의 결정적 행동 검사(check.py)가 실패·미확인이면 완료로 세지 않는다(검증자가 놓친 것으로 따로 남긴다).
   # 판정 규칙은 verdict.completion 하나다(rejudge.py 도 같은 함수로 다시 계산한다).
-  "completion": completion(e["E_VSTATE"], {"0": "PASS", "1": "FAIL", "2": "REVIEW"}.get(e["E_CHECK_RC"], "UNVERIFIED")),
+  # 사용자 답 대기(gate_waiting)는 구현 실패·검증 실패·미확인과 따로 센다(완료가 아니다).
+  "completion": completion(e["E_VSTATE"], {"0": "PASS", "1": "FAIL", "2": "REVIEW"}.get(e["E_CHECK_RC"], "UNVERIFIED"), e["E_WAITING"] == "true"),
+  "gate_waiting": e["E_WAITING"] == "true", "verifier_tool": e["E_VTOOL"] or None,
   "baseline_changed_after_approval": e["E_BCHANGED"] == "true",
   "global_instructions": {"~/.claude/CLAUDE.md": e["E_G1"], "~/.agents/USER.md": e["E_G2"], "~/.codex/AGENTS.md": e["E_G3"], "global skills": e["E_G4"]}},
   open(sys.argv[1], "w"), ensure_ascii=False, indent=1)' "$out.meta.json"

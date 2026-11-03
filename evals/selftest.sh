@@ -129,7 +129,7 @@ vrun noevidence '"{\"verdict\": \"OK\", \"conditions\": [{\"id\": \"C1\", \"resu
 [ "$(mget verifier)" = unverified ] && ok "검증: 근거 없는 충족은 미확인" || ng "검증 근거 없음: $(mget verifier)"
 vrun ok "$OKV"
 [ "$(mget verifier)" = ok ] && [ "$(mget completion)" = verified ] && [ "$(mget verify_rounds)" = 1 ] && ok "검증: 형식대로 모두 충족이면 완료" || ng "검증 OK: $(mget verifier)/$(mget completion)"
-python3 -I "$here/report.py" "$vf/ok/r" | awk 'NR==2{exit !($(NF-4)==1 && $(NF-3)==0 && $(NF-2)==0)}' && ok "보고: 검증 완료를 단계 통과와 따로 셈" || ng "보고 검증 완료 열: $(python3 -I "$here/report.py" "$vf/ok/r")"
+python3 -I "$here/report.py" "$vf/ok/r" | awk 'NR==2{exit !($(NF-5)==1 && $(NF-4)==0 && $(NF-3)==0 && $(NF-2)==0)}' && ok "보고: 검증 완료를 단계 통과·답 대기와 따로 셈" || ng "보고 검증 완료 열: $(python3 -I "$here/report.py" "$vf/ok/r")"
 ! grep -q IMPL-ANSWER-MARKER "$vf/ok/vprompt.1" && grep -q '사용자 원문 1' "$vf/ok/vprompt.1" && grep -q 'made-by-impl.txt' "$vf/ok/vprompt.1" \
   && grep -q 'PLAN-MARKER' "$vf/ok/vprompt.1" \
   && ok "검증: 검증자는 원문·승인 원문이 가리키는 계획·작업 시작부터의 변경을 받고 구현 뒤 답(자기평가)은 받지 않음" || ng "검증 입력 독립성"
@@ -169,6 +169,13 @@ assert judge("```json\n" + ok + '\n```\n{"verdi')["state"] == "unverified"
 assert judge(ok + "\n이상입니다.")["state"] == "unverified"
 assert judge(ok + '\n{"note": 1}')["state"] == "unverified"
 PY
+python3 -I - "$here" <<'PY' && ok "완료 분류: verified 만 완료, 사용자 답 대기·구현 실패·검증 실패·미확인을 서로 구별" || ng "완료 분류"
+import sys; sys.path.insert(0, sys.argv[1]); from verdict import completion as c
+assert c("ok", "PASS") == "verified" and c("ok", "REVIEW", True) == "verified"
+assert c("ok", "FAIL") == "check-failed" and c("ok", "UNVERIFIED") == "unverified"
+assert c("returned", "FAIL", True) == "waiting-user" and c("off", "FAIL", True) == "waiting-user"
+assert c("incomplete", "FAIL") == "incomplete" and c("returned", "PASS") == "returned" and c("unverified", "PASS") == "unverified" and c("off", "PASS") == "not-verified"
+PY
 FAKE_BREAK=1 vrun checkfail "$OKV"
 [ "$(mget verifier)" = ok ] && [ "$(mget completion)" = check-failed ] && [ "$(mget check_passed)" = False ] \
   && ok "검증: 검증자가 OK 여도 결정적 행동 검사가 실패하면 완료(verified)로 세지 않음" || ng "검증 OK+검사 실패: $(mget verifier)/$(mget completion)"
@@ -207,5 +214,8 @@ rm -rf "${vf:?}"
 # 승인 관문 훅(모델 없음): 승인 판별·턴마다 닫힘·수정 도구 차단·셸 미차단·턴 끝 변경 알림·오류 시 막음
 python3 -I "$here/gatetest.py" > "${TMPDIR:-/tmp}/gatetest.$$" 2>&1 && ok "승인 관문 시험 $(tail -1 "${TMPDIR:-/tmp}/gatetest.$$")" || { ng "승인 관문 시험"; grep -v '^ok' "${TMPDIR:-/tmp}/gatetest.$$"; }
 rm -f "${TMPDIR:-/tmp}/gatetest.$$"
+# 일반 설치 흐름(모델 없음): 실제 install.sh 설치본의 관문 훅·독립 검증 실행기를 가짜 하네스로 호출(반환·교정·재검증·한도·미확인·대기)
+python3 -I "$here/flowtest.py" > "${TMPDIR:-/tmp}/flowtest.$$" 2>&1 && ok "일반 설치 흐름 시험 $(tail -1 "${TMPDIR:-/tmp}/flowtest.$$")" || { ng "일반 설치 흐름 시험"; grep -v '^ok' "${TMPDIR:-/tmp}/flowtest.$$"; }
+rm -f "${TMPDIR:-/tmp}/flowtest.$$"
 printf '%d passed, %d failed\n' "$pass" "$failed"
 [ "$failed" -eq 0 ]
