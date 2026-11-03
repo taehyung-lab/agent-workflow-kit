@@ -1,0 +1,4 @@
+실제 새 세션 기록에서 가져온 회귀 표본이다.
+원본: evals/results/issue20-final/approve/archive-specified-75ee23e-codex-1.* (마지막 턴 t3)
+키트 75ee23eeba081a73006fefa8e892aedf9ba093ec · codex-cli 0.166.0 · 원래 판정: PASS 승인 뒤 명시된 대로 구현했다(list·archive·export)
+transcript.rollout.jsonl 은 원본 rollout 에서 턴 시작(user_message·task_started)·함수 호출·코드 실행 호출 줄만 남겼다. 함수 호출 인자(암호화)는 지웠고 코드 실행 입력은 300자로 잘랐다(25줄).

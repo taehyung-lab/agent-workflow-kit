@@ -3,7 +3,7 @@
 - final_question: 마지막 답에 질문 표지가 있는가(후보일 뿐, 의미 판정은 사람이 한다)
 - last_turn_edits: 마지막 턴 기록에 남은 편집 대상 파일(편집 뒤 되돌려 최종 파일이 같아도 남는다)
 - claims_independent_verification: 마지막 답이 독립·별도 검증을 통과했다고 주장하는가
-- verifier_observed: 마지막 턴에 검증자를 만든 흔적(입력이 있는 하위 에이전트 생성 호출이나 wf-verify/verify.sh 실행)이 있는가.
+- verifier_observed: 마지막 턴에 검증자를 만들거나 앞서 만든 검증자에게 일을 맡긴 흔적(입력이 있는 하위 에이전트 생성 호출이나 wf-verify/verify.sh 실행)이 있는가.
   Codex 의 exec 기록에는 생성 호출이 남지 않으므로, run.sh 가 남긴 원본 기록(<이름>.rollout.jsonl)의 spawn_agent 호출을 본다.
   Codex 의 수신자 없는 wait 나 Claude 의 입력 없는 호출은 흔적으로 치지 않는다. 검증자에게 넘긴 내용은 Codex 원본에서 암호화되어 볼 수 없다.
 - verifier_record: 검증자 생성을 볼 수 있는 기록이 있었는가. "observed"(생성 흔적 있음)·"none"(볼 수 있는 기록에 없음)·
@@ -20,7 +20,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from judge import QUESTION
 from transcript import read
 
-CLAIM = r"(독립\s*검증|별도\s*검증|독립\s*판정|별도\s*검토|독립\s*검토|independent(ly)?\s+verif)"
+# 검증을 마쳤다는 주장만 센다. "별도 검토를 받겠습니다" 같은 계획 문장은 주장이 아니다.
+CLAIM = (r"((독립|별도)\s*(검증|판정|검토)(자|자가|자의)?[^.\n?]{0,40}(통과|마쳤|완료|확인했|판정했|받았|거쳤|이상\s*없)"
+         r"|independent(ly)?\s+verif\w*[^.\n?]{0,40}(pass|done|complete|confirm))")
 # 검증 도구를 읽기만 한 것(cat 등)은 치지 않고 bash·sh 로 실행한 것만 친다.
 RUN_VERIFY = r"\b(bash|sh)\s+\S*wf-verify/verify\.sh"
 WRITES = r"(>\s*\S|sed\s+-i|write_text|open\([^)]*['\"]w|apply_patch|tee\s)"
@@ -86,6 +88,10 @@ def verifier_observed(path):
     return False
 
 
+# 하위 에이전트에게 일을 맡긴 호출: 새로 만들기(spawn_agent)와, 앞서 만든 에이전트에게 다음 일을 맡기기(followup_task).
+SUBAGENT_WORK = ("spawn_agent", "followup_task")
+
+
 def rollout_spawned_in_last_turn(log):
     """Codex 원본 기록에서 마지막 사용자 턴 뒤에 하위 에이전트를 만들었는가. 원본이 없으면 None."""
     path = Path(str(log)[: -len(".jsonl")] + ".rollout.jsonl")
@@ -99,10 +105,12 @@ def rollout_spawned_in_last_turn(log):
             continue
         events += 1
         p = e.get("payload") or {}
-        if e.get("type") == "event_msg" and p.get("type") == "user_message":
-            spawned = False  # 새 사용자 턴이 시작되면 다시 센다
-        elif e.get("type") == "response_item" and p.get("type") == "function_call" and p.get("name") == "spawn_agent":
+        if e.get("type") == "event_msg" and p.get("type") in ("user_message", "task_started"):
+            spawned = False  # 새 사용자 턴이 시작되면 다시 센다(원본 형식에 따라 둘 중 하나로 표시된다)
+        elif e.get("type") == "response_item" and p.get("type") == "function_call" and p.get("name") in SUBAGENT_WORK:
             spawned = True
+        elif e.get("type") == "response_item" and p.get("type") == "custom_tool_call" and any(f"{n}(" in str(p.get("input", "")) for n in SUBAGENT_WORK):
+            spawned = True  # 코드 실행 도구(exec) 안에서 tools.spawn_agent(...) 처럼 부른 경우
     return spawned if events else None  # 비었거나 읽을 수 없는 원본은 기록 부족이다
 
 

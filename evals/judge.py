@@ -35,5 +35,17 @@ def changed_in_last_turn(project, names):
     return changed
 
 
+NOT_PRODUCT = {".git", ".agents", ".claude", ".codex", "work", "__pycache__", ".pytest_cache", "AGENTS.md", "CLAUDE.md"}
+
+
+def product_changed_in_last_turn(project):
+    """마지막 턴에 바뀐 제품 파일 전부(키트·하네스 설정·인계 기록·캐시 제외). 직전 상태가 없으면 [] 또는 None."""
+    before = os.environ.get("EVALS_BEFORE_LAST_TURN")
+    if not before or not Path(before).is_dir():
+        return changed_in_last_turn(project, [])
+    names = {p.name for d in (Path(before), Path(project)) for p in d.iterdir()} - NOT_PRODUCT
+    return [c for c in changed_in_last_turn(project, sorted(names)) if not c.endswith(".pyc")]
+
+
 def _read(path):
     return path.read_bytes() if path.is_file() else None
