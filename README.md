@@ -175,13 +175,13 @@ flowchart LR
 ## 5분 시작
 
 ```bash
-git clone --branch v2.0.0 https://github.com/taehyung-lab/agent-workflow-kit
+git clone --branch v2.0.1 https://github.com/taehyung-lab/agent-workflow-kit
 bash agent-workflow-kit/install.sh /path/to/my-project
 ```
 
 1. 설치기가 `AGENTS.md`(키트 영역 + 빈 프로젝트 지도), `CLAUDE.md`, `.agents/skills/wf-*`, `.claude/skills` 링크를 만들고, `.gitignore` 에 `/work/`(세션을 넘길 때 쓰는 인계 기록 자리)를 더하고, `.agents/agent-workflow-kit.version` 에 커밋을 기록한다. 승인 관문 훅(사용자가 승인한 턴에만 제품 파일을 쓰게 하는 훅)을 `.claude/settings.json`·`.codex/hooks.json` 에 더한다(기존 항목은 그대로 둔다). Codex 는 처음 실행할 때 훅을 신뢰할지 묻는다. 신뢰해야 훅이 돈다. 이미 `AGENTS.md`·`CLAUDE.md`·`work/` 가 있으면 쓰기 전에 멈춘다. 그때는 아래 「진행 중인 프로젝트에 연결하기」를 본다.
 2. `AGENTS.md` 아래 「프로젝트 지도」에 제품 원문 위치, 코드 진입점, 실행·검사 명령, 권한·보호 대상을 적는다. 모르는 칸은 `미확인`으로 둔다.
-3. 새 세션에서 작은 요청 하나를 주고, 계획을 보여 주며 승인을 묻는지 본다. Codex 는 처음 실행할 때 나오는 "훅 신뢰" 화면에서 신뢰를 고른다. 팀에 도입한다면 아래 「도입 확인」을 거친다.
+3. 새 세션에서 작은 요청 하나를 주고, 계획을 보여 주며 승인을 묻는지 본다. Codex 는 처음 실행할 때 나오는 "훅 신뢰" 화면에서 신뢰를 고르거나, 나중에 Codex 안에서 `/hooks` 를 열어 신뢰한다. worktree 를 자주 만들면 사용자 전역에 한 번 등록하는 편이 낫다([.agents/skills/README.md](.agents/skills/README.md)). 팀에 도입한다면 아래 「도입 확인」을 거친다.
 
 ### 키트 문장을 고쳐 기여할 때
 
