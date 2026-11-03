@@ -38,7 +38,9 @@ GIT_READ = {"status", "diff", "log", "show", "ls-files", "rev-parse", "blame", "
 GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
 RTK_READ = {"read", "ls", "grep", "find", "json", "log", "diff", "deps", "gain"}
 OPERATORS = ["&&", "||", ";;", ">>", "&>", ">&", "<>", "<<<", "<<", ";", "|", "&", ">", "<", "(", ")"]
+SHELL_WORDS = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "fi", "done", "}"}
 MAX_STOP_BLOCKS = 2
+TEST_RUN = re.compile(r"^(rtk\s+)?(python3?\s+-m\s+(unittest|pytest)|pytest)(\s+[-\w./:=]+)*$")
 REASON = (f"{TAG} 사용자가 이번 메시지에서 승인하지 않아 제품 파일 쓰기와 읽기 전용으로 확인되지 않는 셸 명령을 막았습니다. "
           "읽어서 조사한 뒤, 사용자가 받을 결과(원문·계약 근거와 함께)와 아직 정해지지 않은 점, 확인 방법을 보여 주고 "
           "추천과 함께 승인을 물으세요. 다른 명령으로 우회하지 마세요. 사용자가 '승인합니다'·'진행해 주세요' 처럼 답한 턴에 쓰기가 열립니다. "
@@ -152,14 +154,22 @@ def shell_read_only(cmd):
 
 
 def segment_read_only(seg):
-    while seg and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", seg[0]):  # 앞에 붙은 환경 변수 지정
+    while seg and (re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", seg[0]) or seg[0] in SHELL_WORDS):  # 환경 변수 지정·if/then 같은 셸 문법어
         seg = seg[1:]
+    if seg[:1] == ["for"] or seg in (["fi"], ["done"], ["}"], ["esac"]):
+        return True
     if not seg:
         return True
     name, args = seg[0], seg[1:]
     if "/" in name:  # 경로로 부른 실행 파일은 이름만으로 믿지 않는다
         return False
+    if name in ("sh", "bash", "zsh") and len(args) == 2 and args[0] in ("-c", "-lc"):  # sh -c '<읽기 명령>'
+        return shell_read_only(args[1])
+    if TEST_RUN.match(" ".join(seg)):  # 조사 중 기존 테스트 실행은 둔다. 숨은 쓰기는 턴 끝 상태 검사가 잡는다
+        return True
     if name == "rtk":  # rtk 는 명령 출력을 줄여 주는 도구다
+        while args and args[0].startswith("-"):  # rtk 자체 선택 항목(--raw-output=true 등)
+            args = args[1:]
         if args[:1] == ["proxy"]:
             return segment_read_only(args[1:])
         if args and (args[0] in READ_ONLY or args[0] == "git"):
