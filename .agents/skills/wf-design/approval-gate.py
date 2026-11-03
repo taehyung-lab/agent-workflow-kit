@@ -42,9 +42,9 @@ SHELL_WORDS = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "
 MAX_STOP_BLOCKS = 2
 TEST_RUN = re.compile(r"^(rtk\s+)?(python3?\s+-m\s+(unittest|pytest)|pytest)(\s+[-\w./:=]+)*$")
 # 패키지 매니저로 돌리는 기존 검사 스크립트(테스트·타입 검사·린트·전체 검사)와 쓰지 않는 검사 도구. 고치기 옵션은 뺀다.
-JS_CHECK = re.compile(r"^(rtk\s+)?((pnpm|npm|yarn|bun)(\s+(--dir|-C|--filter|--prefix|--workspace|-w)\s+\S+)*(\s+run)?\s+(test|typecheck|type-check|lint|check)\b"
-                      r"|(npx|pnpm\s+exec|bunx)\s+(vitest\s+run|tsc\s+.*--noEmit|eslint)\b)(?!.*(--fix|--write|\s-u\b|--update))[^;&|<>]*$")
-VERSION = re.compile(r"^(rtk\s+)?(command\s+-v\s+[\w.-]+|[\w.-]+\s+(--version|-v|-V|version))$")  # 도구 존재·버전 확인
+JS_CHECK = re.compile(r"^(?!.*(--fix|--write|\s-u\b|--update|--output|\s-o\s|--noEmit[\s=]+false))(rtk\s+)?((pnpm|npm|yarn|bun)(\s+(--dir|-C|--filter|--prefix|--workspace|-w)\s+\S+)*(\s+run)?\s+(test|typecheck|type-check|lint|check)(?=\s|$)"
+                      r"|(npx|pnpm\s+exec|bunx)\s+(vitest\s+run|tsc\s+.*--noEmit|eslint)(?=\s|$))[^;&|<>]*$")
+VERSION = re.compile(r"^(rtk\s+)?(command\s+-v\s+[\w.-]+|[\w.-]+\s+(--version|-v|-V))$")  # 도구 존재·버전 확인
 REASON = (f"{TAG} 사용자가 이번 메시지에서 승인하지 않아 제품 파일 쓰기와 읽기 전용으로 확인되지 않는 셸 명령을 막았습니다. "
           "읽어서 조사한 뒤, 사용자가 받을 결과(원문·계약 근거와 함께)와 아직 정해지지 않은 점, 확인 방법을 보여 주고 "
           "추천과 함께 승인을 물으세요. 다른 명령으로 우회하지 마세요. 사용자가 '승인합니다'·'진행해 주세요' 처럼 답한 턴에 쓰기가 열립니다. "
