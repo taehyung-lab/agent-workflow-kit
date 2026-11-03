@@ -94,7 +94,8 @@ def product_state(root):
         if p.is_symlink():
             h.update(f.encode() + b"\0link:" + os.readlink(p).encode() + b"\0")
         elif p.is_file():
-            h.update(f.encode() + b"\0" + hashlib.sha256(p.read_bytes()).digest())
+            mode = b"x" if os.access(p, os.X_OK) else b"-"  # 실행 권한 변경도 제품 변경이다(git 이 기록하는 유일한 권한)
+            h.update(f.encode() + b"\0" + mode + hashlib.sha256(p.read_bytes()).digest())
         else:
             h.update(f.encode() + b"\0missing\0")
     return h.hexdigest()
