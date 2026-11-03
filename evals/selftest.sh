@@ -67,6 +67,13 @@ grep -q 'check=FAIL.*REVIEW 외부 장애' "$cap/out2" && grep -q '"check_needs_
 printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho \x27{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Write", "input": {"file_path": "accounts.py"}}]}}\x27\necho \x27{"type": "error", "message": "Selected model is at capacity."}\x27\nexit 1\n' > "$cap/bin/claude"
 EVALS_RESULTS=$cap/r4 PATH="$cap/bin:$PATH" bash "$here/run.sh" account-after-correction HEAD claude > "$cap/out4" 2>&1
 grep -q 'REVIEW 외부 장애.*편집 기록: accounts.py' "$cap/out4" && ok "되돌린 편집 뒤 장애도 검토 필요로 남김" || ng "되돌린 편집 뒤 장애: $(cat "$cap/out4")"
+# 승인 대기 수는 승인이 아닌 사용자 턴(prompt)만 센다(도구 검사 줄은 세지 않고, 0회도 기록된다)
+printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\nprintf \x27{"event": "prompt", "approved": false}\\n{"event": "pre", "approved": false, "denied": true}\\n{"event": "pre", "approved": false, "denied": false}\\n\x27 >> "$AWK_GATE_LOG"\necho \x27{"session_id": "fake-sid"}\x27\nexit 0\n' > "$cap/bin/claude"
+EVALS_RESULTS=$cap/r5 PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposable HEAD claude > /dev/null 2>&1
+grep -q '"unapproved_turns": 1,' "$cap"/r5/weight-disposable-*-claude-1.meta.json && ok "승인 대기는 사용자 턴만 셈" || ng "승인 대기 집계: $(grep unapproved "$cap"/r5/*.meta.json)"
+printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\nprintf \x27{"event": "prompt", "approved": true}\\n\x27 >> "$AWK_GATE_LOG"\necho \x27{"session_id": "fake-sid"}\x27\nexit 0\n' > "$cap/bin/claude"
+EVALS_RESULTS=$cap/r6 PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposable HEAD claude > /dev/null 2>&1
+grep -q '"unapproved_turns": 0,' "$cap"/r6/weight-disposable-*-claude-1.meta.json && ok "승인 대기 0회도 meta 에 남음" || ng "승인 대기 0회 meta 없음"
 # 일반 답 속 낱말(at capacity)은 외부 장애로 보지 않는다
 printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho \x27{"type": "result", "result": "서버가 at capacity 일 때를 처리했습니다"}\x27\nexit 1\n' > "$cap/bin/claude"
 EVALS_RESULTS=$cap/r3 PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposable HEAD claude > "$cap/out3" 2>&1

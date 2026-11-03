@@ -155,7 +155,18 @@ for l in open(sys.argv[1], encoding="utf-8"):
   # 값은 환경 변수로 넘겨 따옴표·줄바꿈이 섞인 판정 문구도 그대로 기록한다.
   E_CASE=$case_name E_REF=$ref E_COMMIT=$commit E_HARNESS=$harness E_RUN=$i E_RC=$rc E_SEC=$seconds \
   E_VERSION=$("$harness" --version 2>/dev/null | head -1) E_BYTES=$agents_bytes E_CHECK_RC=$check_rc E_VERDICT=$verdict \
-  E_G1=$(fingerprint ~/.claude/CLAUDE.md) E_G2=$(fingerprint ~/.agents/USER.md) E_G3=$(fingerprint ~/.codex/AGENTS.md) E_G4=$(skills_fingerprint) E_OBS=$observed E_VSTATE=$verify_state E_GATE=$gate E_INPUT=$input E_TURNS=$sent E_PLANNED=${#turns[@]} E_WAIT=$(grep -c '"approved": false' "$out.hook.log" 2>/dev/null || echo 0) \
+  E_G1=$(fingerprint ~/.claude/CLAUDE.md) E_G2=$(fingerprint ~/.agents/USER.md) E_G3=$(fingerprint ~/.codex/AGENTS.md) E_G4=$(skills_fingerprint) E_OBS=$observed E_VSTATE=$verify_state E_GATE=$gate E_INPUT=$input E_TURNS=$sent E_PLANNED=${#turns[@]} E_WAIT=$(python3 -I -c 'import json,sys
+n = 0
+try:
+    for line in open(sys.argv[1], encoding="utf-8"):
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        n += e.get("event") == "prompt" and e.get("approved") is False
+except OSError:
+    pass
+print(n)' "$out.hook.log") \
   python3 -I -c '
 import json, os, sys
 e = os.environ
