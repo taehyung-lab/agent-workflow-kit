@@ -1,5 +1,5 @@
 """승인 관문(wf-design/approval-gate.py)을 모델 없이 시험한다. selftest.sh 가 부른다."""
-import json, subprocess, sys, tempfile
+import hashlib, json, subprocess, sys, tempfile
 from pathlib import Path
 
 GATE = Path(__file__).resolve().parents[1] / ".agents/skills/wf-design/approval-gate.py"
@@ -285,6 +285,33 @@ with tempfile.TemporaryDirectory() as t:
     check("세션 id 없이 작업 후보가 여럿이면 status 가 추측하지 않는다", json.loads(r.stdout).get("task") is None and "후보" in json.loads(r.stdout).get("reason", ""))
     r = task_cmd("task", "begin", "x")
     check("세션 id 없이 후보가 여럿이면 task 선언도 추측하지 않고 거절한다", r.returncode == 2 and "후보" in r.stderr)
+    # 완료 선언과 턴 끝 검사: 승인 중 수정은 task done 뒤에도 알리지 않고, 선언 뒤·승인 없는 수정은 알린다
+    stop_of = lambda sid: '"block"' in subprocess.run([sys.executable, "-I", str(GATE), "stop"], capture_output=True, text=True,
+                                                      input=json.dumps({"cwd": str(repo), "session_id": sid})).stdout
+    tp("k1", "가격 계산을 고쳐 주세요."); tp("k1", "승인합니다.")
+    (repo / "k.py").write_text("1\n"); task_cmd("task", "done", sid="k1")
+    check("승인 → 허용된 수정 → task done → 턴 끝: 알림 없음", not stop_of("k1"))
+    tp("k1", "승인합니다.")
+    (repo / "k.py").write_text("2\n"); task_cmd("task", "done", sid="k1"); (repo / "k.py").write_text("3\n")
+    check("task done 뒤에 더 고치면 턴 끝에 알린다", stop_of("k1"))
+    tp("k1", "어디까지 됐어요?")
+    (repo / "k.py").write_text("4\n"); task_cmd("task", "done", sid="k1")
+    check("승인 없는 수정 → task done → 턴 끝: 여전히 알린다", stop_of("k1"))
+    (repo / "k.py").unlink()
+    # 에이전트 기록(work/.awk-gate)은 승인 근거가 되지 못한다
+    tp("k2", "새 기능을 만들어 주세요.")
+    kdir = repo / "work" / ".awk-gate" / hashlib.sha256(b"k2").hexdigest()[:24]; kdir.mkdir(parents=True, exist_ok=True)
+    with (kdir / "decl.jsonl").open("a") as f:
+        for d in ({"uid": "a", "kind": "approve", "task": rec("k2")["id"], "approved": True},
+                  {"uid": "b", "kind": "verify", "task": rec("k2")["id"], "approved_at": 1.0, "round": {"uid": "r", "state": "ok"}, "state": "ok"}):
+            f.write(json.dumps(d) + "\n")
+    st = json.loads(task_cmd("status", sid="k2").stdout)
+    check("에이전트 기록에 approved=true·가짜 승인 시각을 써도 승인 전이고 검증 회차도 붙지 않는다",
+          st["approval"] == "waiting" and not st["verify"] and ed("k2") and rec("k2")["approved"] is False)
+    tp("k2", "승인합니다.")
+    check("수정 도구로 에이전트 기록을 바꾸는 것은 승인 뒤에도 거절한다", ed("k2", str(kdir / "decl.jsonl")) and not ed("k2"))
+    r = task_cmd("task", "frobnicate", sid="k2")
+    check("잘못된 task 사용은 종료 2 와 사용법", r.returncode == 2 and "사용" in r.stderr)
     long_req = "긴 요구 " + "가" * 30000 + " 끝문장"
     tp("d2", long_req)
     tp("d2", "승인합니다.")

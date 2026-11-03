@@ -57,6 +57,7 @@ python3 -I evals/report.py evals/results   # 사례·하네스·키트 커밋·�
 ```text
 bash evals/selftest.sh       # 표본 판정·관찰 기대값·실행기 계약(종료 코드, 외부 장애 분류, 승인 대기 집계 등)
 python3 -I evals/gatetest.py # 승인 관문 훅(승인 판별, 수정 도구 차단, 셸 미차단, 턴 끝 변경 알림·사용자 변경 보존)
+python3 -I evals/sandboxtest.py # 실제 codex sandbox -P :workspace 안의 task·status·verify(.git 읽기 전용 경계). codex 가 없으면 미실행(종료 3), 통과로 세지 않음
 ```
 
 GitHub CI 가 매 push 마다 `selftest.sh` 를 돌린다. 판정 검사를 고쳤으면 `python3 -I evals/rejudge.py evals/results/<폴더>` 로 저장된 결과를 다시 판정한다(실행 때의 입력·관문 조건을 복원한다).

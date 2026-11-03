@@ -7,13 +7,25 @@
   - 그 밖의 메시지(상태 질문 "어디까지 됐어요?", 새 요청 등)는 승인 상태를 그대로 둔다. 메시지의 뜻을 더 분류하지 않는다.
 - `approval-gate.py pre` (PreToolUse): 승인 상태가 아니면 수정 도구(Edit·Write·apply_patch 등)로 `work/` 밖을 바꾸거나,
   이름으로 쓰기임이 드러나는 도구(MCP 파일 쓰기 등)를 쓰려 하면 거절한다. 셸 명령은 내용을 해석하지 않고 거절하지 않는다.
-  관문 기록(`.git/awk-gate/`)을 수정 도구로 바꾸는 것은 승인과 관계없이 거절한다.
+  관문 기록(`.git/awk-gate/`)과 에이전트 기록(`work/.awk-gate/`)을 수정 도구로 바꾸는 것은 승인과 관계없이 거절한다.
 - `approval-gate.py stop` (Stop): 승인 상태가 아닌 턴에 제품 파일이 턴 시작 때와 달라졌으면 바뀐 파일 이름을 알리고 한 번 더 답하게 한다.
   관문은 아무 파일도 되돌리지 않는다. 에이전트가 자기가 바꾼 것이 확실한 파일만 되돌리고, 섞였으면 사용자에게 알린다.
   끝없는 반복을 막으려고 한 턴에 MAX_STOP_BLOCKS 번까지만 그렇게 하고, 그 뒤에도 남으면 턴을 끝내되 표준 오류에 남긴다.
 - `approval-gate.py status`·`task begin <작업명>`·`task done` (셸에서 직접 실행): 지금 작업의 상태를 보여 주거나, 에이전트가
   새 작업 시작·작업 완료를 선언한다. 선언은 승인을 닫고 새 작업을 시작할 뿐 승인을 열지 못한다. 작업은 하네스가 셸에 넘기는
   세션 id(CLAUDE_CODE_SESSION_ID·CODEX_THREAD_ID) 나 --session 으로 고르고, 없으면 기록이 하나일 때만 고른다.
+  실패하면(작업을 고르지 못함·키트 없는 저장소·기록 오류) 표준 오류에 사유를 쓰고 0 이 아닌 종료 코드로 끝난다(훅과 달리 조용히 넘기지 않는다).
+
+기록의 작성 권한(누가 어디에 쓰나):
+- 관문 기록 `.git/awk-gate/`: 훅만 쓴다. 승인 여부·승인 메시지·사용자 원문·승인 기준 지문·턴 시작 상태가 여기 있다. 하네스는 훅을
+  에이전트 sandbox 밖에서 실행하고, Codex 의 표준 쓰기 경계(workspace-write)는 에이전트 셸에서 `.git` 을 읽기 전용으로 둔다.
+- 에이전트 기록 `work/.awk-gate/<세션 키>/`: 에이전트 셸에서 도는 명령(task 선언, 독립 검증 실행기의 판정 회차와 증거 폴더)만 쓴다.
+  폴더 맨 위 `.gitignore`(`*`)로 git·제품 파일·지도 탐색에서 빠지고, 수정 도구로는 바꿀 수 없다(관문 기록과 같다).
+  선언은 "승인을 닫는다·새 대기 작업을 시작한다"만 담을 수 있다. 다음 훅이 그것을 관문 기록에 흡수하고, status·task 명령은
+  관문 기록에 아직 흡수되지 않은 선언을 같은 함수로 합쳐 보여 준다. 흡수는 승인을 열지 않으므로, 이 파일에 무엇을 써도
+  (approved: true·다른 승인 시각) 승인 근거가 생기지 않는다. 지우거나 고쳐도 최대 효과는 승인이 닫히는 것이다.
+- 승인 중에 `task done`·`task begin` 으로 승인을 닫으면, 선언한 순간의 제품 파일 상태가 그 턴 끝 검사의 시작점이 된다.
+  승인 중에 바꾼 것은 알리지 않고, 선언 뒤에(같은 셸 명령 안에서라도) 바꾼 것만 알린다. 승인이 없던 턴의 선언은 시작점을 바꾸지 않는다.
 
 작업 기록과 기준 지문:
 - 작업 기록은 작업 지도 파일(work/<작업명>/work.md)이든, 승인을 물은 에이전트 답(하네스가 넘기는 대화 기록의 마지막 답)이든
@@ -92,7 +104,9 @@ CHANGED_REASON = (f"{TAG} 승인 뒤 승인 밖의 기준이 나타나 이 작�
                   "승인한 기준이 바뀌었거나(조건 추가·삭제·수정, 기준 절·지도 삭제), 새 작업이나 새 기준을 지도·답으로 내놓은 경우입니다. "
                   "바뀐 기준은 사용자가 승인한 것이 아닙니다. 무엇이 왜 바뀌었는지(새 작업이면 그 계획을) 보여 주고 다시 승인을 물으세요. "
                   "실행 결과·내부 설계는 `## 기준` 밖(`## 증거` 등)에 적으면 승인이 유지되고, 승인한 기준을 그대로 다른 지도로 옮겨도 유지됩니다.")
-STATE_DIR = "awk-gate"  # 관문 기록 폴더(.git/awk-gate). 수정 도구로는 바꿀 수 없다.
+STATE_DIR = "awk-gate"  # 관문 기록 폴더(.git/awk-gate). 훅만 쓰고, 수정 도구로는 바꿀 수 없다.
+AGENT_DIR = ".awk-gate"  # 에이전트 기록 폴더(work/.awk-gate). 에이전트 셸의 task·검증 명령만 쓰고, 수정 도구로는 바꿀 수 없다.
+DECL_FILE = "decl.jsonl"  # 에이전트 기록 폴더 안 세션별 선언(task begin·done, 검증 회차) 목록
 # 하네스가 셸 명령에 넘기는 세션 id(관문 훅의 session_id 와 같은 값). 에이전트·검증기가 자기 작업을 고를 때 쓴다.
 SESSION_ENV = ("AWK_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")
 
@@ -165,10 +179,15 @@ def criteria(text):
 
 
 def maps(root):
-    """work/ 아래 모든 지도의 기준 지문 {경로: 지문}."""
+    """work/ 아래 모든 지도의 기준 지문 {경로: 지문}. 에이전트 기록 폴더(work/.awk-gate, 검증 증거의 복사본이 있다)는 보지 않는다."""
     out = {}
     base = Path(root, ALLOWED_WRITE_DIR)
-    for f in sorted(base.rglob(MAP_NAME)) if base.is_dir() else []:
+    found = []
+    for d, dirs, files in os.walk(base) if base.is_dir() else []:
+        if Path(d) == base and AGENT_DIR in dirs:
+            dirs.remove(AGENT_DIR)
+        found += [Path(d, MAP_NAME)] if MAP_NAME in files else []
+    for f in sorted(found):
         try:
             out[str(f.relative_to(root))] = criteria(f.read_text(encoding="utf-8", errors="replace"))
         except OSError:
@@ -284,10 +303,22 @@ def inside_state(root, path):
     return p == state or p.startswith(state + os.sep)
 
 
+def inside_records(root, path):
+    """경로가 에이전트 기록 폴더(work/.awk-gate) 안인가."""
+    if not path:
+        return False
+    p = os.path.realpath(Path(path) if Path(path).is_absolute() else root / path)
+    rec = os.path.realpath(Path(root, ALLOWED_WRITE_DIR, AGENT_DIR))
+    return p == rec or p.startswith(rec + os.sep)
+
+
 def decide(data, root, approved, reason=REASON):
     tool, inp = str(data.get("tool_name") or ""), data.get("tool_input") or {}
     if tool in WRITE_TOOLS and isinstance(inp, dict) and any(inside_state(root, t) for t in write_targets(inp)):
         return f"{TAG} 승인 관문 기록(.git/{STATE_DIR})은 수정 도구로 바꿀 수 없습니다. 승인은 사용자 메시지로만 열립니다."
+    if tool in WRITE_TOOLS and isinstance(inp, dict) and any(inside_records(root, t) for t in write_targets(inp)):
+        return (f"{TAG} 에이전트 기록({ALLOWED_WRITE_DIR}/{AGENT_DIR})은 수정 도구로 바꿀 수 없습니다. "
+                "작업 선언은 approval-gate.py task 명령이, 검증 회차와 증거는 검증 실행기가 씁니다.")
     if approved or tool in SHELL_TOOLS or tool in NOT_WRITE:
         return None
     if not isinstance(inp, dict):
@@ -322,17 +353,22 @@ def read_json(path, default):
     return v
 
 
-def new_task(state, now_maps, messages=(), name=None, base=None):
+def new_task(state, now_maps, messages=(), name=None, base=None, tid=None, write=True):
     """세션 안의 작업 하나(현재 작업). 작업 id·승인 근거(사용자 메시지)·승인 기준·검증 결과를 이 기록이, 이 작업의 사용자 원문은
     task-<id>.messages.jsonl 이 자르지 않고 갖는다. 전이: waiting(승인 전) → approved(사용자 승인) → closed(사용자 철회 user,
     승인 대상 기준 변경 criteria, 승인 밖 새 기준 new-criteria, 에이전트의 새 작업 선언 new-task, 에이전트의 완료 선언 done).
-    approved 는 prompt 훅이 사용자 승인 메시지를 받았을 때만 True 가 된다. 다른 경로(pre·stop·task 명령·검증기)는 닫거나 기록만 한다."""
-    rec = {"id": os.urandom(6).hex(), "name": name, "approved": False, "state": "waiting", "prompt": None, "targets": {}, "hashes": [],
+    approved 는 prompt 훅이 사용자 승인 메시지를 받았을 때만 True 가 된다. 다른 경로(pre·stop·task 명령·검증기)는 닫거나 기록만 한다.
+    tid: 선언으로 만드는 작업은 선언에 적힌 id 를 쓴다(명령의 미리 보기와 훅의 흡수가 같은 작업이 되게).
+    write=False 는 status·task 명령이 관문 기록을 쓰지 않고 상태를 계산할 때다(사용자 원문 파일을 만들지 않고 개수만 센다)."""
+    rec = {"id": tid or os.urandom(6).hex(), "name": name, "approved": False, "state": "waiting", "prompt": None, "targets": {}, "hashes": [],
            "criteria": {}, "snapshot": {}, "conversation_only": False, "touched": [], "boundary": now_maps, "proposal": None,
            "pending_since": None, "pending_base": None, "message_count": 0, "verify": {}, "started_at": time.time(),
            "base_files": base}  # base_files: 작업 시작 때 제품 파일 상태(검증기 diff 의 기준). 승인 때 덮지 않는다.
     for m in messages:
-        add_message(state, rec, m)
+        if write:
+            add_message(state, rec, m)
+        else:
+            rec["message_count"] += 1
     return rec
 
 
@@ -362,11 +398,102 @@ def current_index(rec):
     return max(rec.get("message_count", 0) - 1, 0)
 
 
-def rotate(state, rec, now_maps, start, name=None, base=None):
+def rotate(state, rec, now_maps, start, name=None, base=None, tid=None, write=True):
     """새 작업을 시작한다. 앞 작업의 지도·검증 결과를 넘기지 않고, 사용자 원문은 start 번째부터만 가져간다.
-    새 작업의 시작 상태는 그 작업의 첫 턴이 시작될 때의 제품 파일 상태다(그 턴에 승인 없이 바뀐 것은 diff 에 보인다)."""
+    새 작업의 시작 상태는 그 작업의 첫 턴이 시작될 때의 제품 파일 상태다(그 턴에 승인 없이 바뀐 것은 diff 에 보인다).
+    지금 턴의 표시(turn·turn_base)와 흡수한 선언 목록은 같은 세션의 일이므로 이어받는다."""
     msgs = (read_messages(state, rec) or [])[start:] if start is not None else []
-    return new_task(state, now_maps, msgs, name, base or rec.get("pending_base") or rec.get("turn_base"))
+    new = new_task(state, now_maps, msgs, name, base or rec.get("pending_base") or rec.get("turn_base"), tid, write)
+    new.update({k: rec[k] for k in ("turn", "turn_base", "applied") if k in rec})
+    return new
+
+
+# ---- 에이전트 기록(work/.awk-gate): 에이전트 셸의 명령이 쓰고, 훅이 관문 기록에 흡수한다 ----
+
+def session_key(sid):
+    return hashlib.sha256(str(sid).encode()).hexdigest()[:24]
+
+
+def records_dir(root, key):
+    return Path(root, ALLOWED_WRITE_DIR, AGENT_DIR, key)
+
+
+def ensure_records(root, key):
+    """에이전트 기록 폴더를 만든다. 맨 위 `.gitignore`(`*`)로 폴더 전체를 git 이 무시하게 해 제품 파일·커밋에 섞이지 않게 한다."""
+    top = Path(root, ALLOWED_WRITE_DIR, AGENT_DIR)
+    d = top / key
+    d.mkdir(parents=True, exist_ok=True)
+    if not (top / ".gitignore").is_file():
+        (top / ".gitignore").write_text("*\n")
+    return d
+
+
+def read_decls(root, key):
+    """이 세션의 선언 목록. 형식이 틀린 줄은 건너뛴다(선언은 닫기·새 대기 작업·검증 회차만 담을 수 있어 건너뛰어도 승인이 열리지 않는다)."""
+    try:
+        lines = (records_dir(root, key) / DECL_FILE).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(d, dict) and d.get("uid") and d.get("kind"):
+            out.append(d)
+    return out
+
+
+def append_decl(root, key, decl):
+    with (ensure_records(root, key) / DECL_FILE).open("a", encoding="utf-8") as f:
+        f.write(json.dumps(decl, ensure_ascii=False) + "\n")
+
+
+def apply_decls(state, rec, decls, write=True):
+    """에이전트 선언을 작업 기록에 반영한다(훅은 write=True 로 관문 기록에 흡수, status·task·검증 명령은 write=False 로 계산만).
+    반영할 수 있는 것: 지금 작업의 승인 닫기(done·begin), 새 대기 작업 시작(begin), 지금 승인 시도의 검증 회차(verify).
+    선언의 작업 id 가 지금 작업과 다르면(이미 바뀐 작업) 버린다. 검증 회차는 작업 id 와 승인 시각이 지금 승인 시도와 같을 때만 붙인다
+    (같은 작업을 다시 승인하면 앞선 시도의 회차는 합치지 않는다). 승인을 여는 길은 없다: approved 는 들어온 값보다 커지지 않는다."""
+    was_approved = bool(rec.get("approved"))
+    applied = set(rec.get("applied", []))
+    for d in decls:
+        uid = str(d.get("uid"))
+        if uid in applied:
+            continue
+        applied.add(uid)
+        if not rec or d.get("task") != rec.get("id"):
+            continue
+        kind = d.get("kind")
+        if kind == "verify":
+            r = d.get("round")
+            if not rec.get("approved_at") or d.get("approved_at") != rec.get("approved_at") or not isinstance(r, dict):
+                continue
+            v = rec.get("verify") or {}
+            rounds = list(v.get("rounds", []))
+            if r.get("uid") and any(x.get("uid") == r.get("uid") for x in rounds):
+                continue
+            rounds.append(r)
+            rec["verify"] = {"rounds": rounds, "state": d.get("state"), "reason": d.get("reason", ""),
+                             "max_rounds": v.get("max_rounds") or d.get("max_rounds")}
+        elif kind in ("begin", "done"):
+            was_open = bool(rec.get("approved"))
+            if kind == "done":
+                if was_open:
+                    close(rec, "done", "에이전트가 작업 완료를 선언함")
+                rec["state"] = "done"
+            else:
+                if was_open:
+                    close(rec, "new-task", f"에이전트가 새 작업을 선언함: {d.get('name')}")
+                old = rec.get("id")
+                rec = rotate(state, rec, d.get("maps") or {}, d.get("start"), d.get("name"), d.get("base"), d.get("new_id"), write)
+                rec["previous_task"] = old
+            # 승인 중에 닫았으면 선언한 순간의 제품 파일 상태가 이 턴 끝 검사의 시작점이다(승인 중 변경은 알리지 않는다)
+            if was_open and isinstance(d.get("files"), dict) and d.get("turn"):
+                rec["stop_base"] = {"turn": d["turn"], "files": d["files"]}
+    rec["applied"] = sorted(applied)
+    rec["approved"] = was_approved and bool(rec.get("approved"))
+    return rec
 
 
 def mark_pending(rec, index, base):
@@ -512,12 +639,22 @@ def pick(state, args):
     """(작업 기록 파일, 사유). 세션 id 로 고른다. 세션 id 가 없으면 기록이 하나뿐일 때만 그것을 쓰고, 여럿이면 추측하지 않는다."""
     sid = session_arg(args)
     if sid:
-        f = state / f"{hashlib.sha256(str(sid).encode()).hexdigest()[:24]}.approval"
+        f = state / f"{session_key(sid)}.approval"
         return (f, "") if f.is_file() else (None, "이 세션의 작업 기록이 없다(관문 훅이 돌지 않았거나 다른 저장소)")
     files = sorted(state.glob("*.approval")) if state.is_dir() else []
     if len(files) == 1:
         return files[0], ""
     return None, (f"작업 후보가 {len(files)}개라 고르지 않았다: --session <세션 id> 로 지정한다" if files else "작업 기록이 없다")
+
+
+def current(root, state, args):
+    """(작업 기록, 세션 키, 사유). 관문 기록에 아직 흡수되지 않은 에이전트 선언까지 합친 지금 작업이다(관문 기록은 쓰지 않는다).
+    status·task 명령과 검증 실행기가 같은 함수로 읽는다."""
+    f, why = pick(state, args)
+    if not f:
+        return None, None, why
+    key = f.name[: -len(".approval")]
+    return apply_decls(state, read_json(f, {}), read_decls(root, key), write=False), key, ""
 
 
 def waiting(rec, ok=None):
@@ -542,44 +679,53 @@ def command(mode, root, state, args):
     """사람·에이전트·검증기가 셸에서 부르는 명령. 승인을 열 수 없다(닫거나 새 작업을 시작하거나 상태를 보여 줄 뿐이다).
     status                      지금 작업의 상태(JSON)
     task begin <작업명>          에이전트가 새 요청을 새 작업으로 판단했을 때: 지금 승인을 닫고 지금 턴의 사용자 원문부터 새 작업을 연다
-    task done                   에이전트가 작업을 마쳤을 때: 승인을 닫는다(다음 작업이 이 승인으로 쓰지 못하게)"""
-    f, why = pick(state, args)
-    if mode == "status":
-        print(json.dumps(task_status(root, state, read_json(f, {})) if f else {"task": None, "approval": "waiting", "reason": why},
-                         ensure_ascii=False))
-        return 0
+    task done                   에이전트가 작업을 마쳤을 때: 승인을 닫는다(다음 작업이 이 승인으로 쓰지 못하게)
+    관문 기록(.git/awk-gate)은 쓰지 않는다. 선언은 에이전트 기록(work/.awk-gate)에 남기고 다음 훅이 흡수한다.
+    작업을 고르지 못하면 표준 오류에 사유를 쓰고 2 를 돌려준다(status 는 사유를 담은 JSON 도 낸다)."""
     sub = args[0] if args else ""
-    if sub not in ("begin", "done") or not f:
-        print(f"{TAG} " + (why or "사용: approval-gate.py task begin <작업명> | task done [--session <id>]"), file=sys.stderr)
+    if mode == "task" and sub not in ("begin", "done"):
+        print(f"{TAG} 오류: 사용: approval-gate.py task begin <작업명> | task done [--session <id>]", file=sys.stderr)
         return 2
-    rec, now_maps = read_json(f, {}), maps(root)
-    if sub == "begin":
-        name = next((a for a in args[1:] if not a.startswith("--") and a != session_arg(args)), None)
-        if rec.get("approved"):
-            close(rec, "new-task", f"에이전트가 새 작업을 선언함: {name}")
-        old = rec.get("id")
-        rec = rotate(state, rec, now_maps, current_index(rec), name, rec.get("turn_base"))  # 새 작업의 시작 = 이번 턴 시작 상태
-        rec.update(previous_task=old)
-    else:
-        if rec.get("approved"):
-            close(rec, "done", "에이전트가 작업 완료를 선언함")
-        rec["state"] = "done"
-    f.write_text(json.dumps(rec, ensure_ascii=False))
+    rec, key, why = current(root, state, args)
+    if rec is None:
+        if mode == "status":
+            print(json.dumps({"task": None, "approval": "waiting", "reason": why}, ensure_ascii=False))
+        print(f"{TAG} 오류: {why}", file=sys.stderr)
+        return 2
+    if mode == "status":
+        print(json.dumps(task_status(root, state, rec), ensure_ascii=False))
+        return 0
+    now_maps = maps(root)
+    decl = {"uid": os.urandom(8).hex(), "kind": sub, "task": rec.get("id"), "turn": rec.get("turn"), "at": time.time()}
+    if sub == "begin":  # 새 작업의 시작 = 이번 턴 시작 상태, 사용자 원문은 이번 턴부터
+        decl.update(name=next((a for a in args[1:] if not a.startswith("--") and a != session_arg(args)), None),
+                    new_id=os.urandom(6).hex(), start=current_index(rec), base=rec.get("turn_base"), maps=now_maps)
+    if status(rec, now_maps)[0]:  # 승인 중에 닫는다: 지금 제품 파일 상태를 턴 끝 검사의 시작점으로 남긴다
+        decl["files"] = product_files(root)
+    append_decl(root, key, decl)
+    rec = apply_decls(state, rec, [decl], write=False)
     print(json.dumps(task_status(root, state, rec), ensure_ascii=False))
     return 0
 
 
 def main(mode, data):
+    cli = mode in ("status", "task")
     try:
         root, state = locate(data.get("cwd"))
     except RuntimeError:
-        return  # git 저장소가 아니면 상태를 잴 수 없고 키트 설치 프로젝트도 아니다
+        if cli:  # 명시 명령은 조용히 넘기지 않는다
+            print(f"{TAG} 오류: git 저장소가 아니다", file=sys.stderr)
+            return 2
+        return  # 훅: git 저장소가 아니면 상태를 잴 수 없고 키트 설치 프로젝트도 아니다
     if not (root / ".agents" / "agent-workflow-kit.version").is_file():
+        if cli:
+            print(f"{TAG} 오류: 키트가 설치된 저장소가 아니다(.agents/agent-workflow-kit.version 없음)", file=sys.stderr)
+            return 2
         return  # 키트가 설치된 프로젝트에서만 동작한다(키트 원본 저장소·관문 파일만 복사된 곳은 그대로 둔다)
-    if mode in ("status", "task"):
+    if cli:
         return command(mode, root, state, data.get("args", []))
     sid = data.get("session_id")
-    key = hashlib.sha256(str(sid).encode()).hexdigest()[:24] if sid else None
+    key = session_key(sid) if sid else None
     if not key:
         if mode == "pre":
             reason = decide(data, root, False)
@@ -591,6 +737,8 @@ def main(mode, data):
     turnmaps = state / f"{key}.maps"
     now_maps = maps(root)
     rec = read_json(approval, {})
+    if rec:  # 에이전트 선언(task begin·done, 검증 회차)을 관문 기록에 흡수한다. 승인은 열리지 않는다
+        rec = apply_decls(state, rec, read_decls(root, key), write=True)
     if mode == "prompt":
         state.mkdir(exist_ok=True)
         turn_base = snapshot_files(root, state)  # 이번 턴 시작 때 제품 파일 상태
@@ -600,6 +748,8 @@ def main(mode, data):
         see_answer(rec, answer)  # 대화에 보여 준 기준(에이전트가 내놓은 작업 기록). 앞 턴의 일이므로 앞 턴의 시작 상태를 쓴다
         settle(rec, now_maps)  # 턴 사이에 승인 대상 지도가 바뀌었으면 닫는다
         rec["turn_base"] = turn_base
+        rec["turn"] = os.urandom(6).hex()  # 이번 사용자 턴의 표시(선언이 어느 턴에 있었는지 가린다)
+        rec.pop("stop_base", None)
         if os.environ.get("AWK_GATE_PROMPT_FROM") == "runner":
             # 평가 실행기(evals/run.sh)가 보낸 검증 반환 같은 사용자 아닌 입력: 실행기가 아는 발신 구분을 받아, 글 내용과 관계없이
             # 승인을 열거나 닫지 않고 사용자 원문에도 넣지 않는다. 턴 시작 기록(제품 파일·지도 지문)은 그대로 해서 변경 감시는 계속한다.
@@ -649,6 +799,9 @@ def main(mode, data):
     if ok or not start.is_file():
         return
     begin = read_json(start, {})
+    sb = rec.get("stop_base") or {}
+    if sb.get("turn") and sb.get("turn") == rec.get("turn") and isinstance(sb.get("files"), dict):
+        begin = sb["files"]  # 이 턴에 승인 중 task done·begin 으로 닫았다: 그 뒤의 변경만 본다
     now = product_files(root)
     changed = changed_files(begin, now)
     digest = hashlib.sha256(json.dumps(now, sort_keys=True).encode()).hexdigest()
@@ -673,12 +826,27 @@ def main(mode, data):
     last.write_text(json.dumps({"t": time.time(), "start": begin_digest, "now": digest, "out": out}, ensure_ascii=False))
 
 
+USAGE = ("사용: approval-gate.py status [--session <id>] | task begin <작업명> [--session <id>] | task done [--session <id>]\n"
+         "      (prompt·pre·stop 은 하네스 훅이 표준 입력 JSON 과 함께 부른다)")
+
 if __name__ == "__main__":
     mode, data = (sys.argv[1] if len(sys.argv) > 1 else "pre"), {}
+    if mode in ("-h", "--help", "help"):
+        print(USAGE)
+        sys.exit(0)
+    if mode not in ("prompt", "pre", "stop", "status", "task"):
+        print(f"{TAG} 오류: 알 수 없는 명령 {mode!r}\n{USAGE}", file=sys.stderr)
+        sys.exit(2)
+    if mode in ("status", "task"):
+        # 사람·에이전트·검증기가 셸에서 직접 실행하는 명령(지금 폴더의 저장소). 훅과 달리 실패를 0 으로 감추지 않는다.
+        try:
+            rc = main(mode, {"cwd": os.getcwd(), "args": sys.argv[2:]}) or 0
+        except Exception as e:
+            log({"error": repr(e), "mode": mode})
+            print(f"{TAG} 오류: {mode} 명령이 실패했습니다: {e!r}", file=sys.stderr)
+            rc = 1
+        sys.exit(rc)
     try:
-        # status 는 사람·검증기가 직접 실행한다(입력 없이 지금 폴더의 저장소를 본다)
-        if mode in ("status", "task"):  # 사람·에이전트·검증기가 셸에서 직접 실행한다(지금 폴더의 저장소)
-            sys.exit(main(mode, {"cwd": os.getcwd(), "args": sys.argv[2:]}) or 0)
         data = json.load(sys.stdin)
         main(mode, data)
     except Exception as e:  # 훅 자체 오류: 수정 도구만 막고 읽기·셸은 그대로 둔다(셸은 평소에도 미리 막지 않는다). 턴 끝 검사는 알린다.

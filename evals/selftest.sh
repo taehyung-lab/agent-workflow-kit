@@ -217,5 +217,14 @@ rm -f "${TMPDIR:-/tmp}/gatetest.$$"
 # 일반 설치 흐름(모델 없음): 실제 install.sh 설치본의 관문 훅·독립 검증 실행기를 가짜 하네스로 호출(반환·교정·재검증·한도·미확인·대기)
 python3 -I "$here/flowtest.py" > "${TMPDIR:-/tmp}/flowtest.$$" 2>&1 && ok "일반 설치 흐름 시험 $(tail -1 "${TMPDIR:-/tmp}/flowtest.$$")" || { ng "일반 설치 흐름 시험"; grep -v '^ok' "${TMPDIR:-/tmp}/flowtest.$$"; }
 rm -f "${TMPDIR:-/tmp}/flowtest.$$"
-printf '%d passed, %d failed\n' "$pass" "$failed"
+# 표준 쓰기 경계(모델 없음): 실제 codex sandbox -P :workspace 안에서 task·status·verify 가 .git 을 쓰지 않고 동작하는지.
+# codex 가 없는 환경은 미실행으로 따로 적고 통과로 세지 않는다(종료 3).
+python3 -I "$here/sandboxtest.py" > "${TMPDIR:-/tmp}/sandboxtest.$$" 2>&1; rc=$?
+case $rc in
+  0) ok "표준 쓰기 경계 시험 $(tail -1 "${TMPDIR:-/tmp}/sandboxtest.$$")" ;;
+  3) printf 'SKIP %s\n' "$(tail -1 "${TMPDIR:-/tmp}/sandboxtest.$$")"; unrun=1 ;;
+  *) ng "표준 쓰기 경계 시험"; grep -v '^ok' "${TMPDIR:-/tmp}/sandboxtest.$$" ;;
+esac
+rm -f "${TMPDIR:-/tmp}/sandboxtest.$$"
+printf '%d passed, %d failed%s\n' "$pass" "$failed" "${unrun:+, 1 미실행(표준 쓰기 경계 시험)}"
 [ "$failed" -eq 0 ]
