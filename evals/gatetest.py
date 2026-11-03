@@ -61,7 +61,7 @@ with tempfile.TemporaryDirectory() as t:
               "sort -S 1b --compress-program=./c.sh i", "file --compile -m magic", "file -cC -m magic", "git -c core.fsmonitor=./w status",
               "git grep --open-files-in-pager='tee a' x", "rg --pre ./w.sh x a", "rtk grep x a --pre ./w.sh", "rtk proxy sed -n -ewa i",
               "bash -v", "python3 -v", "env NODE_OPTIONS=--require=./w.cjs npm test", "export NODE_OPTIONS=--require=./w.cjs; npm test",
-              "NODE_OPTIONS=--require=./w.cjs npm test", "sort --out=app.txt i", "sort --outp app.txt i", "sort --compress=./c i", "file --com -m magic", "file --compi -m m",
+              "NODE_OPTIONS=--require=./w.cjs npm test", "sort --o app.txt i", "rtk proxy sort --o app.txt i", "sort --out=app.txt i", "sort --outp app.txt i", "sort --compress=./c i", "file --com -m magic", "file --compi -m m",
               "git --no-pager diff --ext app.txt", "git diff --textc", "rg --pre=./w x", "rg --hostname=./w x", "awk --fi s.awk i", "/x/bin/node script.js", "./tool --version", "sort $X a", 'pnpm test "$X"', 'X=--outputFile=r pnpm test $X', "node -e 'require(\"fs\").writeFileSync(\"a\",\"x\")'", "node script.js", "pnpm test > out.txt"]:
         check(f"쓰기·실행 셸은 막는다: {c!r}", bash(c))
     check("cmd 필드로 온 셸도 검사한다", call("pre", {"tool_name": "exec_command", "tool_input": {"cmd": "touch app.py"}}))

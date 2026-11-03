@@ -72,7 +72,8 @@ def log(what):
 
 
 def git(root, *args, ok=(0,)):
-    r = subprocess.run(["git", "-C", str(root), *args], capture_output=True)
+    # 저장소 설정의 외부 프로그램(fsmonitor·외부 diff·textconv)이 관문의 상태 수집 중에 실행되지 않게 끈다.
+    r = subprocess.run(["git", "-C", str(root), "-c", "core.fsmonitor=false", "-c", "diff.external=", *args], capture_output=True)
     if r.returncode not in ok:
         raise RuntimeError(f"git {' '.join(args[:2])} 실패")
     return r.stdout
@@ -86,7 +87,7 @@ def locate(cwd):
 def product_state(root):
     """제품 파일(work/·키트·지침·캐시 제외)의 HEAD 대비 상태 지문."""
     head = git(root, "rev-parse", "--verify", "-q", "HEAD", ok=(0, 1)).strip()
-    h = hashlib.sha256(head + (git(root, "diff", "--binary", "HEAD", *SPEC) if head else b""))
+    h = hashlib.sha256(head + (git(root, "diff", "--binary", "--no-ext-diff", "--no-textconv", "HEAD", *SPEC) if head else b""))
     for f in sorted(x for x in git(root, "ls-files", "-z", "--others", "--exclude-standard", *SPEC).decode().split("\0") if x):
         p = Path(root, f)
         h.update(f.encode() + b"\0" + (p.read_bytes() if p.is_file() and not p.is_symlink() else b"link"))
@@ -171,7 +172,7 @@ def shell_read_only(cmd):
 def long_opt(args, *names):
     """긴 옵션이 names 중 하나이거나 그 줄임(--out → --output)이면 참. GNU 도구는 겹치지 않는 줄임을 받는다."""
     for a in args:
-        if a.startswith("--") and len(a) > 3:
+        if a.startswith("--") and len(a) > 2:
             opt = a[2:].split("=", 1)[0]
             if any(n.startswith(opt) for n in names):
                 return True
