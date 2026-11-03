@@ -24,6 +24,8 @@
   선언은 "승인을 닫는다·새 대기 작업을 시작한다"만 담을 수 있다. 다음 훅이 그것을 관문 기록에 흡수하고, status·task 명령은
   관문 기록에 아직 흡수되지 않은 선언을 같은 함수로 합쳐 보여 준다. 흡수는 승인을 열지 않으므로, 이 파일에 무엇을 써도
   (approved: true·다른 승인 시각) 승인 근거가 생기지 않는다. 지우거나 고쳐도 최대 효과는 승인이 닫히는 것이다.
+- 선언은 그 순간의 지도 기준 지문을 함께 남기고, 흡수할 때 그것으로 승인이 아직 유효한지 먼저 본다(훅의 settle 과 같은 경계).
+  승인한 기준이 이미 바뀐 뒤의 `task done` 은 완료가 아니라 기준 변경으로 닫힌 것(사용자 답 대기)으로 남는다.
 - 승인 중에 `task done`·`task begin` 으로 승인을 닫으면, 선언한 순간의 제품 파일 상태가 그 턴 끝 검사의 시작점이 된다.
   승인 중에 바꾼 것은 알리지 않고, 선언 뒤에(같은 셸 명령 안에서라도) 바꾼 것만 알린다. 승인이 없던 턴의 선언은 시작점을 바꾸지 않는다.
 
@@ -477,11 +479,16 @@ def apply_decls(state, rec, decls, write=True):
             rec["verify"] = {"rounds": rounds, "state": d.get("state"), "reason": d.get("reason", ""),
                              "max_rounds": v.get("max_rounds") or d.get("max_rounds")}
         elif kind in ("begin", "done"):
+            # 선언한 순간의 지도 상태로 먼저 승인 유효성을 정한다(훅이 매번 하는 settle 과 같은 경계). 승인한 기준이 그때 이미
+            # 바뀌어 있었으면 승인은 기준 변경으로 닫힌 것이고, 이 선언은 그것을 완료(done)로 바꾸지 못한다(사용자 답 대기 유지).
+            if rec.get("approved") and isinstance(d.get("maps"), dict):
+                settle(rec, d["maps"])
             was_open = bool(rec.get("approved"))
             if kind == "done":
                 if was_open:
                     close(rec, "done", "에이전트가 작업 완료를 선언함")
-                rec["state"] = "done"
+                if rec.get("closed_kind") not in ("criteria", "new-criteria"):
+                    rec["state"] = "done"
             else:
                 if was_open:
                     close(rec, "new-task", f"에이전트가 새 작업을 선언함: {d.get('name')}")
@@ -696,10 +703,11 @@ def command(mode, root, state, args):
         print(json.dumps(task_status(root, state, rec), ensure_ascii=False))
         return 0
     now_maps = maps(root)
-    decl = {"uid": os.urandom(8).hex(), "kind": sub, "task": rec.get("id"), "turn": rec.get("turn"), "at": time.time()}
+    # maps: 선언한 순간의 지도 기준 지문. 흡수할 때 이것으로 승인 유효성을 먼저 정한다(기준이 바뀐 뒤의 done 은 완료가 아니다).
+    decl = {"uid": os.urandom(8).hex(), "kind": sub, "task": rec.get("id"), "turn": rec.get("turn"), "at": time.time(), "maps": now_maps}
     if sub == "begin":  # 새 작업의 시작 = 이번 턴 시작 상태, 사용자 원문은 이번 턴부터
         decl.update(name=next((a for a in args[1:] if not a.startswith("--") and a != session_arg(args)), None),
-                    new_id=os.urandom(6).hex(), start=current_index(rec), base=rec.get("turn_base"), maps=now_maps)
+                    new_id=os.urandom(6).hex(), start=current_index(rec), base=rec.get("turn_base"))
     if status(rec, now_maps)[0]:  # 승인 중에 닫는다: 지금 제품 파일 상태를 턴 끝 검사의 시작점으로 남긴다
         decl["files"] = product_files(root)
     append_decl(root, key, decl)

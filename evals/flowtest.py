@@ -203,6 +203,23 @@ exit 0
     check("판정 대상 고정(git commit)이 실패하면 빈 대상으로 판정하지 않고 unverified(검증자를 띄우지 않음)",
           rc == 5 and out.get("state") == "unverified" and "고정 실패" in out.get("reason", "") and out.get("target") is None and prompt == "")
 
+    # ---- 기준 변경 뒤 task done(중간 훅 없음): 검증 OK 여도 사용자 답 대기, 기준이 그대로면 완료 ----
+    for sid, crit_after, want in (("G", "| B1 | 바뀐 기준 |", "waiting-user"), ("H", "| B1 | 원래 기준 |", "verified")):
+        mp = proj / "work" / f"g-{sid}" / "work.md"; mp.parent.mkdir(parents=True, exist_ok=True)
+        mp.write_text("# 작업\n\n## 기준\n\n| B1 | 원래 기준 |\n\n## 증거\n")
+        hook("prompt", sid, prompt="로그인 버튼 글자를 '로그인하기'로 바꿔 주세요")
+        hook("prompt", sid, prompt=f"work/g-{sid}/work.md 승인합니다.")
+        mp.write_text(f"# 작업\n\n## 기준\n\n{crit_after}\n\n## 증거\n\n통과\n")
+        r = sh(sys.executable, "-I", str(gate), "task", "done", "--session", sid, cwd=proj, env=base_env)
+        done = json.loads(r.stdout or "{}")
+        rc, out, _ = verify(sid, [OK])
+        check(f"승인 → 지도 기준 {'변경' if want != 'verified' else '유지'} → task done(중간 훅 없음) → 검증 OK: completion={want}"
+              f", done 출력 waiting={want != 'verified'}",
+              out.get("state") == "ok" and out.get("completion") == want and done.get("waiting") is (want != "verified"))
+        hook("pre", sid, tool_name="Bash", tool_input={"command": "ls"})
+        check(f"다음 훅 흡수 뒤 status 도 같다({sid})", status(sid).get("waiting") is (want != "verified"))
+        shutil.rmtree(mp.parent)
+
     # ---- 증거 보존 회귀 표본(ac32c52): 기존 증거·사용자 폴더를 지우거나 덮지 않는다 ----
     hook("prompt", "F", prompt="로그인 버튼 글자를 '로그인하기'로 바꿔 주세요")
     hook("prompt", "F", prompt="승인합니다.", transcript_path=transcript("f", plan))

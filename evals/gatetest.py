@@ -312,6 +312,36 @@ with tempfile.TemporaryDirectory() as t:
     check("수정 도구로 에이전트 기록을 바꾸는 것은 승인 뒤에도 거절한다", ed("k2", str(kdir / "decl.jsonl")) and not ed("k2"))
     r = task_cmd("task", "frobnicate", sid="k2")
     check("잘못된 task 사용은 종료 2 와 사용법", r.returncode == 2 and "사용" in r.stderr)
+    # 승인한 지도 기준을 바꾼 뒤(중간 훅 없이 같은 셸) task done: 기준 변경으로 닫힌 것이지 완료가 아니다(사용자 답 대기)
+    tp("k4", "할인 계산을 고쳐 주세요.")
+    write_map("work/t/work.md", "| T1 | old |", sid="k4", via_tool=False)
+    tp("k4", "work/t/work.md 승인합니다.")
+    check("지도 기준에 묶인 승인이 열린다", rec("k4")["targets"] == {"work/t/work.md": "승인 메시지가 경로로 가리킴"} and not ed("k4"))
+    (repo / "k4.py").write_text("1\n")
+    write_map("work/t/work.md", "| T1 | new |", sid="k4", via_tool=False)
+    r = task_cmd("task", "done", sid="k4"); out = json.loads(r.stdout or "{}")
+    check("기준 변경 뒤 task done 출력: 기준 변경으로 닫힘·사용자 답 대기(완료 아님)",
+          r.returncode == 0 and out.get("approval") == "closed" and out.get("closed_kind") == "criteria" and out.get("waiting") is True)
+    st = json.loads(task_cmd("status", sid="k4").stdout)
+    check("기준 변경 뒤 task done: status 도 사용자 답 대기", st.get("closed_kind") == "criteria" and st.get("waiting") is True)
+    sr = subprocess.run([sys.executable, "-I", str(GATE), "stop"], capture_output=True, text=True,
+                        input=json.dumps({"cwd": str(repo), "session_id": "k4"})).stdout
+    check("기준 변경 뒤 task done: 턴 끝은 완료로 넘기지 않고 기준 변경으로 닫혔다고 알린다", '"block"' in sr and "기준이 바뀌어" in sr)
+    ed("k4")
+    check("기준 변경 뒤 task done: 다음 훅이 흡수해도 기준 변경 닫힘(done 아님)", rec("k4")["closed_kind"] == "criteria" and rec("k4")["approved"] is False
+          and json.loads(task_cmd("status", sid="k4").stdout).get("waiting") is True)
+    write_map("work/t/work.md", "| T1 | old |", sid="k4", via_tool=False)
+    check("기준을 되돌려도 다시 열리거나 완료로 바뀌지 않는다", json.loads(task_cmd("status", sid="k4").stdout).get("waiting") is True and ed("k4"))
+    (repo / "k4.py").unlink(); shutil_rm(repo / "work/t")
+    tp("k5", "할인 계산을 고쳐 주세요.")
+    write_map("work/t5/work.md", "| T1 | old |", sid="k5", via_tool=False)
+    tp("k5", "work/t5/work.md 승인합니다.")
+    (repo / "k5.py").write_text("1\n")
+    write_map("work/t5/work.md", "| T1 | old |", "| T1 | 통과 |", sid="k5", via_tool=False)  # 증거만 갱신
+    r = task_cmd("task", "done", sid="k5"); out = json.loads(r.stdout or "{}")
+    check("기준이 그대로인 승인 수정 → task done: 완료(대기 아님), 턴 끝 알림 없음",
+          out.get("closed_kind") == "done" and out.get("waiting") is False and not stop_of("k5"))
+    (repo / "k5.py").unlink(); shutil_rm(repo / "work/t5")
     long_req = "긴 요구 " + "가" * 30000 + " 끝문장"
     tp("d2", long_req)
     tp("d2", "승인합니다.")
