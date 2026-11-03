@@ -38,6 +38,7 @@ GIT_READ = {"status", "diff", "log", "show", "ls-files", "rev-parse", "blame", "
 GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
 RTK_READ = {"read", "ls", "grep", "find", "json", "log", "diff", "deps", "gain"}
 OPERATORS = ["&&", "||", ";;", ">>", "&>", ">&", "<>", "<<<", "<<", ";", "|", "&", ">", "<", "(", ")"]
+EXPANDS = "\x00$"  # 셸이 실행 때 펼치는 $(작은따옴표 밖). 환경 변수 지정 값에서만 허용한다
 SHELL_WORDS = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "fi", "done", "}"}
 MAX_STOP_BLOCKS = 2
 TEST_RUN = re.compile(r"^(rtk\s+)?(python3?\s+-m\s+(unittest|pytest)|pytest)(\s+[-\w./:=]+)*$")
@@ -105,7 +106,7 @@ def tokens(cmd):
             elif c == "\\" and q == '"' and i + 1 < len(cmd):
                 i += 1; cur += cmd[i]
             else:
-                cur += c
+                cur += EXPANDS if (c == "$" and q == '"') else c
         elif c in "'\"":
             q, quoted = c, True
         elif c == "\\" and i + 1 < len(cmd):
@@ -118,7 +119,7 @@ def tokens(cmd):
             op = next((o for o in OPERATORS if cmd.startswith(o, i)), None)
             if op:
                 flush(); out.append((op, True)); i += len(op); continue
-            cur += c
+            cur += EXPANDS if c == "$" else c
         i += 1
     if q:
         return None
@@ -170,18 +171,22 @@ def segment_read_only(seg):
         return False
     if name in ("sh", "bash", "zsh") and len(args) == 2 and args[0] in ("-c", "-lc"):  # sh -c '<읽기 명령>'
         return shell_read_only(args[1])
-    joined = " ".join(seg)
-    if VERSION.match(joined):
-        return True
-    if TEST_RUN.match(joined) or JS_CHECK.match(joined):  # 조사 중 기존 검사 실행은 둔다. 숨은 쓰기는 턴 끝 상태 검사가 잡는다
-        return True
+    if name == "rtk" and [a for a in args if not a.startswith("-")][:1] == ["proxy"]:  # rtk proxy <명령>: 명령을 그대로 실행
+        return segment_read_only(args[[a for a in args].index("proxy") + 1:])
     if name in ("export", "unset"):  # 이 셸의 환경 변수만 바꾼다(예: Node 버전에 맞춘 PATH)
-        return all(re.match(r"^[A-Za-z_][A-Za-z0-9_]*(=.*)?$", x) for x in args)
+        return all(re.match(r"^[A-Za-z_][A-Za-z0-9_]*(=.*)?$", x, re.S) for x in args)
     if name == "env":  # env -u NAME NAME=VALUE <명령>: 환경만 바꿔 뒤 명령을 실행한다
         rest = list(args)
         while rest and (rest[0] in ("-u", "--unset") or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", rest[0])):
             rest = rest[2:] if rest[0] in ("-u", "--unset") else rest[1:]
         return segment_read_only(rest) if rest else True
+    if any(EXPANDS in x for x in seg):  # 실행 때 펼쳐질 값($VAR)은 어떤 인자·옵션이 될지 미리 알 수 없다
+        return False
+    joined = " ".join(seg)
+    if VERSION.match(joined):
+        return True
+    if TEST_RUN.match(joined) or JS_CHECK.match(joined):  # 조사 중 기존 검사 실행은 둔다. 숨은 쓰기는 턴 끝 상태 검사가 잡는다
+        return True
     if name == "rtk":  # rtk 는 명령 출력을 줄여 주는 도구다
         while args and args[0].startswith("-"):  # rtk 자체 선택 항목(--raw-output=true 등)
             args = args[1:]
