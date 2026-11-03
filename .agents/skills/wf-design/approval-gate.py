@@ -41,9 +41,10 @@ OPERATORS = ["&&", "||", ";;", ">>", "&>", ">&", "<>", "<<<", "<<", ";", "|", "&
 SHELL_WORDS = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "fi", "done", "}"}
 MAX_STOP_BLOCKS = 2
 TEST_RUN = re.compile(r"^(rtk\s+)?(python3?\s+-m\s+(unittest|pytest)|pytest)(\s+[-\w./:=]+)*$")
-# 패키지 매니저로 돌리는 기존 검사 스크립트(테스트·타입 검사·린트·전체 검사)와 쓰지 않는 검사 도구. 고치기 옵션은 뺀다.
-JS_CHECK = re.compile(r"^(?!.*(--fix|--write|\s-u\b|--update|--output|\s-o\s|--noEmit[\s=]+false))(rtk\s+)?((pnpm|npm|yarn|bun)(\s+(--dir|-C|--filter|--prefix|--workspace|-w)\s+\S+)*(\s+run)?\s+(test|typecheck|type-check|lint|check)(?=\s|$)"
-                      r"|(npx|pnpm\s+exec|bunx)\s+(vitest\s+run|tsc\s+.*--noEmit|eslint)(?=\s|$))[^;&|<>]*$")
+# 패키지 매니저로 돌리는 프로젝트의 기존 검사 스크립트(테스트·타입 검사·린트·전체 검사). 스크립트 이름 뒤에는 파일 경로만 받는다
+# (옵션을 붙이면 출력 파일·고치기 같은 쓰기가 열릴 수 있어 승인이 필요하다). 도구를 직접 부르는 실행(npx tsc 등)도 승인이 필요하다.
+JS_CHECK = re.compile(r"^(rtk\s+)?(pnpm|npm|yarn|bun)(\s+(--dir|-C|--filter|--prefix|--workspace|-w)\s+[^\s-]\S*)*(\s+run)?"
+                      r"\s+(test|typecheck|type-check|lint|check)(\s+[^\s-][^\s]*)*$")
 VERSION = re.compile(r"^(rtk\s+)?(command\s+-v\s+[\w.-]+|[\w.-]+\s+(--version|-v|-V))$")  # 도구 존재·버전 확인
 REASON = (f"{TAG} 사용자가 이번 메시지에서 승인하지 않아 제품 파일 쓰기와 읽기 전용으로 확인되지 않는 셸 명령을 막았습니다. "
           "읽어서 조사한 뒤, 사용자가 받을 결과(원문·계약 근거와 함께)와 아직 정해지지 않은 점, 확인 방법을 보여 주고 "

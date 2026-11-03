@@ -41,7 +41,7 @@ with tempfile.TemporaryDirectory() as t:
               "rtk python3 -m unittest discover -s tests", "python3 -m pytest -q tests/test_a.py",
               "rtk rm tests/__pycache__/t.cpython-314.pyc", "rm -rf .pytest_cache tests/__pycache__",
               "rtk pnpm --dir apps/starter test", "pnpm --dir apps/starter typecheck", "npm run lint", "pnpm --filter web-kit check",
-              "npx tsc -p tsconfig.app.json --noEmit", "pnpm exec vitest run src/a.test.ts", "node --version", "pnpm -v",
+              "pnpm test src/a.test.ts", "node --version", "pnpm -v",
               "command -v node", "rtk proxy sh -c 'command -v node; node --version; pnpm --version'",
               'export PATH="$HOME/.nvm/versions/node/v24.19.0/bin:$PATH"; unset NODE_OPTIONS; pnpm typecheck',
               "rtk proxy env -u NODE_OPTIONS PATH=/x/bin:$PATH pnpm test", "env ls"]:
@@ -53,7 +53,8 @@ with tempfile.TemporaryDirectory() as t:
               "python3 -m pytest $(rm -rf x)", "python3 -m http.server", "rm app.py", "rm -rf __pycache__/../src",
               "pnpm lint --fix", "npx eslint . --fix", "pnpm install", "pnpm add left-pad", "npx tsc -p tsconfig.app.json",
               "pnpm test -u", "env -u X python3 x.py", "export X=1; rm a.py", "node version", "npm run lint:fix", "pnpm test-update", "npx tsc --noEmit false",
-              "npx eslint . --output-file report.json", "node -e 'require(\"fs\").writeFileSync(\"a\",\"x\")'", "node script.js", "pnpm test > out.txt"]:
+              "npx eslint . --output-file report.json", "npx tsc --noEmit --generateTrace trace", "pnpm test --outputFile=r.json",
+              "pnpm lint -- --fix", "npx tsc -p tsconfig.app.json --noEmit", "pnpm --dir -x test", "node -e 'require(\"fs\").writeFileSync(\"a\",\"x\")'", "node script.js", "pnpm test > out.txt"]:
         check(f"쓰기·실행 셸은 막는다: {c!r}", bash(c))
     check("cmd 필드로 온 셸도 검사한다", call("pre", {"tool_name": "exec_command", "tool_input": {"cmd": "touch app.py"}}))
     check("command 가 없는 apply_patch 입력도 대상을 찾아 막는다",
