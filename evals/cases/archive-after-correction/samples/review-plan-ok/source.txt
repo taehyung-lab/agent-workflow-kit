@@ -1,0 +1,1 @@
+실제 새 세션 기록(evals/results/issue20-approval3/archive-after-correction-b3d00f8-codex-1, 키트 b3d00f8, Codex)에서 가져온 승인 뒤 구현.
