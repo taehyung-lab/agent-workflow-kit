@@ -60,7 +60,7 @@ for i in $(seq 1 "$times"); do
   # 사용자 전역 설정은 건드리지 않는다: Codex 는 임시 홈의 hooks.json, Claude 는 --settings 로만 등록한다.
   hookcmd='python3 "$(git rev-parse --show-toplevel)/.agents/skills/wf-design/approval-gate.py"'
   hookjson=$(HOOKCMD=$hookcmd python3 -I -c 'import json,os; c=os.environ["HOOKCMD"]
-print(json.dumps({"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": c + " prompt", "timeout": 30}]}], "PreToolUse": [{"hooks": [{"type": "command", "command": c + " pre", "timeout": 30}]}]}}))')
+print(json.dumps({"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": c + " prompt", "timeout": 30}]}], "PreToolUse": [{"hooks": [{"type": "command", "command": c + " pre", "timeout": 30}]}], "Stop": [{"hooks": [{"type": "command", "command": c + " stop", "timeout": 30}]}]}}))')
   limit=900; [ "${EVALS_HOOK:-0}" != 1 ] || limit=2400
   export AWK_GATE_LOG="$out.hook.log"
   csettings=(); [ "${EVALS_HOOK:-0}" != 1 ] || { net+=(--dangerously-bypass-hook-trust); csettings=(--settings "$hookjson"); }
@@ -130,7 +130,8 @@ for l in open(sys.argv[1], encoding="utf-8"):
     else verify_state=ok
     fi
   fi
-  [ "$harness" != codex ] || rm -rf "${ch:?}"
+  # Codex 의 exec 기록(--json)에는 하위 에이전트 생성(spawn_agent)이 남지 않는다. 관찰용으로 이 세션의 원본 기록(rollout)을 남긴다.
+  [ "$harness" != codex ] || { [ -z "$sid" ] || find "$ch/sessions" -name "rollout-*$sid.jsonl" -exec cat {} + > "$out.rollout.jsonl" 2>/dev/null; rm -rf "${ch:?}"; }
   seconds=$(( $(date +%s) - start ))
   # 판정 검사는 0=통과, 1=실패, 2=검토 필요(원문을 사람이 판정)를 돌려준다.
   if [ "$rc" -ne 0 ]; then

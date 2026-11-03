@@ -35,20 +35,42 @@ with tempfile.TemporaryDirectory() as t:
     check("work/ 를 벗어나는 경로(..)는 막는다", edit(str(repo / "work/../app.py")))
     check("읽기 도구는 막지 않는다", not call("pre", {"tool_name": "Read", "tool_input": {"file_path": "app.py"}}))
     for c in ["ls -la; cat a.py | head -5", "rg -n 'a|b' src", "git status && git diff HEAD", "sed -n 1,20p a.py", "find . -name '*.py'",
-              "cat a.py 2>/dev/null", "grep x a 2>&1 | wc -l", "rtk git log -3", "cd sub && ls"]:
+              "cat a.py 2>/dev/null", "grep x a 2>&1 | wc -l", "rtk git log -3", "cd sub && ls", "rtk read AGENTS.md",
+              "git -C . status", "git --no-pager -C . diff", "rg \">\" src", "echo '>'", "sed -n '/w/p' a.py"]:
         check(f"읽기 전용 셸은 둔다: {c}", not bash(c))
     for c in ["echo x > app.py", "sed -i '' s/a/b/ a.py", "python3 -c 'open(\"a\",\"w\")'", "cat a\npython3 x.py", "ls; rm -rf src",
-              "find . -delete", "git checkout -- a.py", "cat $(echo a)", "tee a.py < b", "awk '{print > \"o\"}' a", "git branch new"]:
+              "find . -delete", "git checkout -- a.py", "cat $(echo a)", "tee a.py < b", "awk '{print > \"o\"}' a", "git branch new",
+              "sed -n 'w out' src", "sed 's/a/b/w out' src", "sort -o out src", "git diff --no-index --output=o /dev/null src",
+              "git remote add x /tmp/n", "cat <> new", "awk -f work/r.awk src", "/tmp/cat src", "", "env ls"]:
         check(f"쓰기·실행 셸은 막는다: {c!r}", bash(c))
-    say("승인하지 말고 먼저 설명만 해 주세요.")
-    check("부정 표현은 승인이 아니다", edit("app.py"))
+    check("cmd 필드로 온 셸도 검사한다", call("pre", {"tool_name": "exec_command", "tool_input": {"cmd": "touch app.py"}}))
+    check("command 가 없는 apply_patch 입력도 대상을 찾아 막는다",
+          call("pre", {"tool_name": "apply_patch", "tool_input": {"input": "*** Begin Patch\n*** Add File: app.py\n+x\n*** End Patch"}}))
+    check("이름으로 쓰기임이 드러나는 도구는 막는다", call("pre", {"tool_name": "mcp__files__write_file", "tool_input": {"path": "a"}})
+          and call("pre", {"tool_name": "write_stdin", "tool_input": {"chars": "x"}}))
+    check("계획 도구(TodoWrite·update_plan)는 막지 않는다", not call("pre", {"tool_name": "TodoWrite", "tool_input": {"todos": []}})
+          and not call("pre", {"tool_name": "update_plan", "tool_input": {"plan": []}}))
+    for text in ["승인하지 말고 먼저 설명만 해 주세요.", "승인 여부를 검토해 주세요", "진행해 주세요는 예시일 뿐입니다", "do not approve",
+                 "보류합니다. 바로 구현하지 마세요", "승인합니다. 다만 결제 모듈은 바꾸지 마세요", "진행해도 될까요?"]:
+        say(text)
+        check(f"승인이 아니다: {text}", edit("app.py"))
     say("좋습니다. 승인합니다.")
     check("승인 턴: 편집과 셸을 연다", not edit("app.py") and not bash("python3 -m pytest"))
+    check("다른 세션의 승인은 쓰지 않는다", call("pre", {"tool_name": "Edit", "tool_input": {"file_path": "app.py"}, "session_id": "s2"}))
+    check("session_id 가 없으면 승인이 없는 것으로 본다", call("pre", {"tool_name": "Edit", "tool_input": {"file_path": "app.py"}, "session_id": None}))
     say("그런데 재가입은 막아 주세요.")
     check("다음 사용자 메시지가 승인이 아니면 다시 닫힌다", edit("app.py") and bash("python3 x.py"))
     say("바로 구현해 주세요: scripts/calc.py 로 두 수의 합")
     check("요청 메시지 안의 '바로 구현' 은 승인이다", not edit("scripts/calc.py"))
 
+    stop = lambda: call("stop", {}) or json.loads(subprocess.run([sys.executable, "-I", str(GATE), "stop"], capture_output=True, text=True,
+                input=json.dumps({"cwd": str(repo), "session_id": "s"})).stdout or "{}").get("decision") == "block"
+    say("검색만 해 주세요.")
+    check("승인 없는 턴에 제품 파일이 그대로면 턴을 끝낼 수 있다", not stop())
+    (repo / "app.py").write_text("hidden write\n")
+    check("승인 없는 턴에 숨은 쓰기로 제품 파일이 바뀌면 되돌리게 막는다", stop())
+    (repo / "work").mkdir(exist_ok=True); (repo / "app.py").unlink(); (repo / "work" / "w.md").write_text("x")
+    check("work/ 기록만 바뀌면 막지 않는다", not stop())
     bad = subprocess.run([sys.executable, "-I", str(GATE), "pre"], input="{깨진", capture_output=True, text=True)
     check("입력을 읽지 못하면 막는다", '"deny"' in bad.stdout)
     nogit = subprocess.run([sys.executable, "-I", str(GATE), "pre"], capture_output=True, text=True,
