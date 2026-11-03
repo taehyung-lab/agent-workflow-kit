@@ -35,6 +35,12 @@
 - **최종 보장은 턴 끝 검사다.** 셸은 옵션·설정·외부 프로그램으로 쓰기를 숨길 수 있어서 실행 전 판정만으로는 완전하지 않다. 그래서 턴이 끝날 때 제품 파일의 내용·실행 권한·하위 저장소 상태를 직접 읽어 비교한다.
 - **실수 방지 장치다.** 에이전트가 일부러 승인 기록이나 훅 파일을 고치는 것까지 막지는 않는다. 그것까지 막으려면 하네스의 읽기 전용 실행 모드를 함께 쓴다.
 - **Codex 는 처음 한 번 신뢰가 필요하다.** 프로젝트 훅은 Codex 시작 화면에서 "신뢰"를 골라야 돈다. 고르지 않으면 훅 없이 실행된다(문장 기준만 적용).
+- **worktree·clone 을 자주 만들면 사용자 전역에 한 번 등록한다.** Codex 의 신뢰는 경로마다 따로 기록되어, 새 작업 공간마다 다시 골라야 한다. `~/.codex/hooks.json` 의 `UserPromptSubmit`·`PreToolUse`·`Stop` 에 아래 명령을 하나씩(끝 단어만 `prompt`·`pre`·`stop`) 더하고 Codex 에서 한 번 신뢰하면 모든 저장소에 적용된다. 키트가 없는 저장소에서는 아무것도 하지 않는다. 프로젝트 등록과 둘 다 돌아도 관문이 같은 턴 끝의 두 번째 호출을 같은 판단으로 처리한다.
+
+  ```sh
+  r=$(git rev-parse --show-toplevel 2>/dev/null) && [ -f "$r/.agents/skills/wf-design/approval-gate.py" ] && exec python3 "$r/.agents/skills/wf-design/approval-gate.py" pre; exit 0
+  ```
+
 - 판단 기록이 필요하면 환경 변수 `AWK_GATE_LOG=<파일>` 을 주면 판단마다 한 줄씩 남는다.
 
 모델 없이 관문 동작을 확인하는 시험은 키트 저장소의 `evals/gatetest.py` 에 있다.

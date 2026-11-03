@@ -90,6 +90,10 @@ with tempfile.TemporaryDirectory() as t:
     check("승인 없는 턴에 제품 파일이 그대로면 턴을 끝낼 수 있다", not stop())
     (repo / "app.py").write_text("hidden write\n")
     check("승인 없는 턴에 숨은 쓰기로 제품 파일이 바뀌면 되돌리게 막는다", stop())
+    import hashlib
+    blocks_file = repo / ".git" / "awk-gate" / (hashlib.sha256(b"s").hexdigest()[:24] + ".blocks")
+    check("같은 턴 끝에 두 번 불려도(전역·프로젝트 훅) 같은 판단을 내고 되돌리기 요청 횟수는 한 번만 센다",
+          stop() and blocks_file.read_text().strip() == "1")
     (repo / "work").mkdir(exist_ok=True); (repo / "app.py").unlink(); (repo / "work" / "w.md").write_text("x")
     check("work/ 기록만 바뀌면 막지 않는다", not stop())
     (repo / "tests" / "__pycache__").mkdir(parents=True); (repo / "tests" / "__pycache__" / "t.cpython-314.pyc").write_bytes(b"\0")
