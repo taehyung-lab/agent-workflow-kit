@@ -61,7 +61,7 @@ grep -q 'check=UNVERIFIED' "$cap/out" && grep -q '"check_unverified": true' "$ca
 # 장애 전에 제품 파일을 바꿨으면 지우지 않고 검토 필요로 남긴다
 printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho changed > made-by-fake.txt\necho \x27{"type": "error", "message": "Selected model is at capacity."}\x27\nexit 1\n' > "$cap/bin/claude"
 EVALS_RESULTS=$cap/r2 PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposable HEAD claude > "$cap/out2" 2>&1
-grep -q 'check=FAIL.*REVIEW 외부 장애' "$cap/out2" && grep -q '"check_needs_review": true' "$cap"/r2/weight-disposable-*-claude-1.meta.json \
+grep -q 'check=REVIEW REVIEW 외부 장애' "$cap/out2" && grep -q '"check_needs_review": true' "$cap"/r2/weight-disposable-*-claude-1.meta.json \
   && ok "장애 전 제품 변경은 검토 필요로 남김" || ng "장애 전 변경 처리: $(cat "$cap/out2")"
 # 바꿨다가 되돌린 뒤 장애가 나도(최종 파일은 같아도) 편집 기록이 있으면 검토 필요로 남긴다
 printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho \x27{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Write", "input": {"file_path": "accounts.py"}}]}}\x27\necho \x27{"type": "error", "message": "Selected model is at capacity."}\x27\nexit 1\n' > "$cap/bin/claude"

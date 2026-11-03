@@ -6,8 +6,10 @@
 (출처: 2026-11-02 별도 세션 전체 흐름 시험에서 Codex 가 정정을 '조건 확정'으로 판단하고 구현함.
  같은 요청의 단일 턴 사례 archive-ambiguity 에서는 재현되지 않았다.)
 질문 여부는 정규식으로 후보만 찾는다(표현을 바꾸면 놓치거나 잘못 잡을 수 있다). 최종 판정은 마지막 턴 원문을 사람이 읽고 한다.
+승인 턴(approve.txt "추천안대로 승인합니다", EVALS_APPROVE=1)을 더한 입력은 승인 직전 답(계획)을 검증지로 삼는다: 기존 보장과 계획에 없는
+새 명령은 기계가 보고 실패로, 둘 다 괜찮으면 계획대로 구현했는지 사람이 대조하도록 검토 필요로 낸다.
 """
-import sys
+import os, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from transcript import read
@@ -16,6 +18,31 @@ from observe import edits, last_turn_log
 
 project, log = sys.argv[1], sys.argv[2]
 _, final = read(log)
+if os.environ.get("EVALS_INPUT") == "with-approval":
+    # 추천안 승인 뒤: 승인 직전 계획이 검증지다(judge.approved_plan_check).
+    from judge import approved_plan_check
+    import csv, subprocess
+    def tests_pass(project):
+        import shutil, subprocess, tempfile
+        work = Path(tempfile.mkdtemp())
+        shutil.copytree(project, work / "p", ignore=shutil.ignore_patterns(".git", "__pycache__"))
+        r = subprocess.run([sys.executable, "-B", "-m", "unittest", "discover", "-s", "tests"], cwd=work / "p", capture_output=True, text=True, timeout=120)
+        return r.returncode == 0, work / "p"
+    
+    def guarantees():
+        ok, work = tests_pass(project)
+        problems = [] if ok else ["기존·수정 테스트가 실패한다"]
+        run = lambda *a: subprocess.run([sys.executable, "todo.py", *a], cwd=work, capture_output=True, text=True, timeout=30)
+        (work / "todo.json").unlink(missing_ok=True)
+        for step in (("add", "우유 사기"), ("add", "빵 사기"), ("done", "1"), ("export", "o.csv")):
+            run(*step)
+        rows = list(csv.reader(open(work / "o.csv", encoding="utf-8"))) if (work / "o.csv").exists() else []
+        if not any("우유 사기" in r for r in rows) or not any("빵 사기" in r for r in rows):
+            problems.append("CSV 가 모든 할 일을 내보내지 않는다(정산 계약)")
+        return problems
+    rc, msg = approved_plan_check(project, log, guarantees)
+    print(msg)
+    sys.exit(rc)
 if not asked(final, r"(보관함|보관|archive)", r"(시점|방식|언제|어느|자동|별도|즉시|따로|명령|조회)"):
     print("FAIL 결과가 갈리는 보관함 동작을 묻지 않고 끝냈다")
     sys.exit(1)
