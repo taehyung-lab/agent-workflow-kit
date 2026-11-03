@@ -33,7 +33,7 @@ SPEC = ["--", ".", ":(exclude).agents", ":(exclude)work", ":(exclude).codex", ":
         ":(exclude)**/__pycache__/**", ":(exclude)**/.pytest_cache/**", ":(exclude)**/*.pyc", ":(exclude)CLAUDE.md", ":(exclude)AGENTS.md"]
 READ_ONLY = {"ls", "cat", "head", "tail", "wc", "grep", "rg", "find", "sed", "awk", "pwd", "echo", "printf", "nl", "sort",
              "uniq", "cut", "tr", "file", "stat", "tree", "du", "which", "type", "jq", "diff", "cmp", "basename", "dirname",
-             "realpath", "date", "cd", "true", "test", "[", "column", "od", "xxd", "sha256sum", "shasum", "md5"}
+             "realpath", "date", "cd", "true", "test", "[", "column", "od", "sha256sum", "shasum", "md5"}
 GIT_READ = {"status", "diff", "log", "show", "ls-files", "rev-parse", "blame", "grep", "cat-file", "shortlog", "describe"}
 GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
 RTK_READ = {"read", "ls", "grep", "find", "json", "log", "diff", "deps", "gain"}
@@ -222,6 +222,12 @@ def segment_read_only(seg):
         return not any(re.search(write_cmd, s) or re.search(write_flag, s) for s in scripts)
     if name == "sort" and any(a.startswith("-o") or a.startswith("--output") for a in args):
         return False
+    if name == "uniq" and len([a for a in args if not a.startswith("-")]) > 1:  # uniq 입력 출력: 두 번째 파일에 쓴다
+        return False
+    if (name == "tree" and any(a.startswith("-o") for a in args)) or (name == "file" and any(a.startswith("-C") for a in args)):
+        return False
+    if name == "date" and any(not a.startswith(("+", "-u", "-R", "-I", "-r", "-j", "-f")) or a == "-s" for a in args):
+        return False  # 날짜 출력 형식·변환만 둔다(시스템 날짜 설정 제외)
     if name == "find" and any(a in ("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls") for a in args):
         return False
     if name == "awk" and any(a == "-f" or re.search(r"(system|print[^;]*>|getline|close|fflush)", a) for a in args):
