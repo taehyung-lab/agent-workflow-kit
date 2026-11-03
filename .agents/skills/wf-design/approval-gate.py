@@ -172,7 +172,7 @@ def segment_read_only(seg):
             args = args[1:]
         if args[:1] == ["proxy"]:
             return segment_read_only(args[1:])
-        if args and (args[0] in READ_ONLY or args[0] == "git"):
+        if args and (args[0] in READ_ONLY or args[0] in ("git", "rm")):
             return segment_read_only(args)
         return bool(args) and args[0] in RTK_READ and not any(a.startswith("-o") or a.startswith("--output") for a in args)
     if name == "git":
@@ -182,6 +182,9 @@ def segment_read_only(seg):
             if opt in GIT_VALUE_OPTS and rest:
                 rest.pop(0)
         return bool(rest) and rest[0] in GIT_READ and not any(a.startswith("--output") or a == "-o" for a in rest)
+    if name == "rm":  # 테스트가 만든 캐시(__pycache__·.pytest_cache)를 치우는 것만 둔다
+        targets = [a for a in args if not a.startswith("-")]
+        return bool(targets) and all(re.search(r"(^|/)(__pycache__|\.pytest_cache)(/|$)", a) and ".." not in a for a in targets)
     if name not in READ_ONLY:
         return False
     if name == "sed":
