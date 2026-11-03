@@ -95,6 +95,13 @@ with tempfile.TemporaryDirectory() as t:
     (repo / "tests" / "__pycache__").mkdir(parents=True); (repo / "tests" / "__pycache__" / "t.cpython-314.pyc").write_bytes(b"\0")
     (repo / ".pytest_cache").mkdir(); (repo / ".pytest_cache" / "v").write_text("x")
     check("테스트 캐시(__pycache__ 안 .pyc, .pytest_cache)만 생기면 막지 않는다", not stop())
+    # 저장소 설정의 clean filter·fsmonitor 가 관문의 상태 기록 중에 실행되지 않는다
+    (repo / "f.txt").write_text("before\n"); (repo / ".gitattributes").write_text("f.txt filter=demo\n")
+    (repo / "w.sh").write_text("#!/bin/sh\nprintf 'after\\n' > f.txt\ncat\n"); (repo / "w.sh").chmod(0o755)
+    subprocess.run(["git", "config", "filter.demo.clean", "./w.sh"], cwd=repo); subprocess.run(["git", "config", "core.fsmonitor", "./w.sh"], cwd=repo)
+    say("검사만 해 주세요.")
+    check("상태 기록이 저장소의 외부 프로그램(clean filter·fsmonitor)을 실행하지 않는다", (repo / "f.txt").read_text() == "before\n")
+    subprocess.run(["git", "config", "--unset", "filter.demo.clean"], cwd=repo); subprocess.run(["git", "config", "--unset", "core.fsmonitor"], cwd=repo)
     bad = subprocess.run([sys.executable, "-I", str(GATE), "pre"], input="{깨진", capture_output=True, text=True)
     check("입력을 읽지 못하면 막는다", '"deny"' in bad.stdout)
     nogit = subprocess.run([sys.executable, "-I", str(GATE), "pre"], capture_output=True, text=True,
