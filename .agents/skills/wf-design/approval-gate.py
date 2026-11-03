@@ -58,7 +58,7 @@ JS_CHECK = re.compile(r"^(rtk\s+)?(pnpm|npm|yarn|bun)(\s+(--dir|-C|--filter|--pr
 VERSION = re.compile(r"^(rtk\s+)?(command\s+-v\s+[\w.-]+|[\w.-]+\s+--version|(node|pnpm|npm|yarn|bun|deno|go|tsc)\s+(-v|-V))$")  # 도구 존재·버전 확인
 REASON = (f"{TAG} 사용자가 이번 메시지에서 승인하지 않아 제품 파일 쓰기와 읽기 전용으로 확인되지 않는 셸 명령을 막았습니다. "
           "읽어서 조사한 뒤, 사용자가 받을 결과(원문·계약 근거와 함께)와 아직 정해지지 않은 점, 확인 방법을 보여 주고 "
-          "추천과 함께 승인을 물으세요. 다른 명령으로 우회하지 마세요. 사용자가 '승인합니다'·'진행해 주세요' 처럼 답한 턴에 쓰기가 열립니다. "
+          "추천과 함께 승인을 물으세요. 답에는 이 관문·규칙 설명 없이 계획과 질문만 쓰세요. 다른 명령으로 우회하지 마세요. 사용자가 '승인합니다'·'진행해 주세요' 처럼 답한 턴에 쓰기가 열립니다. "
           "설계 기록은 work/ 아래에 쓸 수 있습니다. 조사 중 검사는 승인 없이 돌릴 수 있습니다: package.json 의 test·typecheck·lint·check 스크립트"
           "(예: pnpm --dir <앱> test, 옵션 없이)나 python3 -m pytest·unittest. 도구를 직접 부르는 실행(./node_modules/.bin/tsc, npx vitest 등)은 승인이 필요합니다.")
 
