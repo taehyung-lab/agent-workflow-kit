@@ -109,6 +109,12 @@ with tempfile.TemporaryDirectory() as t:
     say("검사만 해 주세요.")
     g("checkout", "-q", "HEAD~1")
     check("승인 없는 턴에 하위 저장소의 체크아웃 버전이 바뀌면 막는다", stop())
+    deep = sub
+    for _ in range(4):
+        deep = deep / "n"; deep.mkdir(); g("init", "-q", d=deep); (deep / "d.txt").write_text("1\n"); g("add", "-A", d=deep); g("commit", "-qm", "1", d=deep)
+    say("검사만 해 주세요.")
+    (deep / "d.txt").write_text("2\n")
+    check("네 단계 아래 하위 저장소의 파일이 바뀌어도 막는다", stop())
     subprocess.run(["git", "config", "--unset", "filter.demo.clean"], cwd=repo); subprocess.run(["git", "config", "--unset", "core.fsmonitor"], cwd=repo)
     bad = subprocess.run([sys.executable, "-I", str(GATE), "pre"], input="{깨진", capture_output=True, text=True)
     check("입력을 읽지 못하면 막는다", '"deny"' in bad.stdout)

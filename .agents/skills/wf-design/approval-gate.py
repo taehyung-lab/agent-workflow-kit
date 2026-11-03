@@ -84,10 +84,11 @@ def locate(cwd):
     return Path(out[0]), Path(out[1], "awk-gate")
 
 
-def product_state(root, depth=0):
+def product_state(root, seen=None):
     """제품 파일(work/·키트·지침·캐시 제외)의 상태 지문. 파일 목록만 git 에서 받고 내용은 디스크에서 직접 읽는다
     (git diff 는 저장소 설정의 clean filter·외부 diff 같은 프로그램을 실행할 수 있어 쓰지 않는다)."""
     files = git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", *SPEC).decode().split("\0")
+    seen = (seen or set()) | {os.path.realpath(root)}
     h = hashlib.sha256()
     for f in sorted(set(x for x in files if x)):
         p = Path(root, f)
@@ -96,9 +97,9 @@ def product_state(root, depth=0):
         elif p.is_file():
             mode = b"x" if os.access(p, os.X_OK) else b"-"  # 실행 권한 변경도 제품 변경이다(git 이 기록하는 유일한 권한)
             h.update(f.encode() + b"\0" + mode + hashlib.sha256(p.read_bytes()).digest())
-        elif p.is_dir() and (p / ".git").exists() and depth < 3:  # 하위 저장소: 체크아웃 버전과 그 안의 파일까지 본다
+        elif p.is_dir() and (p / ".git").exists() and os.path.realpath(p) not in seen:  # 하위 저장소(몇 단계든): 체크아웃 버전과 파일
             head = git(p, "rev-parse", "--verify", "-q", "HEAD", ok=(0, 1)).strip()
-            h.update(f.encode() + b"\0sub:" + head + product_state(p, depth + 1).encode())
+            h.update(f.encode() + b"\0sub:" + head + product_state(p, seen).encode())
         else:
             h.update(f.encode() + b"\0missing\0")
     return h.hexdigest()
