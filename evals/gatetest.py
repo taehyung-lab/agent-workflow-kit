@@ -75,6 +75,9 @@ with tempfile.TemporaryDirectory() as t:
     check("승인 없는 턴에 숨은 쓰기로 제품 파일이 바뀌면 되돌리게 막는다", stop())
     (repo / "work").mkdir(exist_ok=True); (repo / "app.py").unlink(); (repo / "work" / "w.md").write_text("x")
     check("work/ 기록만 바뀌면 막지 않는다", not stop())
+    (repo / "tests" / "__pycache__").mkdir(parents=True); (repo / "tests" / "__pycache__" / "t.cpython-314.pyc").write_bytes(b"\0")
+    (repo / ".pytest_cache").mkdir(); (repo / ".pytest_cache" / "v").write_text("x")
+    check("테스트 캐시(__pycache__ 안 .pyc, .pytest_cache)만 생기면 막지 않는다", not stop())
     bad = subprocess.run([sys.executable, "-I", str(GATE), "pre"], input="{깨진", capture_output=True, text=True)
     check("입력을 읽지 못하면 막는다", '"deny"' in bad.stdout)
     nogit = subprocess.run([sys.executable, "-I", str(GATE), "pre"], capture_output=True, text=True,

@@ -30,7 +30,7 @@ WRITE_NAME = r"(write|edit|create|delete|remove|update|patch|move|rename|insert|
 NOT_WRITE = {"TodoWrite", "update_plan", "ExitPlanMode", "EnterPlanMode"}  # 이름에 쓰기 낱말이 있지만 파일을 바꾸지 않는 계획 도구
 ALLOWED_WRITE_DIR = "work"  # 설계 기록(work/<작업명>/work.md)은 승인 전에도 쓸 수 있다
 SPEC = ["--", ".", ":(exclude).agents", ":(exclude)work", ":(exclude).codex", ":(exclude).claude",
-        ":(exclude)**/__pycache__", ":(exclude)**/.pytest_cache", ":(exclude)CLAUDE.md", ":(exclude)AGENTS.md"]
+        ":(exclude)**/__pycache__/**", ":(exclude)**/.pytest_cache/**", ":(exclude)**/*.pyc", ":(exclude)CLAUDE.md", ":(exclude)AGENTS.md"]
 READ_ONLY = {"ls", "cat", "head", "tail", "wc", "grep", "rg", "find", "sed", "awk", "pwd", "echo", "printf", "nl", "sort",
              "uniq", "cut", "tr", "file", "stat", "tree", "du", "which", "type", "jq", "diff", "cmp", "basename", "dirname",
              "realpath", "date", "cd", "true", "test", "[", "column", "od", "xxd", "sha256sum", "shasum", "md5"}
