@@ -322,6 +322,8 @@ def decide(data, root, approved):
 
 def main(mode, data):
     root, state = locate(data.get("cwd"))
+    if not (root / ".agents" / "agent-workflow-kit.version").is_file():
+        return  # 키트가 설치된 프로젝트에서만 동작한다(키트 원본 저장소·관문 파일만 복사된 곳은 그대로 둔다)
     sid = data.get("session_id")
     key = hashlib.sha256(str(sid).encode()).hexdigest()[:24] if sid else None
     flag, start, blocks = (state / f"{key}.approved", state / f"{key}.start", state / f"{key}.blocks") if key else (None,) * 3

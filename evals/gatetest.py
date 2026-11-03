@@ -15,6 +15,7 @@ def check(name, cond):
 with tempfile.TemporaryDirectory() as t:
     repo = Path(t) / "repo"; repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    (repo / ".agents").mkdir(); (repo / ".agents" / "agent-workflow-kit.version").write_text("0" * 40 + "\n")  # 설치된 프로젝트처럼
 
     def call(mode, payload):
         p = {"cwd": str(repo), "session_id": "s", **payload}
@@ -124,6 +125,10 @@ with tempfile.TemporaryDirectory() as t:
     check("내용을 바꾼 뒤 읽기 권한을 없애도 막는다", stop())
     (deep / "d.txt").chmod(0o644)
     subprocess.run(["git", "config", "--unset", "filter.demo.clean"], cwd=repo); subprocess.run(["git", "config", "--unset", "core.fsmonitor"], cwd=repo)
+    other = Path(t) / "kit-source"; other.mkdir(); subprocess.run(["git", "init", "-q"], cwd=other, check=True)
+    r = subprocess.run([sys.executable, "-I", str(GATE), "pre"], capture_output=True, text=True,
+                       input=json.dumps({"cwd": str(other), "session_id": "z", "tool_name": "Edit", "tool_input": {"file_path": "x.py"}}))
+    check("키트 버전 기록이 없는 저장소(키트 원본 등)에서는 아무것도 막지 않는다", '"deny"' not in r.stdout)
     bad = subprocess.run([sys.executable, "-I", str(GATE), "pre"], input="{깨진", capture_output=True, text=True)
     check("입력을 읽지 못하면 막는다", '"deny"' in bad.stdout)
     nogit = subprocess.run([sys.executable, "-I", str(GATE), "pre"], capture_output=True, text=True,
