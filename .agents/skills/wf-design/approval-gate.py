@@ -31,10 +31,10 @@ TAG = "[approval-gate]"
 # - 애매한 말(예문 속 승인, 철회 뒤 재승인 등)을 다 가리지는 못한다. 그 경우 에이전트가 쓰기 전에 다시 확인한다(AGENTS.md 2항).
 _SUFFIX = r"(주세요|주십시오|주시죠|줘요|줘|요)"
 APPROVE = (r"(진행\s*해\s*" + _SUFFIX + r"|진행하세요|진행합시다|승인(합니다|할게요|할게|해요|이요)"
-           r"|바로\s*(구현|진행|만들어|고쳐|바꿔|수정|적용|반영)\s*(해)?\s*" + _SUFFIX + r"|go ahead|approved?)(?=[\s.!~…,:;]|$)"
+           r"|바로\s*(구현|진행|만들어|고쳐|바꿔|수정|적용|반영)\s*(해)?\s*" + _SUFFIX + r"|go ahead|approved?)(?=[\s.!~…,:;。]|$)"
            r"|(진행해|승인)(?=\s*[.!~…]*\s*$)")  # 꼬리 없는 "진행해"·"승인"은 문장을 끝낼 때만
 NOT_APPROVE = r"(\?|？|까요|나요|을지|는지|인지|않|안\s*(돼|됩|했)|아니|\bnot\b|don't|never)"  # 승인 말이 든 문장 안의 질문·부정
-REVOKE = r"(^\s*(취소|멈춰|중지|그만|잠깐|보류|아니요|아뇨|wait|stop|cancel)|(^|\s)(시작하지|진행하지|하지)\s*마(세요|요|십시오)?\s*$|(취소|중지|보류)(합니다|할게요|해\s*주세요)\s*$|멈춰\s*주세요\s*$|무시해\s*주세요\s*$)"
+REVOKE = r"(^\s*((취소|중지|보류)\s*(합니다|할게요|해\s*주세요|해요)|멈춰|그만|잠깐|아니요|아뇨|wait\b|stop\b|cancel\b)|(^|\s)(시작하지|진행하지|하지)\s*마(세요|요|십시오)?\s*$|(취소|중지|보류)(합니다|할게요|해\s*주세요)\s*$|멈춰\s*주세요\s*$|무시해\s*주세요\s*$)"
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch"}
 SHELL_TOOLS = {"Bash", "shell", "exec_command", "local_shell", "unified_exec"}
 WRITE_NAME = r"(write|edit|create|delete|remove|update|patch|move|rename|insert|replace|upload|stdin|commit|push)"
@@ -122,7 +122,7 @@ def product_state(root, seen=None):
 
 def is_approval(prompt):
     sentences = [x.strip() for x in re.split(r"[.!?。？\n]+", prompt) if x.strip()]
-    if any(re.search(REVOKE, x, re.I) and not re.match(r"^(다만|단|단,)\s", x) for x in sentences):
+    if any(re.search(REVOKE, x, re.I) for x in sentences):
         return False
     for m in re.finditer(APPROVE, prompt, re.I | re.M):
         start = max(prompt.rfind(c, 0, m.start()) for c in ".!?。？\n") + 1
