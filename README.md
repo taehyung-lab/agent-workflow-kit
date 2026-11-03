@@ -175,7 +175,7 @@ flowchart LR
 ## 5분 시작
 
 ```bash
-git clone --branch v2.0.1 https://github.com/taehyung-lab/agent-workflow-kit
+git clone --branch v2.0.2 https://github.com/taehyung-lab/agent-workflow-kit
 bash agent-workflow-kit/install.sh /path/to/my-project
 ```
 
