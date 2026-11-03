@@ -400,9 +400,14 @@ def main(args):
         else:
             prompt = prompt_text(requests, plan, conditions, criteria, note, target, change)
             (keep / "prompt.txt").write_text(prompt, encoding="utf-8")
-            log = Path(opt(args, "--log") or keep / "verify.jsonl")
+            log = keep / "verify.jsonl"  # 원시 기록(표준 오류는 verify.jsonl.err)은 항상 이 회차의 고유 폴더에 남는다
             result["log"] = str(log)
             rc = call_harness(harness, vdir, prompt, log)
+            if opt(args, "--log"):  # --log 는 최신 회차 기록을 가리키는 복사본일 뿐이다(덮여도 원시 기록은 위 폴더에 그대로 있다)
+                for src, dst in ((log, Path(opt(args, "--log"))), (Path(str(log) + ".err"), Path(opt(args, "--log") + ".err"))):
+                    if src.is_file():
+                        dst.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(src, dst)
+                result["log_copy"] = opt(args, "--log")
             touched = [l for l in run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=vdir).stdout.decode().splitlines()
                        if l and not l.startswith("??")]
             verdict = judge(final_answer(log), required)

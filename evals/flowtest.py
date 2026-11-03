@@ -225,6 +225,10 @@ exit 0
         r = sh(sys.executable, "-I", str(verifier), "--harness", "claude", "--request", str(req), "--base-dir", str(basedir),
                "--state", str(t / f"ev-state-{i}.json"), "--log", str(logp), cwd=proj, env={**base_env, "FAKE_DIR": str(d), "PATH": f"{fake}:/usr/bin:/bin"})
         outs.append(json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {})
+    first_raw = Path(outs[0].get("kept", "/x")) / "verify.jsonl"
+    check("같은 --log 를 두 번 써도 첫 회차의 원시 기록은 그 회차의 고유 폴더에 그대로 있다(--log 는 최신 복사본)",
+          first_raw.is_file() and "verdict" in first_raw.read_text() and Path(outs[1].get("kept", "/x"), "verify.jsonl").is_file()
+          and logp.read_text() == Path(outs[1]["kept"], "verify.jsonl").read_text())
     check("--log 방식도 같은 보장: 기존 .round 내용 보존, 실행마다 다른 새 폴더",
           (t / "ev" / "x.verify1.round" / "old.txt").read_text() == "앞 실행\n" and len({o.get("kept") for o in outs}) == 2
           and all(Path(o.get("kept", "/x")).is_dir() and Path(o["kept"]).parent == t / "ev" / "x.verify1.round" for o in outs))
