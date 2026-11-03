@@ -6,7 +6,8 @@
 - `approval-gate.py pre` (PreToolUse): 승인되지 않은 턴에 쓰기 도구로 `work/` 밖을 바꾸거나,
   읽기 전용으로 확인되지 않는 셸 명령·이름으로 쓰기임이 드러나는 도구를 쓰려 하면 거절한다.
 - `approval-gate.py stop` (Stop): 승인되지 않은 턴인데 제품 파일 상태가 턴 시작 때와 달라졌으면(셸의 숨은 쓰기 등
-  PreToolUse 가 놓친 경로) 답을 끝내지 못하게 하고 되돌리게 한다.
+  PreToolUse 가 놓친 경로) 답을 끝내지 못하게 하고 되돌리게 한다. 끝없는 반복을 막으려고 한 턴에 MAX_STOP_BLOCKS 번까지만
+  되돌리게 하고, 그 뒤에도 남으면 턴을 끝내되 표준 오류에 남긴다(사용자는 git status 로 남은 변경을 본다).
 
 예: 사용자가 "회원 탈퇴 기능을 만들어 주세요" 라고만 보내면 에이전트는 코드를 읽을 수는 있지만 accounts.py 를 고치려는 순간
 거절 사유가 돌아온다. 에이전트는 만들 결과와 미정을 보여 주고 묻는다. 사용자가 "승인합니다" 라고 답한 턴에 쓰기가 열린다.
@@ -19,7 +20,7 @@
 승인이 허용하는 범위(어느 파일·어떤 동작)는 기계로 보지 않는다. 결과가 승인한 내용과 맞는지는 검증자가 본다.
 환경 변수: AWK_GATE_LOG=<파일>(판단마다 한 줄씩 남긴다. 측정용).
 """
-import hashlib, json, os, re, subprocess, sys
+import hashlib, json, os, re, subprocess, sys, time
 from pathlib import Path
 
 TAG = "[approval-gate]"
@@ -32,7 +33,7 @@ WRITE_NAME = r"(write|edit|create|delete|remove|update|patch|move|rename|insert|
 NOT_WRITE = {"TodoWrite", "update_plan", "ExitPlanMode", "EnterPlanMode"}  # 이름에 쓰기 낱말이 있지만 파일을 바꾸지 않는 계획 도구
 ALLOWED_WRITE_DIR = "work"  # 설계 기록(work/<작업명>/work.md)은 승인 전에도 쓸 수 있다
 SPEC = ["--", ".", ":(exclude).agents", ":(exclude)work", ":(exclude).codex", ":(exclude).claude",
-        ":(exclude)**/__pycache__/**", ":(exclude)**/.pytest_cache/**", ":(exclude)**/*.pyc", ":(exclude)CLAUDE.md", ":(exclude)AGENTS.md"]
+        ":(exclude,glob)**/__pycache__/**", ":(exclude,glob)**/.pytest_cache/**", ":(exclude,glob)**/*.pyc", ":(exclude)CLAUDE.md", ":(exclude)AGENTS.md"]
 READ_ONLY = {"ls", "cat", "head", "tail", "wc", "grep", "rg", "find", "sed", "awk", "pwd", "echo", "printf", "nl", "sort",
              "uniq", "cut", "tr", "file", "stat", "tree", "du", "which", "type", "jq", "diff", "cmp", "basename", "dirname",
              "realpath", "date", "cd", "true", "test", "[", "column", "od", "sha256sum", "shasum", "md5"}
@@ -321,7 +322,12 @@ def decide(data, root, approved):
 
 
 def main(mode, data):
-    root, state = locate(data.get("cwd"))
+    try:
+        root, state = locate(data.get("cwd"))
+    except RuntimeError:
+        return  # git 저장소가 아니면 상태를 잴 수 없고 키트 설치 프로젝트도 아니다
+    if not (root / ".agents" / "agent-workflow-kit.version").is_file():
+        return  # 키트가 설치된 프로젝트에서만 동작한다(키트 원본 저장소·관문 파일만 복사된 곳은 그대로 둔다)
     sid = data.get("session_id")
     key = hashlib.sha256(str(sid).encode()).hexdigest()[:24] if sid else None
     flag, start, blocks = (state / f"{key}.approved", state / f"{key}.start", state / f"{key}.blocks") if key else (None,) * 3
@@ -333,22 +339,35 @@ def main(mode, data):
         flag.write_text("1" if approved else "0")
         start.write_text(product_state(root))
         blocks.write_text("0")
+        (state / f"{key}.laststop").unlink(missing_ok=True)  # 앞 턴의 턴 끝 판단을 새 턴에 다시 쓰지 않는다
         log({"event": "prompt", "approved": approved})
         return
     approved = bool(key) and flag.is_file() and flag.read_text().strip() == "1"
     if mode == "stop":
         if approved or not key or not start.is_file():
             return
-        changed = product_state(root) != start.read_text().strip()
+        # 같은 턴 끝에 관문이 두 번 불리면(사용자 전역 훅과 프로젝트 훅을 둘 다 등록·신뢰한 경우) 앞의 판단을 그대로 낸다.
+        last = state / f"{key}.laststop"
+        now = product_state(root)
+        if last.is_file():
+            prev = json.loads(last.read_text() or "{}")
+            if time.time() - prev.get("t", 0) < 5 and prev.get("now") == now and prev.get("start") == start.read_text().strip():
+                if prev.get("out"):
+                    print(prev["out"])
+                return
+        changed = now != start.read_text().strip()
         n = int(blocks.read_text() or 0) if blocks.is_file() else 0
         log({"event": "stop", "changed": changed, "blocks": n})
+        out = ""
         if changed and n < MAX_STOP_BLOCKS:
             blocks.write_text(str(n + 1))
-            print(json.dumps({"decision": "block", "reason": f"{TAG} 사용자가 이번 메시지에서 승인하지 않았는데 제품 파일이 턴 시작 때와 달라졌습니다. "
+            out = json.dumps({"decision": "block", "reason": f"{TAG} 사용자가 이번 메시지에서 승인하지 않았는데 제품 파일이 턴 시작 때와 달라졌습니다. "
                               "이번 턴에 바꾼 제품 파일을 턴 시작 상태로 되돌리고(사용자가 이전에 만든 변경은 그대로 둡니다), "
-                              "만들 결과와 미정을 보여 주고 승인을 물으세요."}, ensure_ascii=False))
+                              "만들 결과와 미정을 보여 주고 승인을 물으세요."}, ensure_ascii=False)
+            print(out)
         elif changed:
             print(f"{TAG} 미승인 변경이 남은 채 끝났다(되돌리기 요청 {n}회)", file=sys.stderr)
+        last.write_text(json.dumps({"t": time.time(), "start": start.read_text().strip(), "now": now, "out": out}, ensure_ascii=False))
         return
     reason = decide(data, root, approved)
     inp = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}

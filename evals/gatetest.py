@@ -15,6 +15,7 @@ def check(name, cond):
 with tempfile.TemporaryDirectory() as t:
     repo = Path(t) / "repo"; repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    (repo / ".agents").mkdir(); (repo / ".agents" / "agent-workflow-kit.version").write_text("0" * 40 + "\n")  # 설치된 프로젝트처럼
 
     def call(mode, payload):
         p = {"cwd": str(repo), "session_id": "s", **payload}
@@ -90,11 +91,28 @@ with tempfile.TemporaryDirectory() as t:
     check("승인 없는 턴에 제품 파일이 그대로면 턴을 끝낼 수 있다", not stop())
     (repo / "app.py").write_text("hidden write\n")
     check("승인 없는 턴에 숨은 쓰기로 제품 파일이 바뀌면 되돌리게 막는다", stop())
+    import hashlib
+    blocks_file = repo / ".git" / "awk-gate" / (hashlib.sha256(b"s").hexdigest()[:24] + ".blocks")
+    check("같은 턴 끝에 두 번 불려도(전역·프로젝트 훅) 같은 판단을 내고 되돌리기 요청 횟수는 한 번만 센다",
+          stop() and blocks_file.read_text().strip() == "1")
     (repo / "work").mkdir(exist_ok=True); (repo / "app.py").unlink(); (repo / "work" / "w.md").write_text("x")
     check("work/ 기록만 바뀌면 막지 않는다", not stop())
     (repo / "tests" / "__pycache__").mkdir(parents=True); (repo / "tests" / "__pycache__" / "t.cpython-314.pyc").write_bytes(b"\0")
     (repo / ".pytest_cache").mkdir(); (repo / ".pytest_cache" / "v").write_text("x")
+    (repo / "src" / "deep" / "__pycache__").mkdir(parents=True); (repo / "src" / "deep" / "__pycache__" / "note").write_text("x")
+    (repo / "src" / ".pytest_cache" / "v").mkdir(parents=True); (repo / "src" / ".pytest_cache" / "v" / "nodeids").write_text("[]")
+    (repo / "__pycache__").mkdir(); (repo / "__pycache__" / "x.pyc").write_bytes(b"\0")
     check("테스트 캐시(__pycache__ 안 .pyc, .pytest_cache)만 생기면 막지 않는다", not stop())
+    (repo / "src" / "a.py").write_text("x=1\n")
+    check("캐시와 함께 하위 경로의 제품 파일이 생기면 막는다", stop())
+    (repo / "src" / "a.py").unlink()
+    say("검사만 해 주세요.")
+    (repo / "app2.py").write_text("x\n")
+    stop(); (repo / "app2.py").unlink()
+    say("검사만 해 주세요.")
+    (repo / "app2.py").write_text("x\n")
+    check("다음 턴에서 같은 변경이 생겨도 앞 턴의 판단을 다시 쓰지 않고 새로 센다", stop() and blocks_file.read_text().strip() == "1")
+    (repo / "app2.py").unlink()
     # 저장소 설정의 clean filter·fsmonitor 가 관문의 상태 기록 중에 실행되지 않는다
     (repo / "f.txt").write_text("before\n"); (repo / ".gitattributes").write_text("f.txt filter=demo\n")
     (repo / "w.sh").write_text("#!/bin/sh\nprintf 'after\\n' > f.txt\ncat\n"); (repo / "w.sh").chmod(0o755)
@@ -120,6 +138,10 @@ with tempfile.TemporaryDirectory() as t:
     check("내용을 바꾼 뒤 읽기 권한을 없애도 막는다", stop())
     (deep / "d.txt").chmod(0o644)
     subprocess.run(["git", "config", "--unset", "filter.demo.clean"], cwd=repo); subprocess.run(["git", "config", "--unset", "core.fsmonitor"], cwd=repo)
+    other = Path(t) / "kit-source"; other.mkdir(); subprocess.run(["git", "init", "-q"], cwd=other, check=True)
+    r = subprocess.run([sys.executable, "-I", str(GATE), "pre"], capture_output=True, text=True,
+                       input=json.dumps({"cwd": str(other), "session_id": "z", "tool_name": "Edit", "tool_input": {"file_path": "x.py"}}))
+    check("키트 버전 기록이 없는 저장소(키트 원본 등)에서는 아무것도 막지 않는다", '"deny"' not in r.stdout)
     bad = subprocess.run([sys.executable, "-I", str(GATE), "pre"], input="{깨진", capture_output=True, text=True)
     check("입력을 읽지 못하면 막는다", '"deny"' in bad.stdout)
     nogit = subprocess.run([sys.executable, "-I", str(GATE), "pre"], capture_output=True, text=True,
