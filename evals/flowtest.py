@@ -198,5 +198,36 @@ exit 0
     check("결함5: 시작 때 내용을 보존하지 못한 파일이 있으면 unverified", out.get("state") == "unverified" and "보존하지 못한" in out.get("reason", "") and prompt == "")
     (proj / "secret.bin").unlink()
 
+    # ---- 증거 보존 회귀 표본(ac32c52): 기존 증거·사용자 폴더를 지우거나 덮지 않는다 ----
+    hook("prompt", "F", prompt="로그인 버튼 글자를 '로그인하기'로 바꿔 주세요")
+    hook("prompt", "F", prompt="승인합니다.", transcript_path=transcript("f", plan))
+    rc, out1, _ = verify("F", [RET])
+    k1 = Path(out1.get("kept", "/nonexistent")); r1 = (k1 / "result.json").read_text() if (k1 / "result.json").is_file() else None
+    hook("prompt", "F", prompt="승인합니다.")  # 같은 작업 재승인: 검증 기록이 비워져 회차 번호가 다시 1
+    rc, out2, _ = verify("F", [OK])
+    k2 = Path(out2.get("kept", "/nonexistent"))
+    check("재승인 뒤 새 검증은 다른 증거 폴더에 남고, 앞선 시도의 target·diff·result 는 그대로다",
+          out2.get("round") == 1 and k2 != k1 and k2.is_dir() and r1 is not None and (k1 / "result.json").read_text() == r1
+          and (k1 / "diff.txt").is_file() and sh("git", "cat-file", "-e", f"{out1.get('target')}^{{commit}}", cwd=k1 / "target").returncode == 0)
+    user_dir = t / "my-keep"; user_dir.mkdir(); (user_dir / "note.txt").write_text("사용자 파일\n"); (user_dir / "round-1").mkdir()
+    (user_dir / "round-1" / "keep.txt").write_text("이전 것\n")
+    hook("prompt", "F", prompt="승인합니다.")
+    rc, out3, _ = verify("F", [OK], extra=("--keep", str(user_dir)))
+    check("--keep 에 준 기존 폴더의 파일은 지우지 않고 그 안에 새 하위 폴더를 만든다",
+          (user_dir / "note.txt").read_text() == "사용자 파일\n" and (user_dir / "round-1" / "keep.txt").read_text() == "이전 것\n"
+          and Path(out3.get("kept", "/x")).parent == user_dir and Path(out3["kept"]).name != "round-1")
+    # 평가 실행기 방식(--request·--log): --log 옆 .round 폴더의 기존 내용도 보존한다
+    req = t / "req.txt"; req.write_text("로그인 버튼 글자를 바꿔 주세요\n"); basedir = t / "base-dir"; basedir.mkdir()
+    logp = t / "ev" / "x.verify1.jsonl"; (t / "ev" / "x.verify1.round").mkdir(parents=True); (t / "ev" / "x.verify1.round" / "old.txt").write_text("앞 실행\n")
+    outs = []
+    for i in range(2):
+        d = Path(tempfile.mkdtemp(dir=t)); (d / "verdicts").write_text(json.dumps(json.dumps(OK, ensure_ascii=False), ensure_ascii=False) + "\n")
+        r = sh(sys.executable, "-I", str(verifier), "--harness", "claude", "--request", str(req), "--base-dir", str(basedir),
+               "--state", str(t / f"ev-state-{i}.json"), "--log", str(logp), cwd=proj, env={**base_env, "FAKE_DIR": str(d), "PATH": f"{fake}:/usr/bin:/bin"})
+        outs.append(json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {})
+    check("--log 방식도 같은 보장: 기존 .round 내용 보존, 실행마다 다른 새 폴더",
+          (t / "ev" / "x.verify1.round" / "old.txt").read_text() == "앞 실행\n" and len({o.get("kept") for o in outs}) == 2
+          and all(Path(o.get("kept", "/x")).is_dir() and Path(o["kept"]).parent == t / "ev" / "x.verify1.round" for o in outs))
+
 print(f"{ok} passed, {failed} failed")
 sys.exit(1 if failed else 0)

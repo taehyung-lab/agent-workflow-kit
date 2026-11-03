@@ -8,7 +8,8 @@
 무엇을 넘기나(구현자가 고르지 않는다): 승인 관문이 기록한 이 작업의 사용자 원문 전부(승인 메시지 포함), 사용자가 승인한 때의
 기준(지도 `## 기준` 절이나 승인을 물은 답의 기준), 승인을 물은 답(계획), 첫 승인 때 보존한 제품 파일 상태부터 지금까지의 변경(diff).
 구현자의 답·지도의 `## 증거`(자기평가)는 넘기지 않는다. 회차마다 고정 대상 저장소·시작 상태·전체 diff·입력·판정을
-.git/awk-gate/verify/task-<id>/round-N/(평가에서는 --log 옆 .round 폴더)에 남긴다. 작업은 하네스가 셸에 주는 세션 id(CLAUDE_CODE_SESSION_ID·CODEX_THREAD_ID)나
+.git/awk-gate/verify/task-<id>/round-N-<고유 이름>/(--keep 이나 평가의 --log 옆 .round 폴더를 주면 그 안)에 새로 만들어 남긴다.
+기존 폴더·파일은 지우거나 덮지 않는다(같은 작업을 다시 승인해 회차 번호가 1부터 다시 시작해도 앞선 증거는 그대로다). 작업은 하네스가 셸에 주는 세션 id(CLAUDE_CODE_SESSION_ID·CODEX_THREAD_ID)나
 --session 으로 고르고, 둘 다 없으면 작업 기록이 하나일 때만 고른다(여럿이면 추측하지 않고 미확인).
 
 판정(state)과 종료 코드:
@@ -347,9 +348,12 @@ def main(args):
             result.update(state="incomplete", reason=f"재검증 한도({rounds_max})에 이미 닿았다. 새 검증자를 띄우지 않는다(사용자의 새 승인 뒤에만 새로 시작)")
         rounds.append({"round": n, "state": result["state"], "reason": result["reason"], "ran": False, "at": time.time()})
     else:
-        keep = Path(opt(args, "--keep") or (Path(opt(args, "--log")).with_suffix(".round") if opt(args, "--log") else
-                                             (state_dir / "verify" / f"task-{rec.get('id')}" / f"round-{n}" if state_dir else tempfile.mkdtemp(prefix="awk-verify-"))))
-        shutil.rmtree(keep, ignore_errors=True); keep.mkdir(parents=True)
+        # 증거 폴더: 정해진 상위 폴더(--keep, 평가는 --log 옆 .round, 기본은 관문 기록의 verify/task-<id>) 안에 이 회차만의 새 하위 폴더를
+        # 만든다. 이미 있는 폴더·파일(앞선 승인 시도의 증거, --keep 에 있던 사용자 파일)은 지우거나 덮지 않는다.
+        parent = Path(opt(args, "--keep") or (Path(opt(args, "--log")).with_suffix(".round") if opt(args, "--log") else
+                                               (state_dir / "verify" / f"task-{rec.get('id')}" if state_dir else tempfile.gettempdir())))
+        parent.mkdir(parents=True, exist_ok=True)
+        keep = Path(tempfile.mkdtemp(prefix=f"round-{n}-", dir=parent))
         result["kept"] = str(keep)  # 이 회차의 고정 대상(git 저장소)·시작 상태·diff·입력·판정을 지우지 않고 남긴다
         # 승인 뒤 바뀐 기준: 승인한 기준만 판정 기준이다. 바뀌었으면 검증자에게 알린다.
         note, changed = "", False
