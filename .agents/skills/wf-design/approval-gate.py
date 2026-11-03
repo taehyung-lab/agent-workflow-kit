@@ -168,6 +168,16 @@ def shell_read_only(cmd):
     return True
 
 
+def long_opt(args, *names):
+    """긴 옵션이 names 중 하나이거나 그 줄임(--out → --output)이면 참. GNU 도구는 겹치지 않는 줄임을 받는다."""
+    for a in args:
+        if a.startswith("--") and len(a) > 3:
+            opt = a[2:].split("=", 1)[0]
+            if any(n.startswith(opt) for n in names):
+                return True
+    return False
+
+
 def segment_read_only(seg):
     while seg and (ENV_OK.match(seg[0]) or seg[0] in SHELL_WORDS):  # 환경 변수 지정·if/then 같은 셸 문법어
         seg = seg[1:]
@@ -210,9 +220,10 @@ def segment_read_only(seg):
         if args and (args[0] in READ_ONLY or args[0] in ("git", "rm")):
             return segment_read_only(args)
         return bool(args) and args[0] in RTK_READ and not any(a.startswith("-o") or a.startswith("--output") for a in args)
-    if name == "git" and any(a == "-c" or a.startswith(("--config-env", "--open-files-in-pager", "-O", "--ext-diff", "--textconv", "--filters", "--exec-path")) for a in args):
+    if name == "git" and (any(a == "-c" or a.startswith("-O") for a in args)
+                          or long_opt(args, "config-env", "open-files-in-pager", "ext-diff", "textconv", "filters", "exec-path", "output")):
         return False
-    if name in ("rg", "grep") and any(a.startswith(("--pre", "--hostname-bin")) for a in args):
+    if name in ("rg", "grep") and long_opt(args, "pre", "pre-glob", "hostname-bin"):
         return False
     if name == "git":
         rest = list(args)
@@ -243,17 +254,17 @@ def segment_read_only(seg):
             elif plain and not scripts:
                 scripts.append(a)
         return bool(scripts) and all(SED_READ.match(x.strip()) for x in scripts)
-    if name == "sort" and any(re.match(r"^-[a-zA-Z]*o", a) or a.startswith(("--output", "--compress-program")) for a in args):
+    if name == "sort" and (any(re.match(r"^-[a-zA-Z]*o", a) for a in args) or long_opt(args, "output", "compress-program")):
         return False
     if name == "uniq" and len([a for a in args if not a.startswith("-")]) > 1:  # uniq 입력 출력: 두 번째 파일에 쓴다
         return False
-    if (name == "tree" and any(a.startswith("-o") for a in args)) or (name == "file" and any(re.match(r"^-[a-zA-Z]*C", a) or a.startswith("--comp") for a in args)):
+    if (name == "tree" and any(a.startswith("-o") for a in args)) or (name == "file" and (any(re.match(r"^-[a-zA-Z]*C", a) for a in args) or long_opt(args, "compile"))):
         return False
     if name == "date" and any(not a.startswith(("+", "-u", "-R", "-I", "-r", "-j", "-f")) or a == "-s" for a in args):
         return False  # 날짜 출력 형식·변환만 둔다(시스템 날짜 설정 제외)
     if name == "find" and any(a in ("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls") for a in args):
         return False
-    if name == "awk" and any(a.startswith("-f") or a.startswith("--file") or re.search(r"(system|print[^;]*[>|]|getline|close|fflush|\|)", a) for a in args):
+    if name == "awk" and (long_opt(args, "file", "exec", "include", "load") or any(a.startswith("-f") or re.search(r"(system|print[^;]*[>|]|getline|close|fflush|\|)", a) for a in args)):
         return False
     return True
 
