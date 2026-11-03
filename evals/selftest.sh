@@ -97,7 +97,7 @@ case "$2" in
     line=$(sed -n "${n}p" "$FAKE_DIR/verdicts")
     printf '{"type": "result", "result": %s}\n' "$line"
     exit "${FAKE_VRC:-0}";;
-  *) echo call >> "$FAKE_DIR/impl"; echo '{"session_id": "fake-sid"}'
+  *) echo call >> "$FAKE_DIR/impl"; echo "${AWK_GATE_PROMPT_FROM:-user}" >> "$FAKE_DIR/from"; echo '{"session_id": "fake-sid"}'
      # 승인 턴·교정 턴의 답은 구현 뒤 자기평가(검증자에게 가면 안 됨), 첫 턴 답은 사용자가 승인할 계획이다.
      case "$2" in *"승인합니다"*|*"별도 검증자가"*) echo '{"type": "result", "result": "IMPL-ANSWER-MARKER 다 했습니다"}';;
        *) [ -n "${FAKE_NOPLAN:-}" ] || echo '{"type": "result", "result": "PLAN-MARKER 추천안: calc.py 로 두 수의 합. 승인해 주시겠어요?"}';; esac
@@ -139,6 +139,7 @@ vrun again "$RETV" "$OKV"
 [ "$(mget verifier)" = ok ] && [ "$(mget verify_rounds)" = 2 ] && [ "$(grep -c '' "$vf/again/impl")" = 3 ] && grep -q 'made-by-impl.txt' "$vf/again/vprompt.2" \
   && [ "$(grep -c turn "$vf/again/vprompt.2")" -gt "$(grep -c turn "$vf/again/vprompt.1")" ] \
   && ok "검증: RETURN → 구현자 교정 턴 → 새 버전을 다시 판정" || ng "검증 재검증: $(mget verifier) rounds=$(mget verify_rounds)"
+[ "$(tr '\n' ' ' < "$vf/again/from")" = "user user runner " ] && ok "검증 반환 턴에만 실행기 발신 구분(AWK_GATE_PROMPT_FROM=runner)을 넘김" || ng "반환 턴 발신 구분: $(tr '\n' ' ' < "$vf/again/from")"
 vrun limit "$RETV" "$RETV" "$RETV"
 [ "$(mget verifier)" = incomplete ] && [ "$(mget verify_rounds)" = 2 ] && [ "$(mget completion)" = incomplete ] && ok "검증: 재검증 한도에 닿으면 미완료(성공 아님)" || ng "검증 한도: $(mget verifier) rounds=$(mget verify_rounds)"
 FAKE_VWRITE=1 vrun touched "$OKV"
@@ -153,9 +154,23 @@ vrun oos '"{\"verdict\": \"OK\", \"conditions\": [{\"id\": \"C1\", \"result\": \
 FAKE_MAP=1 vrun map "$OKV"
 grep -q 'C9 | 기존 보장' "$vf/map/vprompt.1" && ! grep -q SELF-ASSESS-MARKER "$vf/map/vprompt.1" && [ "$(mget verifier)" = unverified ] && grep -q 'C9' "$meta" \
   && ok "검증: 작업 지도의 기준만 넘기고(증거·자기평가 제외) 그 ID 를 필수 조건으로 요구" || ng "검증 지도 기준: $(mget verifier) $(mget verify_reason)"
+# 최종 결과 JSON 만 판정으로 읽는다: 끊긴 최종 JSON 뒤에서 앞선 예시 OK 로 통과하지 않음, 코드 울타리·설명 뒤 JSON 은 지원
+python3 -I - "$here" <<'PY' && ok "검증 형식: 끊긴 최종 JSON 은 미확인(앞선 OK 로 대체 안 함), 울타리·설명+최종 JSON 은 읽음" || ng "검증 형식: 최종 JSON 판정"
+import sys; sys.path.insert(0, sys.argv[1]); from verdict import judge
+ok = '{"verdict": "OK", "conditions": [{"id": "C1", "result": "충족", "evidence": "실행 결과 1"}]}'
+assert judge("예시 " + ok + ' 최종: {"verdict": "RETURN"')["state"] == "unverified"
+assert judge("예시 " + ok + ' 최종: {"verdict": "OK", "conditions": [')["state"] == "unverified"
+assert judge("판정 설명입니다.\n```json\n" + ok + "\n```\n")["state"] == "ok"
+assert judge("설명.\n" + ok)["state"] == "ok"
+assert judge('예시 {"verdict": "RETURN", "return_reason": "x"} 최종 ' + ok)["state"] == "ok"
+PY
 FAKE_BREAK=1 vrun checkfail "$OKV"
 [ "$(mget verifier)" = ok ] && [ "$(mget completion)" = check-failed ] && [ "$(mget check_passed)" = False ] \
   && ok "검증: 검증자가 OK 여도 결정적 행동 검사가 실패하면 완료(verified)로 세지 않음" || ng "검증 OK+검사 실패: $(mget verifier)/$(mget completion)"
+# 다시 판정해도 최초 실행과 같은 완료 규칙: 검증 OK·검사 PASS 였던 실행의 결과물이 깨진 뒤 rejudge → check-failed, 이전 완료는 이력에
+rm -f "$vf/ok/r"/*.files/scripts/calc.py; python3 -I "$here/rejudge.py" "$vf/ok/r" >/dev/null 2>&1; meta=$(ls "$vf/ok/r"/*.meta.json | head -1)
+[ "$(mget completion)" = check-failed ] && python3 -I -c 'import json,sys; h=json.load(open(sys.argv[1]))["rejudge_history"][-1]; sys.exit(h["completion"] != "verified")' "$meta" \
+  && ok "재판정: 새 판정 FAIL 이면 completion 도 같은 규칙으로 check-failed, 이전 completion 은 이력에 보존" || ng "재판정 완료: $(mget completion)"
 FAKE_MAP=1 FAKE_REMAP=1 vrun remap "$RETV" "$OKV"
 grep -q 'C9 | 기존 보장' "$vf/remap/vprompt.2" && grep -q '승인 뒤 작업 지도의 기준을 바꿨다' "$vf/remap/vprompt.2" && ! grep -q '승인 뒤 작업 지도의 기준을 바꿨다' "$vf/remap/vprompt.1" \
   && [ "$(mget baseline_changed_after_approval)" = True ] && grep -q 'C9' "$meta" \

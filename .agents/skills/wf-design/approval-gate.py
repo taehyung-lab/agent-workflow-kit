@@ -3,7 +3,7 @@
 하네스(Codex·Claude Code) 훅으로 세 번 불린다.
 - `approval-gate.py prompt` (UserPromptSubmit): 사용자 메시지가 들어올 때 승인 상태를 정하고, 그때의 제품 파일별 지문을 기록한다.
   - 승인 메시지("승인합니다"·"진행해 주세요" 같은 고정 규칙)면 승인을 연다. 그때 이 작업의 승인 대상 지도와, 모든 지도의
-    기준 지문(`## 증거` 절을 뺀 내용)을 묶어 둔다.
+    `## 기준` 절 지문을 묶어 둔다.
   - 철회("취소합니다"·"멈춰 주세요")나, 승인 말이 들어 있지만 승인이 아닌 메시지("승인하지 않습니다"·"진행해도 될까요?")면 닫는다.
   - 그 밖의 메시지(상태 질문 "어디까지 됐어요?" 등)는 승인 상태를 그대로 둔다. 메시지의 뜻을 더 분류하지 않는다.
 - `approval-gate.py pre` (PreToolUse): 승인 상태가 아니면 수정 도구(Edit·Write·apply_patch 등)로 `work/` 밖을 바꾸거나,
@@ -16,8 +16,8 @@
 - 승인 대상: 승인 메시지가 경로로 가리킨 지도, 그리고 승인 전에 이 세션이 쓴 지도. 둘 다 없으면 대화 안의 계획에 대한 승인이다.
   다른 세션·사용자가 쓴 다른 작업의 지도는 연결하지 않는다(그 지도가 바뀌어도 이 승인은 닫히지 않는다).
 - 이 세션이 지도를 썼는지는 수정 도구의 대상 경로와, 이 세션의 턴 동안 기준이 바뀐 지도로 안다.
-- 승인 뒤 이 세션이 지도의 기준을 고치거나(조건 추가·삭제·수정), 지도를 지우거나, 기준이 있는 새 지도를 쓰면 닫힌다.
-  `## 증거` 절만 바뀌면 그대로 열려 있다. 에이전트가 파일에 "approved: true" 를 써도 승인이 되지 않는다(사용자 메시지만 연다).
+- 승인 뒤 이 세션이 지도의 `## 기준` 절을 고치거나(조건 추가·삭제·수정, 절 삭제), 지도를 지우거나, 기준 절이 있는 새 지도를 쓰면 닫힌다.
+  담당자·설계·`## 증거` 처럼 기준 절 밖만 바뀌면 그대로 열려 있다. 에이전트가 파일에 "approved: true" 를 써도 승인이 되지 않는다(사용자 메시지만 연다).
 
 예: 사용자가 "회원 탈퇴 기능을 만들어 주세요" 라고만 보내면 에이전트는 코드를 읽고 검사를 돌릴 수는 있지만 accounts.py 를 Edit 로
 고치려는 순간 거절 사유가 돌아온다. "승인합니다" 뒤 "어디까지 됐어요?" 라고 물어도 계속 쓸 수 있다. 에이전트가 승인 뒤
@@ -37,6 +37,8 @@ work/withdraw/work.md 의 기준에 조건을 더하면 다음 Edit 이 거절�
 - 실수 방지 장치다. 승인 기록(`.git/awk-gate/`)이나 이 파일을 일부러 고치는 것까지 막지는 않는다.
 승인이 허용하는 범위(어느 파일·어떤 동작)는 기계로 보지 않는다. 결과가 승인한 내용과 맞는지는 검증자가 본다.
 환경 변수: AWK_GATE_LOG=<파일>(판단마다 한 줄씩 남긴다. 측정용).
+  AWK_GATE_PROMPT_FROM=runner(평가 실행기가 하네스를 띄울 때만 준다): 그 턴의 입력은 사용자 메시지가 아니므로 승인 상태를 바꾸지 않는다.
+  사용자가 직접 쓰는 세션에서는 주지 않는다.
 """
 import hashlib, json, os, re, subprocess, sys, time
 from pathlib import Path
@@ -74,7 +76,7 @@ REASON = (f"{TAG} 사용자 승인이 없어 제품 파일을 바꾸는 수정 �
 
 CHANGED_REASON = (f"{TAG} 승인 뒤 이 작업의 지도 기준이 바뀌어(조건 추가·삭제·수정, 지도 삭제, 기준이 있는 새 지도) 승인이 닫혔습니다: {{maps}}. "
                   "바뀐 기준은 사용자가 승인한 것이 아닙니다. 무엇이 왜 바뀌었는지 보여 주고 다시 승인을 물으세요. "
-                  "실행 결과는 `## 증거` 절에만 적으면 승인이 유지됩니다.")
+                  "실행 결과·내부 설계는 `## 기준` 밖(`## 증거` 등)에 적으면 승인이 유지됩니다.")
 
 
 def log(what):
@@ -126,10 +128,13 @@ def product_files(root, seen=None, prefix=""):
 
 
 def criteria(text):
-    """지도에서 승인 대상인 부분: `## 증거` 절(다음 `## ` 제목 전까지)을 뺀 나머지의 지문. 증거 갱신은 승인 대상이 아니다."""
-    body = re.sub(r"^## 증거[^\n]*\n.*?(?=^## |\Z)", "", text, flags=re.M | re.S)
-    body = "\n".join(l.rstrip() for l in body.strip().splitlines())
-    return hashlib.sha256(body.encode()).hexdigest() if body else None
+    """지도에서 승인 대상인 `## 기준` 절(다음 `## ` 제목 전까지)의 지문. 기준 절이 없으면 None.
+    결과·범위·완료 기준만 승인 대상이다. 담당자·설계(내부 함수 이름 등)·`## 증거` 를 고쳐도 지문은 그대로다."""
+    m = re.search(r"^## 기준[^\n]*\n(.*?)(?=^## |\Z)", text, re.M | re.S)
+    if not m:
+        return None
+    body = "\n".join(l.rstrip() for l in m.group(1).strip().splitlines())
+    return hashlib.sha256(body.encode()).hexdigest()
 
 
 def maps(root):
@@ -277,7 +282,11 @@ def main(mode, data):
     if mode == "prompt":
         state.mkdir(exist_ok=True)
         prompt = str(data.get("prompt") or "")
-        if is_approval(prompt):
+        if os.environ.get("AWK_GATE_PROMPT_FROM") == "runner":
+            # 평가 실행기(evals/run.sh)가 보낸 검증 반환 같은 사용자 아닌 입력: 실행기가 아는 발신 구분을 받아, 글 내용과 관계없이
+            # 승인을 열거나 닫지 않는다. 턴 시작 기록(제품 파일·지도 지문)은 그대로 해서 변경 감시는 계속한다.
+            decision = "runner"
+        elif is_approval(prompt):
             # 승인 대상: 메시지가 가리킨 지도 + 승인 전에 이 세션이 쓴 지도. 없으면 대화 안의 계획.
             targets = {m: "승인 메시지가 경로로 가리킴" for m in named_maps(root, prompt)}
             for m in rec.get("touched", []):

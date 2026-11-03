@@ -13,6 +13,7 @@ out_of_scope(새 요구가 있어야 성립하는 반례)는 판정을 막지 �
 사용:
   python3 -I evals/verdict.py judge <검증자 기록 .jsonl> [필수 조건 ID ...]   → 판정 JSON 한 줄
   python3 -I evals/verdict.py baseline <프로젝트>                              → 작업 지도들의 `## 기준` 절(검증자에게 넘길 합의 조건)
+  python3 -I evals/verdict.py completion <검증 상태> <PASS|REVIEW|FAIL|UNVERIFIED> → 전체 완료 판정
   python3 -I evals/verdict.py ids <파일>                                       → 파일에 적힌 조건 ID(표의 첫 칸 또는 줄 머리)
 """
 import json, re, sys
@@ -24,24 +25,30 @@ ID = r"[A-Z]{1,3}\d{1,3}"
 
 
 def last_json(text):
-    """답에서 마지막으로 완결된 JSON 객체를 찾는다. 없으면 None."""
+    """답의 최종 결과 JSON. 마지막 `"verdict":` 키를 담은 완결 객체여야 한다(코드 울타리 ``` 안이어도 된다).
+    그 뒤에 끊기거나 깨진 결과 JSON 이 있으면 앞선 완결 객체(예시 등)를 대신 쓰지 않는다.
+    돌려줌: (객체 또는 None, 실패 사유)."""
+    keys = [m.start() for m in re.finditer(r'"verdict"\s*:', text)]
+    if not keys:
+        return None, "결과 형식(JSON)이 없다" if text.strip() else "빈 답"
     dec = json.JSONDecoder()
-    found = None
-    for i, c in enumerate(text):
-        if c == "{":
-            try:
-                obj, _ = dec.raw_decode(text[i:])
-            except ValueError:
-                continue
-            if isinstance(obj, dict) and "verdict" in obj:
-                found = obj
-    return found
+    last = keys[-1]
+    for i in range(last, -1, -1):  # 마지막 verdict 키를 감싸는 가장 가까운 여는 괄호부터 해석한다
+        if text[i] != "{":
+            continue
+        try:
+            obj, end = dec.raw_decode(text[i:])
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and i + end > last and "verdict" in obj:
+            return obj, ""
+    return None, "최종 결과 JSON 이 끊기거나 형식이 틀렸다(앞선 JSON 으로 대신하지 않는다)"
 
 
 def judge(final, required=()):
-    v = last_json(final or "")
+    v, why = last_json(final or "")
     if v is None:
-        return {"state": "unverified", "reason": "결과 형식(JSON)이 없다" if (final or "").strip() else "빈 답", "out_of_scope": []}
+        return {"state": "unverified", "reason": why, "out_of_scope": []}
     oos = [str(x) for x in v.get("out_of_scope") or [] if str(x).strip()] if isinstance(v.get("out_of_scope"), list) else []
     conds = v.get("conditions") if isinstance(v.get("conditions"), list) else []
     bad_shape = [c for c in conds if not (isinstance(c, dict) and str(c.get("id", "")).strip() and c.get("result") in RESULTS)]
@@ -70,6 +77,14 @@ def judge(final, required=()):
     if problems:
         return {**out, "state": "unverified", "reason": " / ".join(problems)}
     return {**out, "state": "ok", "reason": ""}
+
+
+def completion(verifier, check):
+    """전체 완료 판정(run.sh 와 rejudge.py 가 같이 쓴다). verifier: 검증 상태(off·ok·returned·incomplete·unverified),
+    check: 사례 판정(PASS·REVIEW·FAIL·UNVERIFIED). 검증자가 OK 여도 결정적 행동 검사가 실패하면 완료가 아니다."""
+    if verifier == "ok":
+        return {"PASS": "verified", "REVIEW": "verified", "FAIL": "check-failed"}.get(check, "unverified")
+    return {"off": "not-verified"}.get(verifier, verifier)
 
 
 def baseline(project):

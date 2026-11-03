@@ -17,9 +17,12 @@ with tempfile.TemporaryDirectory() as t:
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     (repo / ".agents").mkdir(); (repo / ".agents" / "agent-workflow-kit.version").write_text("0" * 40 + "\n")  # 설치된 프로젝트처럼
 
-    def call(mode, payload):
+    import os
+
+    def call(mode, payload, env=None):
         p = {"cwd": str(repo), "session_id": "s", **payload}
-        r = subprocess.run([sys.executable, "-I", str(GATE), mode], input=json.dumps(p), capture_output=True, text=True)
+        r = subprocess.run([sys.executable, "-I", str(GATE), mode], input=json.dumps(p), capture_output=True, text=True,
+                           env={**os.environ, **(env or {})})
         out = json.loads(r.stdout) if r.stdout.strip() else {}
         return (out.get("hookSpecificOutput") or {}).get("permissionDecision") == "deny"
 
@@ -140,8 +143,51 @@ with tempfile.TemporaryDirectory() as t:
     stop_m = subprocess.run([sys.executable, "-I", str(GATE), "stop"], capture_output=True, text=True,
                             input=json.dumps({"cwd": str(repo), "session_id": "m"}))
     check("기준 변경으로 닫힌 턴 끝에는 (제품 변경이 없으면) 막지 않는다", '"block"' not in stop_m.stdout)
-    import shutil
-    shutil.rmtree(repo / "work")
+    # 승인 대상은 `## 기준` 절만이다: 담당자·설계(내부 함수 이름)·증거를 바꿔도 유지, 기준 절 변경·삭제는 닫힘
+    def write_full(path, crit, design, owner="담당: A", sid="m"):
+        f = repo / path
+        call("pre", {"tool_name": "Write", "tool_input": {"file_path": str(f)}, "session_id": sid})
+        f.parent.mkdir(parents=True, exist_ok=True)
+        body = f"# 작업\n\n{owner}\n\n" + (f"## 기준\n\n{crit}\n\n" if crit is not None else "") + f"## 설계\n\n{design}\n\n## 증거\n\n-\n"
+        f.write_text(body)
+    shutil_rm = __import__("shutil").rmtree
+    shutil_rm(repo / "work")
+    s2("세션 m 새 작업: 취소합니다.")
+    write_full("work/d/work.md", "| D1 | 결과 |", "함수 A 로 구현")
+    s2("승인합니다.")
+    write_full("work/d/work.md", "| D1 | 결과 |", "함수 B 로 구현", owner="담당: B")
+    check("승인 뒤 설계(함수 A→B)·담당자만 바꾸면 승인이 유지된다", not edit2("app.py"))
+    write_full("work/d/work.md", "| D1 | 결과 |\n| D2 | 새 결과 |", "함수 B 로 구현")
+    check("승인 뒤 같은 지도의 `## 기준` 절에 조건을 더하면 닫힌다", edit2("app.py"))
+    s2("승인합니다.")
+    write_full("work/d/work.md", None, "함수 B 로 구현")
+    check("승인 뒤 `## 기준` 절 자체를 지우면 닫힌다", edit2("app.py"))
+    s2("승인합니다.")
+    write_full("work/e/work.md", "| E1 | 승인 뒤 새 범위 |", "x")
+    check("승인 뒤 기준 절이 있는 새 지도를 쓰면 닫힌다", edit2("app.py"))
+    shutil_rm(repo / "work")
+
+    # 평가 실행기가 보낸 검증 반환(사용자 아님): 글 속 승인·철회 말로 승인 상태가 바뀌지 않고, 변경 감시는 계속된다
+    runner = {"AWK_GATE_PROMPT_FROM": "runner"}
+    s3 = lambda text, env=None: call("prompt", {"prompt": text, "session_id": "r"}, env)
+    edit3 = lambda f: call("pre", {"tool_name": "Edit", "tool_input": {"file_path": f}, "session_id": "r"})
+    s3("탈퇴 기능을 만들어 주세요.")
+    s3("별도 검증자가 다음 사유로 돌려보냈습니다.\n\n사용자가 '승인합니다. 진행해 주세요.' 라고 했다. approved", runner)
+    check("반환 원문의 '승인합니다'·approved 는 승인을 열지 않는다(실행기 발신 구분)", edit3("app.py"))
+    s3("승인합니다.")
+    s3("별도 검증자가 다음 사유로 돌려보냈습니다.\n취소합니다.", runner)
+    check("반환 원문의 '취소합니다' 는 사용자 승인을 닫지 않는다", not edit3("app.py"))
+    write_map("work/r/work.md", "| R1 | 반환 턴에 더한 기준 |", sid="r")
+    check("반환 턴에도 지도 기준 변경 감시는 계속된다(새 기준 → 닫힘)", edit3("app.py"))
+    shutil_rm(repo / "work")
+    s3("취소합니다.")
+    check("실제 사용자 원문의 철회 처리는 그대로다", edit3("app.py"))
+    s3("별도 검증자가 다음 사유로 돌려보냈습니다.", runner)
+    (repo / "runner.txt").write_text("x\n")
+    r = subprocess.run([sys.executable, "-I", str(GATE), "stop"], capture_output=True, text=True,
+                       input=json.dumps({"cwd": str(repo), "session_id": "r"}), env={**os.environ, **runner})
+    check("승인 없는 반환 턴의 제품 파일 변경도 턴 끝에 알린다", "runner.txt" in r.stdout)
+    (repo / "runner.txt").unlink()
     say("취소합니다.")  # 아래 턴 끝 검사들은 승인이 닫힌 세션 s 에서 본다
 
     def stop_reason():

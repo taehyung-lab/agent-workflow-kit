@@ -167,10 +167,11 @@ for l in open(sys.argv[1], encoding="utf-8"):
       vfinal=$(python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); from transcript import read; print(read(sys.argv[2])[1])' "$here" "$vlog")
       rprompt=$(printf '별도 검증자가 다음 사유로 돌려보냈습니다. 검증자의 판단을 그대로 따르지 말고, 사용자 원문과 작업 기준에 비추어 판단해 다시 답하세요.\n\n%s' "$vfinal")
       if [ "$harness" = claude ]; then
-        (cd "$work/project" && perl -e 'alarm shift; exec @ARGV' 900 claude -p "$rprompt" --resume "$sid" --output-format stream-json --verbose \
+        # 반환 턴은 사용자 메시지가 아니다: 관문에 발신 구분을 넘겨 글 속 "승인합니다"·"취소합니다"로 승인 상태가 바뀌지 않게 한다.
+        (cd "$work/project" && AWK_GATE_PROMPT_FROM=runner perl -e 'alarm shift; exec @ARGV' 900 claude -p "$rprompt" --resume "$sid" --output-format stream-json --verbose \
           --dangerously-skip-permissions --max-turns 30 > "$tout.jsonl" 2> "$tout.err")
       else
-        (cd "$work/project" && CODEX_HOME=$ch perl -e 'alarm shift; exec @ARGV' "$limit" codex exec resume --json --skip-git-repo-check \
+        (cd "$work/project" && AWK_GATE_PROMPT_FROM=runner CODEX_HOME=$ch perl -e 'alarm shift; exec @ARGV' "$limit" codex exec resume --json --skip-git-repo-check \
           -c sandbox_mode='"workspace-write"' "$sid" "$rprompt" > "$tout.jsonl" 2> "$tout.err" < /dev/null)
       fi
       trc=$?; cat "$tout.jsonl" >> "$out.jsonl"; cat "$tout.err" >> "$out.err"
@@ -203,7 +204,7 @@ for l in open(sys.argv[1], encoding="utf-8"):
   # 사례가 AGENTS.md 를 읽을 수 없게 만들었으면 바이트는 설치에 쓴 키트 checkout 에서 잰다.
   agents_bytes=$( { wc -c < "$work/project/AGENTS.md" || wc -c < "$work/kit/AGENTS.md"; } 2>/dev/null | tr -d ' ')
   # 값은 환경 변수로 넘겨 따옴표·줄바꿈이 섞인 판정 문구도 그대로 기록한다.
-  E_CASE=$case_name E_REF=$ref E_COMMIT=$commit E_HARNESS=$harness E_RUN=$i E_RC=$rc E_SEC=$seconds \
+  E_HERE=$here E_CASE=$case_name E_REF=$ref E_COMMIT=$commit E_HARNESS=$harness E_RUN=$i E_RC=$rc E_SEC=$seconds \
   E_VERSION=$("$harness" --version 2>/dev/null | head -1) E_BYTES=$agents_bytes E_CHECK_RC=$check_rc E_VERDICT=$verdict \
   E_G1=$(fingerprint ~/.claude/CLAUDE.md) E_G2=$(fingerprint ~/.agents/USER.md) E_G3=$(fingerprint ~/.codex/AGENTS.md) E_G4=$(skills_fingerprint) E_OBS=$observed E_VSTATE=$verify_state E_BCHANGED=${baseline_changed:-false} E_VREASON=$verify_reason E_VROUNDS=$verify_rounds E_VRC=$verifier_rc E_VJSON=$vjson E_LANG=${EVALS_LANG:-} E_JUDGE=$(cd "$here" && shasum -a 256 "cases/$case_name/check.py" judge.py observe.py transcript.py verdict.py 2>/dev/null | shasum -a 256 | cut -c1-12) E_GATE=$gate E_INPUT=$input E_TURNS=$sent E_PLANNED=${#turns[@]} E_WAIT=$(python3 -I -c 'import json,sys
 n = seen = 0
@@ -222,6 +223,8 @@ print(n)' "$out.hook.log" "$sent") \
   python3 -I -c '
 import json, os, sys
 e = os.environ
+sys.path.insert(0, e["E_HERE"])
+from verdict import completion
 json.dump({"case": e["E_CASE"], "kit_ref": e["E_REF"], "kit_commit": e["E_COMMIT"], "harness": e["E_HARNESS"],
   "run": int(e["E_RUN"]), "harness_version": e["E_VERSION"], "exit_code": int(e["E_RC"]), "seconds": int(e["E_SEC"]),
   "agents_md_bytes": int(e["E_BYTES"]), "check_passed": e["E_CHECK_RC"] == "0", "check_needs_review": e["E_CHECK_RC"] == "2", "check_unverified": e["E_CHECK_RC"] == "3", "approval_gate": e["E_GATE"] == "true", "input": e["E_INPUT"], "user_turns": int(e["E_TURNS"]), "planned_turns": int(e["E_PLANNED"]), "unapproved_turns": int(e["E_WAIT"] or 0), "check_output": e["E_VERDICT"], "observed": json.loads(e["E_OBS"] or "{}"), "verifier": e["E_VSTATE"], "verify_reason": e["E_VREASON"], "verify_rounds": int(e["E_VROUNDS"]),
@@ -230,8 +233,8 @@ json.dump({"case": e["E_CASE"], "kit_ref": e["E_REF"], "kit_commit": e["E_COMMIT
   # 단계 판정(사례 check.py)과 전체 완료(독립 검증으로 닫힘)를 따로 센다. 승인 대기 단계의 통과는 구현 완료가 아니다.
   "stage": "after-approval" if e["E_INPUT"] == "with-approval" else "original-input",
   # 검증자가 OK 여도 사례의 결정적 행동 검사(check.py)가 실패·미확인이면 완료로 세지 않는다(검증자가 놓친 것으로 따로 남긴다).
-  "completion": ("verified" if e["E_CHECK_RC"] in ("0", "2") else "check-failed" if e["E_CHECK_RC"] == "1" else "unverified") if e["E_VSTATE"] == "ok"
-                else {"off": "not-verified"}.get(e["E_VSTATE"], e["E_VSTATE"]),
+  # 판정 규칙은 verdict.completion 하나다(rejudge.py 도 같은 함수로 다시 계산한다).
+  "completion": completion(e["E_VSTATE"], {"0": "PASS", "1": "FAIL", "2": "REVIEW"}.get(e["E_CHECK_RC"], "UNVERIFIED")),
   "baseline_changed_after_approval": e["E_BCHANGED"] == "true",
   "global_instructions": {"~/.claude/CLAUDE.md": e["E_G1"], "~/.agents/USER.md": e["E_G2"], "~/.codex/AGENTS.md": e["E_G3"], "global skills": e["E_G4"]}},
   open(sys.argv[1], "w"), ensure_ascii=False, indent=1)' "$out.meta.json"
