@@ -174,6 +174,13 @@ def segment_read_only(seg):
         return True
     if TEST_RUN.match(joined) or JS_CHECK.match(joined):  # 조사 중 기존 검사 실행은 둔다. 숨은 쓰기는 턴 끝 상태 검사가 잡는다
         return True
+    if name in ("export", "unset"):  # 이 셸의 환경 변수만 바꾼다(예: Node 버전에 맞춘 PATH)
+        return all(re.match(r"^[A-Za-z_][A-Za-z0-9_]*(=.*)?$", x) for x in args)
+    if name == "env":  # env -u NAME NAME=VALUE <명령>: 환경만 바꿔 뒤 명령을 실행한다
+        rest = list(args)
+        while rest and (rest[0] in ("-u", "--unset") or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", rest[0])):
+            rest = rest[2:] if rest[0] in ("-u", "--unset") else rest[1:]
+        return segment_read_only(rest) if rest else True
     if name == "rtk":  # rtk 는 명령 출력을 줄여 주는 도구다
         while args and args[0].startswith("-"):  # rtk 자체 선택 항목(--raw-output=true 등)
             args = args[1:]
