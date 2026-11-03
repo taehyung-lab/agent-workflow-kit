@@ -39,13 +39,18 @@ with tempfile.TemporaryDirectory() as t:
               "git -C . status", "git --no-pager -C . diff", "rg \">\" src", "echo '>'", "sed -n '/w/p' a.py",
               "rtk proxy sh -c 'if [ -f v ]; then cat v; else cat AGENTS.md; fi'", "rtk --raw-output=true rg --files -g '!node_modules'",
               "rtk python3 -m unittest discover -s tests", "python3 -m pytest -q tests/test_a.py",
-              "rtk rm tests/__pycache__/t.cpython-314.pyc", "rm -rf .pytest_cache tests/__pycache__"]:
+              "rtk rm tests/__pycache__/t.cpython-314.pyc", "rm -rf .pytest_cache tests/__pycache__",
+              "rtk pnpm --dir apps/starter test", "pnpm --dir apps/starter typecheck", "npm run lint", "pnpm --filter web-kit check",
+              "npx tsc -p tsconfig.app.json --noEmit", "pnpm exec vitest run src/a.test.ts", "node --version", "pnpm -v",
+              "command -v node", "rtk proxy sh -c 'command -v node; node --version; pnpm --version'"]:
         check(f"읽기 전용 셸은 둔다: {c}", not bash(c))
     for c in ["echo x > app.py", "sed -i '' s/a/b/ a.py", "python3 -c 'open(\"a\",\"w\")'", "cat a\npython3 x.py", "ls; rm -rf src",
               "find . -delete", "git checkout -- a.py", "cat $(echo a)", "tee a.py < b", "awk '{print > \"o\"}' a", "git branch new",
               "sed -n 'w out' src", "sed 's/a/b/w out' src", "sort -o out src", "git diff --no-index --output=o /dev/null src",
               "git remote add x /tmp/n", "cat <> new", "awk -f work/r.awk src", "/tmp/cat src", "", "env ls", "sh -c 'echo x > a.py'", "python3 -m unittest; rm a",
-              "python3 -m pytest $(rm -rf x)", "python3 -m http.server", "rm app.py", "rm -rf __pycache__/../src"]:
+              "python3 -m pytest $(rm -rf x)", "python3 -m http.server", "rm app.py", "rm -rf __pycache__/../src",
+              "pnpm lint --fix", "npx eslint . --fix", "pnpm install", "pnpm add left-pad", "npx tsc -p tsconfig.app.json",
+              "pnpm test -u", "node -e 'require(\"fs\").writeFileSync(\"a\",\"x\")'", "node script.js", "pnpm test > out.txt"]:
         check(f"쓰기·실행 셸은 막는다: {c!r}", bash(c))
     check("cmd 필드로 온 셸도 검사한다", call("pre", {"tool_name": "exec_command", "tool_input": {"cmd": "touch app.py"}}))
     check("command 가 없는 apply_patch 입력도 대상을 찾아 막는다",

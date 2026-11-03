@@ -41,6 +41,10 @@ OPERATORS = ["&&", "||", ";;", ">>", "&>", ">&", "<>", "<<<", "<<", ";", "|", "&
 SHELL_WORDS = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "fi", "done", "}"}
 MAX_STOP_BLOCKS = 2
 TEST_RUN = re.compile(r"^(rtk\s+)?(python3?\s+-m\s+(unittest|pytest)|pytest)(\s+[-\w./:=]+)*$")
+# 패키지 매니저로 돌리는 기존 검사 스크립트(테스트·타입 검사·린트·전체 검사)와 쓰지 않는 검사 도구. 고치기 옵션은 뺀다.
+JS_CHECK = re.compile(r"^(rtk\s+)?((pnpm|npm|yarn|bun)(\s+(--dir|-C|--filter|--prefix|--workspace|-w)\s+\S+)*(\s+run)?\s+(test|typecheck|type-check|lint|check)\b"
+                      r"|(npx|pnpm\s+exec|bunx)\s+(vitest\s+run|tsc\s+.*--noEmit|eslint)\b)(?!.*(--fix|--write|\s-u\b|--update))[^;&|<>]*$")
+VERSION = re.compile(r"^(rtk\s+)?(command\s+-v\s+[\w.-]+|[\w.-]+\s+(--version|-v|-V|version))$")  # 도구 존재·버전 확인
 REASON = (f"{TAG} 사용자가 이번 메시지에서 승인하지 않아 제품 파일 쓰기와 읽기 전용으로 확인되지 않는 셸 명령을 막았습니다. "
           "읽어서 조사한 뒤, 사용자가 받을 결과(원문·계약 근거와 함께)와 아직 정해지지 않은 점, 확인 방법을 보여 주고 "
           "추천과 함께 승인을 물으세요. 다른 명령으로 우회하지 마세요. 사용자가 '승인합니다'·'진행해 주세요' 처럼 답한 턴에 쓰기가 열립니다. "
@@ -165,7 +169,10 @@ def segment_read_only(seg):
         return False
     if name in ("sh", "bash", "zsh") and len(args) == 2 and args[0] in ("-c", "-lc"):  # sh -c '<읽기 명령>'
         return shell_read_only(args[1])
-    if TEST_RUN.match(" ".join(seg)):  # 조사 중 기존 테스트 실행은 둔다. 숨은 쓰기는 턴 끝 상태 검사가 잡는다
+    joined = " ".join(seg)
+    if VERSION.match(joined):
+        return True
+    if TEST_RUN.match(joined) or JS_CHECK.match(joined):  # 조사 중 기존 검사 실행은 둔다. 숨은 쓰기는 턴 끝 상태 검사가 잡는다
         return True
     if name == "rtk":  # rtk 는 명령 출력을 줄여 주는 도구다
         while args and args[0].startswith("-"):  # rtk 자체 선택 항목(--raw-output=true 등)
