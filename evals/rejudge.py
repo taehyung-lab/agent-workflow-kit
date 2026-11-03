@@ -18,6 +18,14 @@ for root in sys.argv[1:]:
         base = str(meta_path)[: -len(".meta.json")]
         env = dict(os.environ)
         env["EVALS_BEFORE_LAST_TURN"] = base + ".before-last"
+        # 실행 때와 같은 판정 조건을 복원한다. 예전 meta 에 없으면 남긴 파일에서 추정한다:
+        # 관문은 프로젝트 설정의 approval-gate.py 등록, 입력은 사례의 prompt 수보다 실행한 턴이 많으면 승인 추가로 본다.
+        settings = Path(base + ".files/.claude/settings.json")
+        gate = m.get("approval_gate", settings.is_file() and "approval-gate.py" in settings.read_text(encoding="utf-8"))
+        prompts = len(list((cases / m["case"]).glob("prompt*.txt")))
+        ran = len(list(Path(base).parent.glob(Path(base).name + ".t*.jsonl")))
+        env["EVALS_GATE"] = "true" if gate else "false"
+        env["EVALS_INPUT"] = m.get("input", "with-approval" if ran > prompts else "original")
         r = subprocess.run([sys.executable, "-I", str(cases / m["case"] / "check.py"), base + ".files", base + ".jsonl"],
                            capture_output=True, text=True, env=env)
         out = (r.stdout + r.stderr).strip()

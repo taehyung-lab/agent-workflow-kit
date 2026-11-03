@@ -2,7 +2,7 @@
 
 **AI 코딩 에이전트가 "무엇을 확인해야 끝난 것인가"를 일하기 전에 정하고, 실제로 확인한 것만 완료라고 말하게 하는 작업 기준 키트.**
 
-Claude Code·Codex 가 함께 읽는 작업 기준([AGENTS.md](AGENTS.md), 키트 영역 63줄) 한 장과 단계 스킬 3개, 그리고 그 기준이 실제 행동을 바꾸는지 재는 측정 도구([evals/](evals/))로 되어 있다.
+Claude Code·Codex 가 함께 읽는 작업 기준([AGENTS.md](AGENTS.md), 키트 영역 64줄) 한 장과 단계 스킬 3개, 그리고 그 기준이 실제 행동을 바꾸는지 재는 측정 도구([evals/](evals/))로 되어 있다.
 
 > A thin work standard for AI coding agents (Claude Code, Codex): turn a request into observable conditions before building, close work only on observed results, and fix the cause instead of appending rules. Korean is canonical. No reuse license is currently specified.
 
@@ -29,7 +29,7 @@ AI 에이전트에게 일을 맡기면 두 가지가 반복된다.
 flowchart TD
   E["전역 진입 문장 (선택)<br/>작업 전에 설치본이 있으면 그 버전, 없으면 중앙 키트를 읽는다"]
   P["프로젝트에 고정된 키트<br/>install.sh 로 설치, 커밋을 버전 파일에 기록"]
-  A["작업 기준 AGENTS.md (키트 영역 63줄, 매 세션 읽힘)<br/>요구→조건→검사 · 필요한 단계만 · 진행 약속 · 인계와 종료 · 실행 경계"]
+  A["작업 기준 AGENTS.md (키트 영역 64줄, 매 세션 읽힘)<br/>요구→조건→검사 · 필요한 단계만 · 진행 약속 · 인계와 종료 · 실행 경계"]
   D["wf-design<br/>조건·해법이 미정일 때 설계"]
   I["wf-implement<br/>확정된 설계를 구현"]
   V["wf-verify<br/>구현하지 않은 검증자가 판정"]
@@ -145,7 +145,7 @@ git clone --branch v1.3.0 https://github.com/taehyung-lab/agent-workflow-kit
 bash agent-workflow-kit/install.sh /path/to/my-project
 ```
 
-1. 설치기가 `AGENTS.md`(키트 영역 + 빈 프로젝트 지도), `CLAUDE.md`, `.agents/skills/wf-*`, `.claude/skills` 링크를 만들고, `.gitignore` 에 `/work/`(세션을 넘길 때 쓰는 인계 기록 자리)를 더하고, `.agents/agent-workflow-kit.version` 에 커밋을 기록한다. 이미 `AGENTS.md`·`CLAUDE.md`·`work/` 가 있으면 쓰기 전에 멈춘다. 그때는 아래 「진행 중인 프로젝트에 연결하기」를 본다.
+1. 설치기가 `AGENTS.md`(키트 영역 + 빈 프로젝트 지도), `CLAUDE.md`, `.agents/skills/wf-*`, `.claude/skills` 링크를 만들고, `.gitignore` 에 `/work/`(세션을 넘길 때 쓰는 인계 기록 자리)를 더하고, `.agents/agent-workflow-kit.version` 에 커밋을 기록한다. 승인 관문 훅(사용자가 승인한 턴에만 제품 파일을 쓰게 하는 훅)을 `.claude/settings.json`·`.codex/hooks.json` 에 더한다(기존 항목은 그대로 둔다). Codex 는 처음 실행할 때 훅을 신뢰할지 묻는다. 신뢰해야 훅이 돈다. 이미 `AGENTS.md`·`CLAUDE.md`·`work/` 가 있으면 쓰기 전에 멈춘다. 그때는 아래 「진행 중인 프로젝트에 연결하기」를 본다.
 2. `AGENTS.md` 아래 「프로젝트 지도」에 제품 원문 위치, 코드 진입점, 실행·검사 명령, 권한·보호 대상을 적는다. 모르는 칸은 `미확인`으로 둔다.
 3. 새 세션에서 작은 요청 하나를 주고, 작업 시작에 단계 판단 한 줄이 나오는지 본다. 팀에 도입한다면 아래 「도입 확인」을 거친다.
 
@@ -178,7 +178,8 @@ bash evals/selftest.sh                             # 모델 없이: 판정 검�
 ### 지원 범위
 
 - 대상: 한국어로 작업 지시·기록을 주고받는 Git 저장소. 키트 문서의 기준 언어는 한국어다.
-- 자동 시험(`tests/install.test.sh`)이 확인하는 것은 설치·업데이트의 파일 배치와 거절 동작뿐이다.
+- 자동 시험(`tests/install.test.sh`)이 확인하는 것은 설치·업데이트의 파일 배치와 거절 동작, 승인 관문 훅 등록(기존 설정 보존, 사건마다 하나, 관문이 빠진 버전에서 키트 항목만 제거)이다.
+- 승인 관문 훅은 묻지 않고 넘어가는 실수를 막는 장치다. 에이전트가 의도적으로 승인 기록이나 훅을 고치는 것은 막지 않는다. 그것까지 막으려면 하네스의 읽기 전용 실행을 함께 쓴다. Python 3 가 없으면 등록하지 않고 그 사실을 출력한다.
 - Claude Code는 CLAUDE.md(`@AGENTS.md`)와 `.claude/skills` 링크로, Codex는 AGENTS.md와 `.agents/skills`로 읽도록 배치한다. 각 런타임이 스킬을 실제로 찾고 고르는지는 이 저장소가 보증하지 않으므로 도입 확인에서 새 세션으로 직접 확인한다.
 
 ### 설치
@@ -186,7 +187,7 @@ bash evals/selftest.sh                             # 모델 없이: 판정 검�
 확인한 버전의 로컬 키트 git checkout(미커밋 변경 없음)에서 `bash /path/to/agent-workflow-kit/install.sh /path/to/target-repository`를 실행한다.
 기존 설치 대상·루트 work 경로·부모 심링크·부모 비디렉터리는 쓰기 전에 거절한다. .gitignore는 일반 파일만 허용하고 기존 내용에 `/work/` 줄이 없으면 덧붙인다.
 다른 설치·편집이 없는 대상에서 실행한다. 권한·I/O 실패 때 일부 신규 파일이 남을 수 있으므로 종료 코드와 대상을 확인하고 병합 범위를 정한다.
-CLAUDE.md는 `@AGENTS.md`, `.claude/skills`는 `.agents/skills`를 가리킨다.
+CLAUDE.md는 `@AGENTS.md`, `.claude/skills`는 `.agents/skills`를 가리킨다. 승인 관문 훅은 `.claude/settings.json`·`.codex/hooks.json`의 `hooks`에 명령에 `approval-gate.py`가 든 항목으로 더하고, 업데이트 때 그 항목만 교체한다. 설정 파일이 올바른 JSON 이 아니면 쓰기 전에 멈춘다.
 키트가 관리하는 부분은 AGENTS.md의 `agent-workflow-kit:begin`~`end` 표시 영역, CLAUDE.md, 키트가 설치한 `.agents/skills/wf-*` 파일이다. 프로젝트는 이 부분을 고치지 않고, 지도·저장소별 절·역할 스킬은 표시 영역 밖에 둔다. 설치한 키트 커밋은 `.agents/agent-workflow-kit.version`에 남고, 프로젝트는 이 고정 버전을 따른다. 이 키트는 세션을 자동 생성하지 않는다.
 도입은 다섯 걸음이다: 설치 → 저장소 관찰 → 지도 네 칸 채우기(근거가 없으면 `미확인`) → 기존 에이전트 문서마다 유지·이동·폐기 결정 → 다음 작은 실제 요청 하나로 지도와 스킬 선택이 맞는지 확인.
 에이전트에게 맡길 때: "https://github.com/taehyung-lab/agent-workflow-kit 를 clone해 install.sh로 이 저장소에 설치하고, 저장소를 조사해 AGENTS.md 지도 네 칸을 채워줘. 근거가 없는 칸은 미확인으로 두고, 기존 에이전트 문서는 유지·이동·폐기안을 보여줘. 설치기가 멈추면 병합안을 먼저 보여줘."
