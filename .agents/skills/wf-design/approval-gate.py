@@ -25,6 +25,8 @@
   사용자 철회, 승인 대상 지도의 기준이 승인 밖 기준으로 바뀌거나 사라짐, 승인 때 없던 기준(이 세션이 쓴 새 지도나 답에 보여 준
   새 `## 기준`)이 나타남. 마지막 경우는 에이전트가 새 작업이나 새 기준을 내놓았다는 뜻이므로, 다음 승인은 그 새 기록만 묶고
   이전 작업의 지도·사용자 원문을 새 작업으로 넘기지 않는다. 승인 때 이미 있던 다른 작업의 지도가 바뀌는 것은 상관하지 않는다.
+- 작업 시작 상태: 관문은 매 사용자 턴 시작에 제품 파일 내용을 git 객체로 남기고, 작업이 시작된 턴(세션의 첫 요청, `task begin`,
+  승인 밖 새 기준이 처음 나타난 턴)의 것을 그 작업의 시작 상태로 묶는다. 승인 때 덮지 않는다. 검증기는 이 상태부터의 변경을 본다.
 - 에이전트가 파일에 "approved: true" 를 쓰거나 답에 "승인합니다" 를 써도 승인이 되지 않는다(사용자 메시지만 연다).
 
 예: 사용자가 "회원 탈퇴 기능을 만들어 주세요" 라고만 보내면 에이전트는 코드를 읽고 검사를 돌릴 수는 있지만 accounts.py 를 Edit 로
@@ -320,14 +322,15 @@ def read_json(path, default):
     return v
 
 
-def new_task(state, now_maps, messages=(), name=None):
+def new_task(state, now_maps, messages=(), name=None, base=None):
     """세션 안의 작업 하나(현재 작업). 작업 id·승인 근거(사용자 메시지)·승인 기준·검증 결과를 이 기록이, 이 작업의 사용자 원문은
     task-<id>.messages.jsonl 이 자르지 않고 갖는다. 전이: waiting(승인 전) → approved(사용자 승인) → closed(사용자 철회 user,
     승인 대상 기준 변경 criteria, 승인 밖 새 기준 new-criteria, 에이전트의 새 작업 선언 new-task, 에이전트의 완료 선언 done).
     approved 는 prompt 훅이 사용자 승인 메시지를 받았을 때만 True 가 된다. 다른 경로(pre·stop·task 명령·검증기)는 닫거나 기록만 한다."""
     rec = {"id": os.urandom(6).hex(), "name": name, "approved": False, "state": "waiting", "prompt": None, "targets": {}, "hashes": [],
            "criteria": {}, "snapshot": {}, "conversation_only": False, "touched": [], "boundary": now_maps, "proposal": None,
-           "pending_since": None, "message_count": 0, "verify": {}, "started_at": time.time()}
+           "pending_since": None, "pending_base": None, "message_count": 0, "verify": {}, "started_at": time.time(),
+           "base_files": base}  # base_files: 작업 시작 때 제품 파일 상태(검증기 diff 의 기준). 승인 때 덮지 않는다.
     for m in messages:
         add_message(state, rec, m)
     return rec
@@ -359,10 +362,17 @@ def current_index(rec):
     return max(rec.get("message_count", 0) - 1, 0)
 
 
-def rotate(state, rec, now_maps, start, name=None):
-    """새 작업을 시작한다. 앞 작업의 지도·검증 결과를 넘기지 않고, 사용자 원문은 start 번째부터만 가져간다."""
+def rotate(state, rec, now_maps, start, name=None, base=None):
+    """새 작업을 시작한다. 앞 작업의 지도·검증 결과를 넘기지 않고, 사용자 원문은 start 번째부터만 가져간다.
+    새 작업의 시작 상태는 그 작업의 첫 턴이 시작될 때의 제품 파일 상태다(그 턴에 승인 없이 바뀐 것은 diff 에 보인다)."""
     msgs = (read_messages(state, rec) or [])[start:] if start is not None else []
-    return new_task(state, now_maps, msgs, name)
+    return new_task(state, now_maps, msgs, name, base or rec.get("pending_base") or rec.get("turn_base"))
+
+
+def mark_pending(rec, index, base):
+    """승인 밖 새 기준(새 작업일 수 있다)이 처음 나타난 턴을 기억한다: 그 턴의 사용자 원문 위치와 턴 시작 때 제품 파일 상태."""
+    if rec.get("pending_since") is None:
+        rec["pending_since"], rec["pending_base"] = index, base
 
 
 def touch(rec, turn_maps, now_maps, extra=()):
@@ -373,8 +383,8 @@ def touch(rec, turn_maps, now_maps, extra=()):
         t |= {m for m in set(turn_maps) | set(now_maps) if turn_maps.get(m) != now_maps.get(m)}
     rec["touched"] = sorted(t)
     boundary = rec.get("boundary", {})
-    if rec.get("pending_since") is None and any(now_maps.get(m) is not None and now_maps.get(m) != boundary.get(m) for m in t):
-        rec["pending_since"] = current_index(rec)
+    if any(now_maps.get(m) is not None and now_maps.get(m) != boundary.get(m) for m in t):
+        mark_pending(rec, current_index(rec), rec.get("turn_base"))
 
 
 def status(rec, now_maps):
@@ -410,8 +420,7 @@ def settle(rec, now_maps):
     """승인 밖 기준이 나타났으면 닫고, 지금 승인 상태를 돌려준다."""
     ok, bad = status(rec, now_maps)
     if rec.get("approved") and not ok:
-        if rec.get("pending_since") is None:
-            rec["pending_since"] = current_index(rec)
+        mark_pending(rec, current_index(rec), rec.get("turn_base"))
         close(rec, "criteria" if any(m in rec.get("targets", {}) for m in bad) else "new-criteria", "승인 밖 기준", bad)
     return bool(rec.get("approved"))
 
@@ -424,16 +433,17 @@ def see_answer(rec, answer):
     h = hashlib.sha256(body.encode()).hexdigest()
     if rec.get("approved") and h in rec.get("hashes", []):
         return  # 승인한 기준을 다시 보여 준 것
-    if rec.get("pending_since") is None:
-        rec["pending_since"] = current_index(rec)  # 그 답이 답한 사용자 메시지부터
+    mark_pending(rec, current_index(rec), rec.get("turn_base"))  # 그 답이 답한 사용자 메시지와 그 턴의 시작 상태부터
     rec["proposal"] = {"hash": h, "text": body}
     if rec.get("approved"):
         close(rec, "new-criteria", "답에 보여 준 승인 밖 기준", ["대화의 답"])
 
 
-def snapshot_base(root, state, rec):
-    """작업의 첫 승인 때 제품 파일 내용을 git 객체로 보존한다(clean filter 를 쓰지 않는 --no-filters). 검증기는 이 상태와 비교해
-    이번 작업의 변경만 본다(그 전부터 있던 사용자 미커밋 변경은 섞이지 않는다). 무시된 파일·하위 저장소 내용은 넣지 않는다."""
+def snapshot_files(root, state):
+    """지금 제품 파일 내용을 git 객체로 보존하고(clean filter 를 쓰지 않는 --no-filters) 그 목록 파일 이름을 돌려준다.
+    관문은 매 사용자 턴 시작에 이것을 남기고, 작업이 시작된 턴의 것을 그 작업의 시작 상태로 묶는다. 검증기는 시작 상태와 비교해
+    이번 작업의 변경만 본다: 작업 전부터 있던 사용자 미커밋 변경은 시작 상태에 들어가고, 요청 뒤 승인 전에 바뀐 것은 diff 에 보인다.
+    무시된 파일은 넣지 않고, 하위 저장소·읽을 수 없는 파일은 내용을 보존하지 못했다고 적는다(검증기는 미확인으로 다룬다)."""
     files = sorted(set(x for x in git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", *SPEC).decode().split("\0") if x))
     out, regular = {}, []
     for f in files:
@@ -445,10 +455,15 @@ def snapshot_base(root, state, rec):
         elif p.exists():
             out[f] = {"unsaved": "하위 저장소·읽을 수 없는 파일은 내용을 보존하지 않았다"}
     blobs = git(root, "hash-object", "-w", "--no-filters", "--stdin-paths", input="\n".join(regular).encode()).decode().split() if regular else []
+    if len(blobs) != len(regular):
+        raise RuntimeError("시작 상태 보존 실패")
     for f, b in zip(regular, blobs):
         out[f] = {"blob": b, "exec": os.access(Path(root, f), os.X_OK)}
-    (state / f"task-{rec['id']}.base.json").write_text(json.dumps(out, ensure_ascii=False))
-    return f"task-{rec['id']}.base.json"
+    body = json.dumps(out, ensure_ascii=False, sort_keys=True)
+    name = f"snap-{hashlib.sha256(body.encode()).hexdigest()[:20]}.json"
+    if not (state / name).is_file():
+        (state / name).write_text(body)
+    return name
 
 
 def open_approval(rec, root, state, prompt, now_maps, answer):
@@ -478,10 +493,10 @@ def open_approval(rec, root, state, prompt, now_maps, answer):
     if rec.get("approved_at") and fresh and not (set(targets) & set(prev_targets)) and not (hashes & prev_hashes):
         start = rec.get("pending_since")
         rec = rotate(state, rec, now_maps, start if start is not None else current_index(rec), rec.get("name"))
-    base_files = rec.get("base_files") or snapshot_base(root, state, rec)
-    rec.update(approved=True, state="approved", prompt=prompt, approved_at=time.time(), base_files=base_files, targets=targets,
+    # 작업 시작 상태는 작업을 만들 때 정했다. 승인 때 덮지 않는다(요청 뒤 승인 전에 바뀐 파일이 diff 에서 사라지지 않게).
+    rec.update(approved=True, state="approved", prompt=prompt, approved_at=time.time(), targets=targets,
                hashes=sorted(hashes), criteria=criteria_texts, snapshot=now_maps, boundary=now_maps, touched=[], proposal=None,
-               pending_since=None, conversation_only=not targets, closed_kind=None, closed_by=None, closed_maps=[], verify={},
+               pending_since=None, pending_base=None, conversation_only=not targets, closed_kind=None, closed_by=None, closed_maps=[], verify={},
                plan=answer)  # plan: 승인을 물은 답 전체(대화 기록을 읽지 못했으면 None)
     return rec
 
@@ -505,11 +520,19 @@ def pick(state, args):
     return None, (f"작업 후보가 {len(files)}개라 고르지 않았다: --session <세션 id> 로 지정한다" if files else "작업 기록이 없다")
 
 
+def waiting(rec, ok=None):
+    """사용자 답 대기 여부. 일반 검증기와 평가 실행기가 같은 규칙으로 완료를 분류한다."""
+    ok = bool(rec.get("approved")) if ok is None else ok
+    return not ok and rec.get("closed_kind") != "done"
+
+
 def task_status(root, state, rec):
     """사람·검증기에게 보여 줄 작업 상태. approval: open(승인 중) / closed(승인 뒤 닫힘) / waiting(아직 승인 없음).
     open 이 아닌 작업은 사용자 답을 기다리는 것이며 완료가 아니다."""
     ok, closed = status(rec, maps(root))
+    # waiting: 사용자 답을 기다린다(승인 전이거나 사용자 철회·기준 변경·새 기준으로 닫힘). 에이전트의 완료 선언(done)으로 닫힌 것은 대기가 아니다.
     return {"task": rec.get("id"), "name": rec.get("name"), "approval": "open" if ok else ("closed" if rec.get("approved_at") else "waiting"),
+            "waiting": waiting(rec, ok),
             "closed_kind": rec.get("closed_kind") if not ok else None, "closed_maps": closed, "approved_prompt": rec.get("prompt"),
             "targets": rec.get("targets", {}), "conversation_only": rec.get("conversation_only", False),
             "user_messages": rec.get("message_count", 0), "verify": rec.get("verify", {})}
@@ -535,8 +558,8 @@ def command(mode, root, state, args):
         if rec.get("approved"):
             close(rec, "new-task", f"에이전트가 새 작업을 선언함: {name}")
         old = rec.get("id")
-        rec = rotate(state, rec, now_maps, current_index(rec), name)
-        rec.update(closed_kind="new-task", previous_task=old)
+        rec = rotate(state, rec, now_maps, current_index(rec), name, rec.get("turn_base"))  # 새 작업의 시작 = 이번 턴 시작 상태
+        rec.update(previous_task=old)
     else:
         if rec.get("approved"):
             close(rec, "done", "에이전트가 작업 완료를 선언함")
@@ -570,11 +593,13 @@ def main(mode, data):
     rec = read_json(approval, {})
     if mode == "prompt":
         state.mkdir(exist_ok=True)
-        rec = rec or new_task(state, now_maps)
+        turn_base = snapshot_files(root, state)  # 이번 턴 시작 때 제품 파일 상태
+        rec = rec or new_task(state, now_maps, base=turn_base)  # 세션의 첫 작업: 첫 요청 때 상태가 시작 상태
         prompt = str(data.get("prompt") or "")
         answer = last_answer(data.get("transcript_path"))
-        see_answer(rec, answer)  # 대화에 보여 준 기준(에이전트가 내놓은 작업 기록)
+        see_answer(rec, answer)  # 대화에 보여 준 기준(에이전트가 내놓은 작업 기록). 앞 턴의 일이므로 앞 턴의 시작 상태를 쓴다
         settle(rec, now_maps)  # 턴 사이에 승인 대상 지도가 바뀌었으면 닫는다
+        rec["turn_base"] = turn_base
         if os.environ.get("AWK_GATE_PROMPT_FROM") == "runner":
             # 평가 실행기(evals/run.sh)가 보낸 검증 반환 같은 사용자 아닌 입력: 실행기가 아는 발신 구분을 받아, 글 내용과 관계없이
             # 승인을 열거나 닫지 않고 사용자 원문에도 넣지 않는다. 턴 시작 기록(제품 파일·지도 지문)은 그대로 해서 변경 감시는 계속한다.

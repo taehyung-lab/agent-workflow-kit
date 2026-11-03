@@ -268,7 +268,7 @@ with tempfile.TemporaryDirectory() as t:
     check("status: 세션 id 로 그 세션의 작업 상태를 낸다(입력 없이 실행)", json.loads(st.stdout or "{}").get("approval") == "closed")
     tp("w1", "탈퇴 기능을 만들어 주세요.")
     st = json.loads(task_cmd("status", "--session", "w1").stdout)
-    check("status: 승인 전 작업은 waiting(사용자 답 대기)", st["approval"] == "waiting" and st["user_messages"] == 1)
+    check("status: 승인 전 작업은 waiting(사용자 답 대기)", st["approval"] == "waiting" and st["user_messages"] == 1 and st["waiting"] is True)
     tp("d1", "탈퇴 기능을 만들어 주세요.")
     tp("d1", "승인합니다.")
     first = rec("d1")["id"]
@@ -280,7 +280,7 @@ with tempfile.TemporaryDirectory() as t:
     tp("d1", "승인합니다.")
     check("새 작업은 사용자 승인으로만 열린다", not ed("d1"))
     r = task_cmd("task", "done", sid="d1")
-    check("task done: 완료 선언은 승인을 닫는다(다음 요청이 이 승인으로 쓰지 못함)", r.returncode == 0 and ed("d1") and json.loads(r.stdout)["approval"] == "closed")
+    check("task done: 완료 선언은 승인을 닫는다(다음 요청이 이 승인으로 쓰지 못함)", r.returncode == 0 and ed("d1") and json.loads(r.stdout)["approval"] == "closed" and json.loads(r.stdout)["waiting"] is False)
     r = task_cmd("status")
     check("세션 id 없이 작업 후보가 여럿이면 status 가 추측하지 않는다", json.loads(r.stdout).get("task") is None and "후보" in json.loads(r.stdout).get("reason", ""))
     r = task_cmd("task", "begin", "x")

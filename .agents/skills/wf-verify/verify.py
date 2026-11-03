@@ -7,15 +7,18 @@
 
 무엇을 넘기나(구현자가 고르지 않는다): 승인 관문이 기록한 이 작업의 사용자 원문 전부(승인 메시지 포함), 사용자가 승인한 때의
 기준(지도 `## 기준` 절이나 승인을 물은 답의 기준), 승인을 물은 답(계획), 첫 승인 때 보존한 제품 파일 상태부터 지금까지의 변경(diff).
-구현자의 답·지도의 `## 증거`(자기평가)는 넘기지 않는다. 작업은 하네스가 셸에 주는 세션 id(CLAUDE_CODE_SESSION_ID·CODEX_THREAD_ID)나
+구현자의 답·지도의 `## 증거`(자기평가)는 넘기지 않는다. 회차마다 고정 대상 저장소·시작 상태·전체 diff·입력·판정을
+.git/awk-gate/verify/task-<id>/round-N/(평가에서는 --log 옆 .round 폴더)에 남긴다. 작업은 하네스가 셸에 주는 세션 id(CLAUDE_CODE_SESSION_ID·CODEX_THREAD_ID)나
 --session 으로 고르고, 둘 다 없으면 작업 기록이 하나일 때만 고른다(여럿이면 추측하지 않고 미확인).
 
 판정(state)과 종료 코드:
   ok(0)          검증자가 형식대로 모든 조건을 충족으로 냈다. 이것만 완료다.
   returned(3)    검증자가 돌려보냈다. 사유를 보고 원인을 고친 뒤 이 명령을 다시 실행해 새 버전을 판정받는다.
-  incomplete(4)  재검증 한도(--rounds, 기본 2)에 닿았는데 마지막 판정도 RETURN 이다. 미완료로 보고한다.
+  incomplete(4)  재검증 한도에 닿았는데 마지막 판정도 RETURN 이다. 미완료로 보고한다. 한도(--rounds, 기본 2)는 그 승인의 첫 회차에
+                 정해지고, 닿은 뒤에는 새 검증자를 띄우지 않는다. 사용자의 새 승인(관문이 검증 기록을 비움)만 새 시도를 연다.
   unverified(5)  판정하지 못했다(빈 답·형식 오류·조건 누락·검증자 하네스 없음·오류·검증자가 대상 파일을 바꿈·사용자 원문이나
-                 승인 기록이 없음). 미확인은 완료가 아니다. 성공처럼 넘어가지 않고 사유와 재개 조건을 보고한다.
+                 승인 기록이 없음, 근거 불완전: 시작 내용 미보존·diff 실패·잘림, 검증하는 동안 작업·승인 기준·제품 파일이 바뀜).
+                 미확인은 완료가 아니다. 성공처럼 넘어가지 않고 사유와 재개 조건을 보고한다.
 판정 결과는 관문의 작업 기록(verify)에 남는다. 검증자의 글은 이 명령의 출력으로만 돌아오고 사용자 메시지가 아니므로,
 그 안의 "승인합니다"·"취소합니다" 는 승인 상태를 바꾸지 않는다.
 
@@ -110,12 +113,12 @@ def judge(final, required=()):
 def completion(verifier, check="REVIEW", waiting=False):
     """전체 완료 판정. verifier: 검증 상태(off·ok·returned·incomplete·unverified), check: 결정적 행동 검사(PASS·REVIEW·FAIL·UNVERIFIED,
     일반 작업에는 사례 검사가 없어 REVIEW), waiting: 승인 관문이 사용자 답을 기다리는 중(승인 전·승인이 닫힘).
-    verified 만 완료다. 나머지는 서로 다른 미완료다: waiting-user(사용자 답 대기) / check-failed(구현 실패: 검증자 OK 여도 행동 검사 실패)
+    verified 만 완료다. 나머지는 서로 다른 미완료다: waiting-user(사용자 답 대기, 검증 OK 여도) / check-failed(구현 실패: 검증자 OK 여도 행동 검사 실패)
     / returned·incomplete(검증 실패) / unverified(환경·형식 문제로 확인 못 함) / not-verified(검증을 돌리지 않음)."""
+    if waiting:  # 사용자 답을 기다리는 작업은 검증 OK 여도 완료가 아니다(원시 검사 판정 check 는 meta 에 그대로 남는다)
+        return "waiting-user"
     if verifier == "ok":
         return {"PASS": "verified", "REVIEW": "verified", "FAIL": "check-failed"}.get(check, "unverified")
-    if waiting:
-        return "waiting-user"
     return {"off": "not-verified"}.get(verifier, verifier)
 
 
@@ -220,11 +223,14 @@ def materialize_base(root, base_json, dest):
 
 
 def diff(base, target):
+    """(검증자 입력용 diff, 잘렸나, 실행이 실패했나). 전체 diff 는 base 옆 diff.txt 에 남긴다."""
     r = run(["diff", "-ruN", "-x", ".git", "-x", ".agents", "-x", "work", str(base), str(target)])
     text = r.stdout.decode("utf-8", "replace").replace(str(base), "a").replace(str(target), "b")
+    Path(base).parent.joinpath("diff.txt").write_text(text, encoding="utf-8")
+    failed = r.returncode not in (0, 1)  # diff: 0 같음, 1 다름, 2 오류
     if len(text.encode()) > DIFF_LIMIT:
-        return text.encode()[:DIFF_LIMIT].decode("utf-8", "ignore") + f"\n(diff 가 {DIFF_LIMIT} 바이트를 넘어 잘렸다. 잘린 부분은 대상 폴더에서 직접 본다)\n", True
-    return text, False
+        return text.encode()[:DIFF_LIMIT].decode("utf-8", "ignore") + f"\n(diff 가 {DIFF_LIMIT} 바이트를 넘어 잘렸다)\n", True, failed
+    return text, False, failed
 
 
 def prompt_text(requests, plan, conditions, criteria, note, target, change):
@@ -264,12 +270,34 @@ def opt(args, name, many=False):
     return vals if many else (vals[-1] if vals else None)
 
 
+def product_print(gate, root):
+    """지금 제품 파일 상태의 지문(관문의 제품 파일 범위: 작업 지도·키트·하네스 설정 제외)."""
+    return hashlib.sha256(json.dumps(gate.product_files(root), sort_keys=True).encode()).hexdigest()
+
+
+def copy_kit_paths(vdir, base):
+    """키트·하네스 설정(맨 위 .agents·.claude·.codex·CLAUDE.md·AGENTS.md)은 관문의 제품 파일 범위처럼 비교에서 뺀다:
+    대상의 것을 시작 상태에도 그대로 두어 차이가 나지 않게 한다(링크 .claude/skills 를 따라간 키트 파일이 diff 를 채우지 않게)."""
+    for name in KIT_PATHS:
+        src, dst = vdir / name, base / name
+        if dst.is_symlink() or dst.is_file():
+            dst.unlink()
+        elif dst.is_dir():
+            shutil.rmtree(dst)
+        if src.is_symlink():
+            os.symlink(os.readlink(src), dst)
+        elif src.is_dir():
+            shutil.copytree(src, dst, symlinks=True)
+        elif src.is_file():
+            shutil.copy2(src, dst)
+
+
 def main(args):
     harness = opt(args, "--harness")
     if harness not in ("claude", "codex"):
         print("사용: verify.py --harness claude|codex [--rounds N] [--session ID]", file=sys.stderr)
         return 2
-    rounds_max = int(opt(args, "--rounds") or 2)
+    asked_max = int(opt(args, "--rounds") or 2)
     root = Path(run(["git", "rev-parse", "--show-toplevel"], cwd=os.getcwd()).stdout.decode().strip() or os.getcwd())
     gate = gate_module()
     explicit = opt(args, "--request") is not None
@@ -301,10 +329,28 @@ def main(args):
     conditions = Path(opt(args, "--conditions")).read_text(encoding="utf-8") if opt(args, "--conditions") else ""
     required = ids(conditions + "\n" + criteria)
     rounds = list(vstate.get("rounds", []))
+    # 재검증 한도는 이 검증 시도(이 승인)의 첫 회차에 정하고 바꾸지 않는다. 새 시도는 사용자의 새 승인(관문이 검증 기록을 비움)으로만 시작한다.
+    rounds_max = int(vstate.get("max_rounds") or asked_max)
+    ran = [r for r in rounds if r.get("ran")]
     n = len(rounds) + 1
-    work = Path(tempfile.mkdtemp(prefix="awk-verify-"))
     result = {"round": n, "max_rounds": rounds_max, "harness": harness, "required": required}
-    try:
+    if asked_max != rounds_max:
+        result["note"] = f"재검증 한도는 이 시도의 첫 회차에 정한 {rounds_max} 회다(--rounds {asked_max} 는 쓰지 않았다)"
+    start_print = product_print(gate, root)
+    start_task = (rec.get("id"), tuple(rec.get("hashes", [])), rec.get("approved_at"))
+    if len(ran) >= rounds_max:
+        # 한도에 이미 닿았다: 새 검증자를 띄우지 않는다. 마지막 판정이 OK 이고 그 뒤 제품 파일이 그대로면 그 OK 를 그대로 낸다.
+        last = ran[-1]
+        if last.get("state") == "ok" and last.get("product") == start_print:
+            result.update(state="ok", reason="", target=last.get("target"), reused_round=last.get("round"))
+        else:
+            result.update(state="incomplete", reason=f"재검증 한도({rounds_max})에 이미 닿았다. 새 검증자를 띄우지 않는다(사용자의 새 승인 뒤에만 새로 시작)")
+        rounds.append({"round": n, "state": result["state"], "reason": result["reason"], "ran": False, "at": time.time()})
+    else:
+        keep = Path(opt(args, "--keep") or (Path(opt(args, "--log")).with_suffix(".round") if opt(args, "--log") else
+                                             (state_dir / "verify" / f"task-{rec.get('id')}" / f"round-{n}" if state_dir else tempfile.mkdtemp(prefix="awk-verify-"))))
+        shutil.rmtree(keep, ignore_errors=True); keep.mkdir(parents=True)
+        result["kept"] = str(keep)  # 이 회차의 고정 대상(git 저장소)·시작 상태·diff·입력·판정을 지우지 않고 남긴다
         # 승인 뒤 바뀐 기준: 승인한 기준만 판정 기준이다. 바뀌었으면 검증자에게 알린다.
         note, changed = "", False
         if explicit:
@@ -321,9 +367,9 @@ def main(args):
         result["baseline_changed_after_approval"] = changed
         if not requests:
             problems.append("사용자 원문이 없다")
-        vdir = work / "target"
+        vdir = keep / "target"
         target = freeze(root, vdir)
-        base = work / "base"
+        base = keep / "base"
         unsaved = []
         if opt(args, "--base-dir"):
             shutil.copytree(opt(args, "--base-dir"), base, symlinks=True)
@@ -332,29 +378,25 @@ def main(args):
         else:
             problems.append("작업 시작 파일 상태가 없어 이번 변경만 가려낼 수 없다")
             base.mkdir()
-        # 키트·하네스 설정(맨 위 .agents·.claude·.codex·CLAUDE.md·AGENTS.md)은 관문의 제품 파일 범위처럼 비교에서 뺀다:
-        # 대상의 것을 시작 상태에도 그대로 두어 차이가 나지 않게 한다(링크 .claude/skills 를 따라간 키트 파일이 diff 를 채우지 않게).
-        for name in KIT_PATHS:
-            src, dst = vdir / name, base / name
-            if dst.is_symlink() or dst.is_file():
-                dst.unlink()
-            elif dst.is_dir():
-                shutil.rmtree(dst)
-            if src.is_symlink():
-                os.symlink(os.readlink(src), dst)
-            elif src.is_dir():
-                shutil.copytree(src, dst, symlinks=True)
-            elif src.is_file():
-                shutil.copy2(src, dst)
-        change, cut = diff(base, vdir)
+        copy_kit_paths(vdir, base)
+        change, cut, failed = diff(base, vdir)
+        # 근거가 불완전하면(시작 내용 미보존·diff 실패·잘림) 판정을 맡기지 않고 미확인이다. 전체 diff 는 남긴 폴더에 있다.
         if unsaved:
-            change = f"(작업 시작 때 내용을 보존하지 못한 경로: {', '.join(unsaved[:20])})\n" + change
+            problems.append("작업 시작 때 내용을 보존하지 못한 경로가 있다: " + ", ".join(unsaved[:20]))
+        if failed:
+            problems.append("diff 실행이 실패했다")
+        if cut:
+            problems.append(f"변경(diff)이 {DIFF_LIMIT} 바이트를 넘어 검증자 입력에 다 넣지 못했다(전체는 {keep / 'diff.txt'})")
         result.update(target=target, diff_truncated=cut)
+        (keep / "criteria.txt").write_text(criteria, encoding="utf-8")
+        (keep / "requests.json").write_text(json.dumps(requests, ensure_ascii=False), encoding="utf-8")
         if problems:
             result.update(state="unverified", reason=" / ".join(problems))
+            rounds.append({"round": n, "state": "unverified", "reason": result["reason"], "target": target, "ran": False, "kept": str(keep), "at": time.time()})
         else:
             prompt = prompt_text(requests, plan, conditions, criteria, note, target, change)
-            log = Path(opt(args, "--log") or (state_dir / f"task-{rec.get('id')}.verify{n}.jsonl" if state_dir else work / "verify.jsonl"))
+            (keep / "prompt.txt").write_text(prompt, encoding="utf-8")
+            log = Path(opt(args, "--log") or keep / "verify.jsonl")
             result["log"] = str(log)
             rc = call_harness(harness, vdir, prompt, log)
             touched = [l for l in run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=vdir).stdout.decode().splitlines()
@@ -368,29 +410,40 @@ def main(args):
                 result.update(state="unverified", reason=f"검증자 하네스 종료 코드 {rc}")
             elif touched:
                 result.update(state="unverified", reason="검증자가 판정 대상의 추적 파일을 바꿨다: " + " ".join(touched[:5]))
-            elif verdict["state"] == "returned" and n >= rounds_max:
+            elif verdict["state"] == "returned" and len(ran) + 1 >= rounds_max:
                 result.update(state="incomplete", reason=f"재검증 한도({rounds_max})에 닿았다: 마지막 판정 RETURN")
             else:
                 result.update(state=verdict["state"], reason=verdict.get("reason", ""))
-    finally:
-        shutil.rmtree(work, ignore_errors=True)
-    rounds.append({k: result.get(k) for k in ("round", "state", "reason", "target", "verifier_exit_code")} | {"at": time.time()})
+            # 검증하는 동안 작업·승인 기준·제품 파일이 바뀌었으면 고정 대상의 판정은 남기되 지금 작업의 결과로 쓰지 않는다
+            fresh = gate.read_json(rec_file, {}) if rec_file else {}
+            end_task = (fresh.get("id"), tuple(fresh.get("hashes", [])), fresh.get("approved_at")) if rec_file else start_task
+            if rc is not None and (end_task != start_task or product_print(gate, root) != start_print):
+                result.update(target_state=result["state"], state="unverified",
+                              reason="검증하는 동안 작업·승인 기준·제품 파일이 바뀌었다. 고정 대상의 판정은 남겼지만 지금 버전의 결과가 아니다")
+            rounds.append({"round": n, "state": result["state"], "target_state": result.get("target_state"), "reason": result.get("reason", ""),
+                           "target": target, "product": start_print, "verifier_exit_code": rc, "ran": rc is not None, "kept": str(keep), "at": time.time()})
+        (keep / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
     vstate = {"rounds": rounds, "state": result["state"], "reason": result.get("reason", ""), "max_rounds": rounds_max}
+    attached = True
     if explicit:
         state_file.write_text(json.dumps(vstate, ensure_ascii=False))
-    elif rec_file:  # 관문의 작업 기록에 판정을 남긴다(승인 상태는 바꾸지 않는다)
+    elif rec_file:  # 관문의 작업 기록에 판정을 남긴다(승인 상태는 바꾸지 않는다). 그 사이 작업이 바뀌었으면 붙이지 않는다.
         fresh = gate.read_json(rec_file, {})
-        if fresh.get("id") == rec.get("id"):
+        attached = (fresh.get("id"), tuple(fresh.get("hashes", [])), fresh.get("approved_at")) == start_task
+        if attached:
             fresh["verify"] = vstate
             rec_file.write_text(json.dumps(fresh, ensure_ascii=False))
-    # 사용자 답 대기: 승인 기록이 없거나 사용자 철회·기준 변경으로 승인이 닫힌 작업(에이전트의 완료 선언은 대기가 아니다)
-    waiting = bool(rec_file) and (not rec.get("approved_at") or gate.read_json(rec_file, {}).get("closed_kind") in ("user", "criteria", "new-criteria"))
+    result["attached_to_task"] = attached
+    # 사용자 답 대기(승인 전이거나 사용자 철회·기준 변경·새 기준으로 닫힘)면 검증이 OK 여도 완료가 아니다. 관문과 평가 실행기가 같은 규칙을 쓴다.
+    waiting = bool(rec_file) and gate.waiting(gate.read_json(rec_file, {}), gate.status(gate.read_json(rec_file, {}), gate.maps(root))[0])
     result["completion"] = completion(result["state"], waiting=waiting)
     msg = {"ok": "완료: 독립 검증이 모든 조건 충족을 냈다.",
            "returned": "돌려보냄: 아래 사유의 원인을 고친 뒤 이 명령을 다시 실행해 새 버전을 판정받는다.",
            "incomplete": "미완료: 재검증 한도에 닿았다. 남은 조건과 사유를 사용자에게 보고한다.",
            "unverified": "미확인: 판정하지 못했다. 완료로 보고하지 않고 사유와 재개 조건을 보고한다."}[result["state"]]
-    print(f"[verify] {msg} ({result['round']}/{rounds_max}회차) {result.get('reason', '')}", file=sys.stderr)
+    if result["completion"] == "waiting-user":
+        msg += " 다만 이 작업은 사용자 답을 기다리는 중이라 완료가 아니다."
+    print(f"[verify] {msg} ({result['round']}회차, 한도 {rounds_max}) {result.get('reason', '')}", file=sys.stderr)
     print(json.dumps(result, ensure_ascii=False))
     return EXIT[result["state"]]
 

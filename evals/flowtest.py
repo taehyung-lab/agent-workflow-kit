@@ -71,6 +71,7 @@ for a in "$@"; do case "$a" in *"당신은 별도 검증자다"*) p="$a";; esac;
 n=$(cat "$FAKE_DIR/n" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$FAKE_DIR/n"
 printf '%s' "$p" > "$FAKE_DIR/vprompt.$n"
 [ -z "${{FAKE_VWRITE:-}}" ] || echo changed >> ui.txt
+[ -z "${{FAKE_TOUCH_ORIG:-}}" ] || echo changed-while-verifying >> "$FAKE_TOUCH_ORIG"
 line=$(sed -n "${{n}}p" "$FAKE_DIR/verdicts")
 printf '{fmt}\\n' "$line"
 exit 0
@@ -139,10 +140,63 @@ exit 0
     hook("prompt", "C", prompt="새 기능을 만들어 주세요.")
     rc, out, _ = verify("C", [OK])
     check("사용자 승인 기록이 없는 작업은 판정하지 않고 unverified, 완료 분류는 waiting-user", rc == 5 and out.get("completion") == "waiting-user")
+    hook("prompt", "A", prompt="승인합니다.")  # 새 승인 = 새 검증 시도(한도를 다시 센다)
     rc, out, prompt = verify("A", [OK], harness="codex")
     check("Codex 검증 하네스도 같은 실행기·형식으로 판정한다", rc == 0 and out.get("state") == "ok" and "로그인 버튼 글자를" in prompt)
     rc, out, prompt = verify("B", [OK])
     check("같은 저장소의 세션 B 를 고르면 B 의 원문만 넘긴다", "OTHER-SESSION-MARKER" in prompt and "로그인 버튼 글자를" not in prompt)
+
+    # ---- 독립 리뷰가 찾은 결함의 회귀 표본(641df37) ----
+    # 1) 작업 시작 상태는 첫 요청 때 고정되고 승인 때 덮지 않는다: 요청 뒤 승인 전에 바뀐 파일은 diff 에 보인다
+    (proj / "ui.txt").write_text("button=로그인하기\nbutton_en=Login\n")
+    hook("prompt", "D", prompt="로그인 버튼 글자를 '로그인하기'로 바꿔 주세요")
+    (proj / "ui.txt").write_text("button=승인 전에 바꿈\nbutton_en=Login\n")  # 승인 전 셸 쓰기(잘못된 수정)
+    hook("prompt", "D", prompt="승인합니다.", transcript_path=transcript("d", plan))
+    rc, out, prompt = verify("D", [OK])
+    check("결함1: 요청 뒤 승인 전에 바뀐 파일은 diff 에 남는다(시작 상태를 승인 때 덮지 않음)", "승인 전에 바꿈" in prompt and "-button=로그인하기" in prompt)
+    hook("prompt", "D", prompt="이제 영어 버튼도 바꿔 주세요.")
+    sh(sys.executable, "-I", str(gate), "task", "begin", "english", cwd=proj, env={**base_env, "CLAUDE_CODE_SESSION_ID": "D"})
+    hook("prompt", "D", prompt="승인합니다.")
+    (proj / "ui.txt").write_text("button=승인 전에 바꿈\nbutton_en=Sign in\n")
+    rc, out, prompt = verify("D", [OK])
+    check("결함1: 새 작업 B 는 자기 시작 상태를 쓴다(앞 작업의 변경은 diff 에 없음)", "+button_en=Sign in" in prompt and "-button=로그인하기" not in prompt)
+    # 2) 사용자 답 대기 작업은 검증 OK 여도 완료가 아니다
+    hook("prompt", "D", prompt="취소합니다.")
+    rc, out, _ = verify("D", [OK])
+    check("결함2: 사용자 철회로 대기 중인 작업은 검증 OK 여도 completion=waiting-user", out.get("state") == "ok" and out.get("completion") == "waiting-user")
+    # 3) 한도 뒤에는 새 검증자를 띄우지 않고, 한도를 호출마다 올려 우회하지 못한다. 새 승인은 새 시도다.
+    hook("prompt", "D", prompt="승인합니다.")
+    r1 = verify("D", [RET]); r2 = verify("D", [RET]); rc, out, prompt = verify("D", [OK])
+    check("결함3: RETURN·RETURN(한도 2) 뒤 세 번째 호출은 검증자를 띄우지 않고 incomplete", [r1[1].get("state"), r2[1].get("state"), out.get("state")] == ["returned", "incomplete", "incomplete"] and prompt == "")
+    rc, out, prompt = verify("D", [OK], extra=("--rounds", "5"))
+    check("결함3: --rounds 를 올려도 이 시도의 한도(첫 회차에 정함)는 그대로라 띄우지 않는다", out.get("state") == "incomplete" and prompt == "" and out.get("max_rounds") == 2)
+    hook("prompt", "D", prompt="승인합니다.")
+    rc, out, prompt = verify("D", [OK])
+    check("결함3: 사용자의 새 승인 뒤에는 새 검증 시도로 다시 판정한다", out.get("state") == "ok" and prompt != "")
+    # 4) 검증하는 동안 원본이 바뀌면 고정 대상의 OK 를 지금 작업의 완료로 붙이지 않는다
+    hook("prompt", "D", prompt="승인합니다.")
+    rc, out, _ = verify("D", [OK], FAKE_TOUCH_ORIG=str(proj / "ui.txt"))
+    check("결함4: 검증 중 원본 파일이 바뀌면 unverified(고정 대상 판정 ok 는 target_state 로 보존)",
+          out.get("state") == "unverified" and out.get("target_state") == "ok" and out.get("completion") != "verified" and status("D")["verify"].get("state") == "unverified")
+    # 5) 회차마다 고정 대상·시작 상태·diff·입력·판정을 남기고, 근거가 불완전하면 미확인
+    hook("prompt", "D", prompt="승인합니다.")
+    rc, out, _ = verify("D", [OK])
+    kept = Path(out.get("kept", "/nonexistent"))
+    check("결함5: 고정 대상 커밋·시작 상태·diff·입력·판정을 나중에 읽을 수 있게 남긴다",
+          kept.is_dir() and sh("git", "cat-file", "-e", f"{out.get('target')}^{{commit}}", cwd=kept / "target").returncode == 0
+          and all((kept / f).exists() for f in ("base", "diff.txt", "prompt.txt", "criteria.txt", "requests.json", "result.json")))
+    (proj / "big.txt").write_text("x" * 70000 + "\n")
+    hook("prompt", "D", prompt="승인합니다.")
+    rc, out, prompt = verify("D", [OK])
+    check("결함5: diff 가 잘리면 근거 불완전으로 unverified(검증자를 띄우지 않음)", out.get("state") == "unverified" and "diff" in out.get("reason", "") and prompt == "")
+    (proj / "big.txt").unlink()
+    (proj / "secret.bin").write_text("s\n"); (proj / "secret.bin").chmod(0o000)
+    hook("prompt", "E", prompt="새 작업 해 주세요.")
+    (proj / "secret.bin").chmod(0o644)
+    hook("prompt", "E", prompt="승인합니다.")
+    rc, out, prompt = verify("E", [OK])
+    check("결함5: 시작 때 내용을 보존하지 못한 파일이 있으면 unverified", out.get("state") == "unverified" and "보존하지 못한" in out.get("reason", "") and prompt == "")
+    (proj / "secret.bin").unlink()
 
 print(f"{ok} passed, {failed} failed")
 sys.exit(1 if failed else 0)

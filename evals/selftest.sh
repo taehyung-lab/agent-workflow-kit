@@ -171,7 +171,7 @@ assert judge(ok + '\n{"note": 1}')["state"] == "unverified"
 PY
 python3 -I - "$here" <<'PY' && ok "완료 분류: verified 만 완료, 사용자 답 대기·구현 실패·검증 실패·미확인을 서로 구별" || ng "완료 분류"
 import sys; sys.path.insert(0, sys.argv[1]); from verdict import completion as c
-assert c("ok", "PASS") == "verified" and c("ok", "REVIEW", True) == "verified"
+assert c("ok", "PASS") == "verified" and c("ok", "REVIEW", True) == "waiting-user" and c("ok", "FAIL", True) == "waiting-user"
 assert c("ok", "FAIL") == "check-failed" and c("ok", "UNVERIFIED") == "unverified"
 assert c("returned", "FAIL", True) == "waiting-user" and c("off", "FAIL", True) == "waiting-user"
 assert c("incomplete", "FAIL") == "incomplete" and c("returned", "PASS") == "returned" and c("unverified", "PASS") == "unverified" and c("off", "PASS") == "not-verified"
