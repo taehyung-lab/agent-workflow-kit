@@ -96,7 +96,12 @@ def product_state(root, seen=None):
             h.update(f.encode() + b"\0link:" + os.readlink(p).encode() + b"\0")
         elif p.is_file():
             mode = b"x" if os.access(p, os.X_OK) else b"-"  # 실행 권한 변경도 제품 변경이다(git 이 기록하는 유일한 권한)
-            h.update(f.encode() + b"\0" + mode + hashlib.sha256(p.read_bytes()).digest())
+            try:
+                body = hashlib.sha256(p.read_bytes()).digest()
+            except OSError:  # 읽을 수 없게 된 파일도 변경으로 센다(크기·수정 시각·권한으로 지문을 만든다)
+                st = p.stat()
+                body = f"unreadable:{st.st_mode}:{st.st_size}:{st.st_mtime_ns}".encode()
+            h.update(f.encode() + b"\0" + mode + body)
         elif p.is_dir() and (p / ".git").exists() and os.path.realpath(p) not in seen:  # 하위 저장소(몇 단계든): 체크아웃 버전과 파일
             head = git(p, "rev-parse", "--verify", "-q", "HEAD", ok=(0, 1)).strip()
             h.update(f.encode() + b"\0sub:" + head + product_state(p, seen).encode())
@@ -361,6 +366,9 @@ if __name__ == "__main__":
     except Exception as e:  # 훅 자체 오류: 쓰기·셸만 막고 읽기 도구는 그대로 둔다. 턴 끝 검사는 기록만 남긴다.
         log({"error": repr(e), "mode": mode})
         tool = str(data.get("tool_name") or "") if isinstance(data, dict) else ""
+        if mode == "stop":  # 턴 끝 검사를 하지 못했으면 승인 전 변경이 없다고 볼 수 없으므로 알리고 멈춘다
+            print(json.dumps({"decision": "block", "reason": f"{TAG} 승인 관문이 제품 파일 상태를 확인하지 못했습니다({e!r}). "
+                              "이번 턴에 바꾼 제품 파일이 있으면 되돌리고, 상태를 사용자에게 알리세요."}, ensure_ascii=False))
         if mode == "pre" and (not data or tool in WRITE_TOOLS | SHELL_TOOLS or re.search(WRITE_NAME, tool, re.I)):
             print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                                      "permissionDecisionReason": f"{TAG} 승인 관문 오류로 쓰기를 막았습니다: {e!r}"}}, ensure_ascii=False))
