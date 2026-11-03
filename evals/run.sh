@@ -50,15 +50,17 @@ for i in $(seq 1 "$times"); do
   # 턴마다 원시 기록을 .tN.jsonl 로 남기고, 판정용 .jsonl 은 모든 턴을 순서대로 이은 것이다(마지막 답 = 마지막 턴의 답).
   turns=("$case_dir/prompt.txt")
   for n in 2 3 4 5 6 7 8 9; do [ ! -f "$case_dir/prompt$n.txt" ] || turns+=("$case_dir/prompt$n.txt"); done
+  # EVALS_APPROVE_TURN=<말> 이면 사례의 턴 뒤에 사용자의 승인 턴을 하나 더 보낸다(승인 관문에서 명시 요청이 승인 뒤 구현되는지와 그 비용을 볼 때).
+  if [ -n "${EVALS_APPROVE_TURN:-}" ]; then printf '%s' "$EVALS_APPROVE_TURN" > "$out.approve.txt"; turns+=("$out.approve.txt"); fi
   start=$(date +%s); rc=0; sid=""; : > "$out.jsonl"; : > "$out.err"
   # Codex 는 전역 지침을 CODEX_HOME 에서 읽는다. 실제 설정을 복사한 임시 홈을 쓰고, 세션을 이어 가도록 모든 턴이 끝날 때까지 둔다.
   # EVALS_CODEX_NETWORK=1 이면 Codex 작업 공간에 네트워크를 허용한다(세션 안에서 다른 세션을 띄우는 후보를 시험할 때).
   net=(); [ "${EVALS_CODEX_NETWORK:-0}" != 1 ] || net=(-c sandbox_workspace_write.network_access=true)
-  # EVALS_HOOK=1 이면 설치된 키트의 결정 표 훅(.agents/skills/wf-design/decision-gate.py)을 하네스에 등록한다.
+  # EVALS_HOOK=1 이면 설치된 키트의 승인 관문 훅(.agents/skills/wf-design/approval-gate.py)을 하네스에 등록한다.
   # 사용자 전역 설정은 건드리지 않는다: Codex 는 임시 홈의 hooks.json, Claude 는 --settings 로만 등록한다.
-  hookcmd='python3 "$(git rev-parse --show-toplevel)/.agents/skills/wf-design/decision-gate.py"'
+  hookcmd='python3 "$(git rev-parse --show-toplevel)/.agents/skills/wf-design/approval-gate.py"'
   hookjson=$(HOOKCMD=$hookcmd python3 -I -c 'import json,os; c=os.environ["HOOKCMD"]
-print(json.dumps({"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": c + " prompt", "timeout": 30}]}], "Stop": [{"hooks": [{"type": "command", "command": c + " stop", "timeout": 30}]}]}}))')
+print(json.dumps({"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": c + " prompt", "timeout": 30}]}], "PreToolUse": [{"hooks": [{"type": "command", "command": c + " pre", "timeout": 30}]}]}}))')
   limit=900; [ "${EVALS_HOOK:-0}" != 1 ] || limit=2400
   export AWK_GATE_LOG="$out.hook.log"
   csettings=(); [ "${EVALS_HOOK:-0}" != 1 ] || { net+=(--dangerously-bypass-hook-trust); csettings=(--settings "$hookjson"); }
