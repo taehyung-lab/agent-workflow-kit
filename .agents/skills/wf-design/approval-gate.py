@@ -27,8 +27,9 @@ TAG = "[approval-gate]"
 # 승인 표현이 든 **문장 안에** 부정·질문·검토·인용 표지가 없으면 승인으로 본다. 다른 문장의 범위 제한("다만 영어는 빼고요")은
 # 승인을 막지 않는다. 그 제한을 지키는 것은 에이전트 몫이고, 관문은 범위를 판단하지 않는다.
 APPROVE = r"(승인합니다|승인할게|승인해요|승인이요|^\s*승인\s*[.!]?\s*$|진행해|진행 해|진행합시다|진행하세요|바로\s*(구현|진행|만들|고쳐|바꿔)|go ahead|approved?\b)"
-NOT_APPROVE = r"(마세요|말고|말아|하지\s*마|않|안\s*(했|할|돼|됩|하|해)|보류|금지|취소|여부|검토|예시|인지|일까|할까|까요|나요|되죠|됩니까|\?|？|\bnot\b|don't|\bno\b)"
-QUOTED = r"^\s*(주세요|주시면|요)?\s*[\"”’」』.…!~]*\s*(라고|라는|이라고|이라는|란\s)"  # 승인 표현 바로 뒤가 인용이면 승인 발언이 아니다
+NOT_APPROVE = r"(마세요|말고|말아|하지\s*마|않|안\s*(했|할|돼|됩|하|해)|보류|금지|취소|여부|검토|예시|인지|일까|할까|까요|나요|되죠|됩니까|번역|뜻|의미|translate|meaning|\?|？|\bnot\b|don't|\bno\b)"
+REVOKE = r"(취소|멈춰|멈추|중지|그만|잠깐|아니요|아뇨|보류|wait|stop|cancel)"  # 메시지 어디에든 철회·중지가 있으면 승인이 아니다
+QUOTED = r"^\s*(주세요|주시면|요)?\s*[\"”’」』.…!~]*\s*(라고|라는|이라고|이라는|란\s|의\s|을\s|를\s|가\s|이\s)"  # 승인 표현 바로 뒤가 인용이면 승인 발언이 아니다
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch"}
 SHELL_TOOLS = {"Bash", "shell", "exec_command", "local_shell", "unified_exec"}
 WRITE_NAME = r"(write|edit|create|delete|remove|update|patch|move|rename|insert|replace|upload|stdin|commit|push)"
@@ -115,6 +116,8 @@ def product_state(root, seen=None):
 
 
 def is_approval(prompt):
+    if re.search(REVOKE, prompt, re.I):
+        return False
     for m in re.finditer(APPROVE, prompt, re.I | re.M):
         if (m.start() > 0 and prompt[m.start() - 1] in "\"“'‘「『") or re.match(QUOTED, prompt[m.end():m.end() + 20]):
             continue
