@@ -11,6 +11,8 @@
 예: 사용자가 "회원 탈퇴 기능을 만들어 주세요" 라고만 보내면 에이전트는 코드를 읽을 수는 있지만 accounts.py 를 고치려는 순간
 거절 사유가 돌아온다. 에이전트는 만들 결과와 미정을 보여 주고 묻는다. 사용자가 "승인합니다" 라고 답한 턴에 쓰기가 열린다.
 
+역할 나눔: 셸 명령의 실행 전 판정은 흔한 쓰기 실수를 먼저 막는 장치다. 셸은 옵션·설정·외부 프로그램으로 쓰기를 숨길 수 있어
+실행 전 판정만으로 완전하지 않다. 승인 전 턴에 제품 파일이 바뀌지 않았다는 최종 보장은 턴 끝 상태 검사(stop)가 맡는다.
 전제: 에이전트가 일부러 관문을 부수려 하지는 않지만 묻지 않고 넘어가려 할 수는 있다. 승인 기록(`.git/awk-gate/`)과
 이 파일은 Codex 작업 공간 쓰기 모드에서는 각각 읽기 전용(.git)·작업 공간 안이다. Claude 는 같은 보호가 없다.
 의도적인 위조까지 막으려면 하네스의 읽기 전용 실행 모드(운영체제 수준 쓰기 제한)를 함께 써야 한다.
@@ -40,6 +42,9 @@ RTK_READ = {"read", "ls", "grep", "find", "json", "log", "diff", "deps", "gain"}
 OPERATORS = ["&&", "||", ";;", ">>", "&>", ">&", "<>", "<<<", "<<", ";", "|", "&", ">", "<", "(", ")"]
 GLOB = "\x01"  # 따옴표 밖의 {} * ? [ ~: 셸이 실행 때 다른 인자로 펼칠 수 있다
 EXPANDS = "\x00$"  # 셸이 실행 때 펼치는 $(작은따옴표 밖). 환경 변수 지정 값에서만 허용한다
+_ADDR = r"(\d+|\$|/[^/]*/)(,(\d+|\$|/[^/]*/))?"
+SED_READ = re.compile(r"^(" + _ADDR + r")?\s*([pdq=]|s/[^/]*/[^/]*/[gpI0-9]*)(\s*;\s*(" + _ADDR + r")?\s*([pdq=]|s/[^/]*/[^/]*/[gpI0-9]*))*\s*;?$")
+ENV_OK = re.compile(r"^(PATH|LANG|LC_\w+|TZ|CI|NO_COLOR|FORCE_COLOR|NODE_ENV|TERM|COLUMNS)=")  # 실행할 코드를 바꾸지 않는 환경 변수만 지정한다
 SHELL_WORDS = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "fi", "done", "}"}
 MAX_STOP_BLOCKS = 2
 TEST_RUN = re.compile(r"^(rtk\s+)?(python3?(\s+-B)?\s+-m\s+(unittest|pytest)|pytest)"
@@ -48,7 +53,7 @@ TEST_RUN = re.compile(r"^(rtk\s+)?(python3?(\s+-B)?\s+-m\s+(unittest|pytest)|pyt
 # (옵션을 붙이면 출력 파일·고치기 같은 쓰기가 열릴 수 있어 승인이 필요하다). 도구를 직접 부르는 실행(npx tsc 등)도 승인이 필요하다.
 JS_CHECK = re.compile(r"^(rtk\s+)?(pnpm|npm|yarn|bun)(\s+(--dir|-C|--filter|--prefix|--workspace|-w)\s+[^\s-]\S*)*(\s+run)?"
                       r"\s+(test|typecheck|type-check|lint|check)(\s+[^\s-][^\s]*)*$")
-VERSION = re.compile(r"^(rtk\s+)?(command\s+-v\s+[\w.-]+|[\w.-]+\s+(--version|-v|-V))$")  # 도구 존재·버전 확인
+VERSION = re.compile(r"^(rtk\s+)?(command\s+-v\s+[\w.-]+|[\w.-]+\s+--version|(node|pnpm|npm|yarn|bun|deno|go|tsc)\s+(-v|-V))$")  # 도구 존재·버전 확인
 REASON = (f"{TAG} 사용자가 이번 메시지에서 승인하지 않아 제품 파일 쓰기와 읽기 전용으로 확인되지 않는 셸 명령을 막았습니다. "
           "읽어서 조사한 뒤, 사용자가 받을 결과(원문·계약 근거와 함께)와 아직 정해지지 않은 점, 확인 방법을 보여 주고 "
           "추천과 함께 승인을 물으세요. 다른 명령으로 우회하지 마세요. 사용자가 '승인합니다'·'진행해 주세요' 처럼 답한 턴에 쓰기가 열립니다. "
@@ -162,7 +167,7 @@ def shell_read_only(cmd):
 
 
 def segment_read_only(seg):
-    while seg and (re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", seg[0]) or seg[0] in SHELL_WORDS):  # 환경 변수 지정·if/then 같은 셸 문법어
+    while seg and (ENV_OK.match(seg[0]) or seg[0] in SHELL_WORDS):  # 환경 변수 지정·if/then 같은 셸 문법어
         seg = seg[1:]
     if seg[:1] == ["for"] or seg in (["fi"], ["done"], ["}"], ["esac"]):
         return True
@@ -175,11 +180,13 @@ def segment_read_only(seg):
         return shell_read_only(args[1])
     if name == "rtk" and [a for a in args if not a.startswith("-")][:1] == ["proxy"]:  # rtk proxy <명령>: 명령을 그대로 실행
         return segment_read_only(args[[a for a in args].index("proxy") + 1:])
-    if name in ("export", "unset"):  # 이 셸의 환경 변수만 바꾼다(예: Node 버전에 맞춘 PATH)
-        return all(re.match(r"^[A-Za-z_][A-Za-z0-9_]*(=.*)?$", x, re.S) for x in args)
+    if name == "unset":
+        return True
+    if name == "export":  # 이 셸의 환경 변수만 바꾼다(예: Node 버전에 맞춘 PATH)
+        return all(ENV_OK.match(x) or re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", x) for x in args)
     if name == "env":  # env -u NAME NAME=VALUE <명령>: 환경만 바꿔 뒤 명령을 실행한다
         rest = list(args)
-        while rest and (rest[0] in ("-u", "--unset") or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", rest[0])):
+        while rest and (rest[0] in ("-u", "--unset") or ENV_OK.match(rest[0])):
             rest = rest[2:] if rest[0] in ("-u", "--unset") else rest[1:]
         return segment_read_only(rest) if rest else True
     if any(EXPANDS in x for x in seg):  # 실행 때 펼쳐질 값($VAR)은 어떤 인자·옵션이 될지 미리 알 수 없다
@@ -201,6 +208,10 @@ def segment_read_only(seg):
         if args and (args[0] in READ_ONLY or args[0] in ("git", "rm")):
             return segment_read_only(args)
         return bool(args) and args[0] in RTK_READ and not any(a.startswith("-o") or a.startswith("--output") for a in args)
+    if name == "git" and any(a == "-c" or a.startswith(("--config-env", "--open-files-in-pager", "-O", "--ext-diff", "--textconv", "--filters", "--exec-path")) for a in args):
+        return False
+    if name in ("rg", "grep") and any(a.startswith(("--pre", "--hostname-bin")) for a in args):
+        return False
     if name == "git":
         rest = list(args)
         while rest and rest[0].startswith("-"):
@@ -213,24 +224,34 @@ def segment_read_only(seg):
         return bool(targets) and all(re.search(r"(^|/)(__pycache__|\.pytest_cache)(/|$)", a) and ".." not in a for a in targets)
     if name not in READ_ONLY:
         return False
-    if name == "sed":
-        if any(a.startswith("-i") or a.startswith("--in-place") or a in ("-f", "--file") for a in args):
-            return False
-        scripts = [a for a in args if not a.startswith("-")][:1]
-        write_cmd = r"(^|[;{}\s\d$!])[wWe](\s|$)"  # w 파일, W 파일, e 명령
-        write_flag = r"s(.)(?:\\.|(?!\1).)*\1(?:\\.|(?!\1).)*\1[gpIiM0-9]*[we]"  # s/a/b/w 파일
-        return not any(re.search(write_cmd, s) or re.search(write_flag, s) for s in scripts)
-    if name == "sort" and any(a.startswith("-o") or a.startswith("--output") for a in args):
+    if name == "sed":  # 출력만 하는 형태만 둔다: [주소]p·d·=·q, 쓰기 플래그 없는 s/a/b/
+        scripts, rest, plain = [], list(args), True
+        while rest:
+            a = rest.pop(0)
+            if a in ("-n", "-E", "-r", "--quiet", "--silent", "-u", "-z"):
+                continue
+            if a in ("-e", "--expression") and rest:
+                scripts.append(rest.pop(0)); plain = False
+            elif a.startswith("-e") and len(a) > 2:
+                scripts.append(a[2:]); plain = False
+            elif a.startswith("--expression="):
+                scripts.append(a.split("=", 1)[1]); plain = False
+            elif a.startswith("-"):
+                return False  # -i, -f, -s 등 그 밖의 옵션은 승인이 필요하다
+            elif plain and not scripts:
+                scripts.append(a)
+        return bool(scripts) and all(SED_READ.match(x.strip()) for x in scripts)
+    if name == "sort" and any(re.match(r"^-[a-zA-Z]*o", a) or a.startswith(("--output", "--compress-program")) for a in args):
         return False
     if name == "uniq" and len([a for a in args if not a.startswith("-")]) > 1:  # uniq 입력 출력: 두 번째 파일에 쓴다
         return False
-    if (name == "tree" and any(a.startswith("-o") for a in args)) or (name == "file" and any(a.startswith("-C") for a in args)):
+    if (name == "tree" and any(a.startswith("-o") for a in args)) or (name == "file" and any(re.match(r"^-[a-zA-Z]*C", a) or a.startswith("--comp") for a in args)):
         return False
     if name == "date" and any(not a.startswith(("+", "-u", "-R", "-I", "-r", "-j", "-f")) or a == "-s" for a in args):
         return False  # 날짜 출력 형식·변환만 둔다(시스템 날짜 설정 제외)
     if name == "find" and any(a in ("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls") for a in args):
         return False
-    if name == "awk" and any(a == "-f" or re.search(r"(system|print[^;]*>|getline|close|fflush)", a) for a in args):
+    if name == "awk" and any(a.startswith("-f") or a.startswith("--file") or re.search(r"(system|print[^;]*[>|]|getline|close|fflush|\|)", a) for a in args):
         return False
     return True
 
