@@ -83,7 +83,108 @@ rm -rf "${cap:?}"
 : > "$fake/log"; FAKE_RC=0 FAKE_LOG=$fake/log EVALS_RESULTS=$results PATH="$fake:$PATH" bash "$here/run.sh" archive-after-correction HEAD claude >/dev/null 2>&1; rc=$?
 [ $rc -eq 0 ] && [ "$(grep -c '' "$fake/log")" -eq 2 ] && sed -n 2p "$fake/log" | grep -q -- '--resume fake-sid' && ok "여러 턴: 두 번째 턴이 같은 세션을 이어 감" || ng "여러 턴 이어 가기(rc=$rc, 호출 $(grep -c '' "$fake/log")회)"
 rm -rf "${fake:?}" "${results:?}"
-# 승인 관문 훅(모델 없음): 승인 판별·턴마다 닫힘·쓰기 도구·셸 읽기 전용 판별·오류 시 막음
+# 독립 검증 루프(가짜 하네스): 검증자 입력의 독립성, 정해진 결과 형식만 통과, 반환 → 교정 → 새 버전 재검증, 한도 = 미완료, 수정 = 무효
+vf=$(mktemp -d); mkdir "$vf/bin"
+cat > "$vf/bin/claude" <<'FAKE'
+#!/bin/sh
+[ "$1" = --version ] && { echo fake 0; exit 0; }
+case "$2" in
+  *"당신은 별도 검증자다"*)
+    n=$(cat "$FAKE_DIR/vn" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$FAKE_DIR/vn"
+    printf '%s' "$2" > "$FAKE_DIR/vprompt.$n"
+    [ -z "${FAKE_VWRITE:-}" ] || echo changed >> README.md
+    [ -z "${FAKE_VARTIFACT:-}" ] || echo cache > made-by-check.cache
+    line=$(sed -n "${n}p" "$FAKE_DIR/verdicts")
+    printf '{"type": "result", "result": %s}\n' "$line"
+    exit "${FAKE_VRC:-0}";;
+  *) echo call >> "$FAKE_DIR/impl"; echo '{"session_id": "fake-sid"}'
+     # 승인 턴·교정 턴의 답은 구현 뒤 자기평가(검증자에게 가면 안 됨), 첫 턴 답은 사용자가 승인할 계획이다.
+     case "$2" in *"승인합니다"*|*"별도 검증자가"*) echo '{"type": "result", "result": "IMPL-ANSWER-MARKER 다 했습니다"}';;
+       *) [ -n "${FAKE_NOPLAN:-}" ] || echo '{"type": "result", "result": "PLAN-MARKER 추천안: calc.py 로 두 수의 합. 승인해 주시겠어요?"}';; esac
+     echo "turn" >> made-by-impl.txt
+     # 사례 판정(weight-disposable)이 통과하는 결과물. FAKE_BREAK 면 만들지 않아 결정적 검사가 실패한다.
+     [ -n "${FAKE_BREAK:-}" ] || { mkdir -p scripts; printf 'import sys\nprint(int(sys.argv[1]) + int(sys.argv[2]))\n' > scripts/calc.py; }
+     [ -z "${FAKE_MAP:-}" ] || { mkdir -p work/t; printf '# t\n\n## 기준\n\n| ID | 결과 |\n| --- | --- |\n| C1 | 출력 |\n| C9 | 기존 보장 |\n\n## 증거\n\nSELF-ASSESS-MARKER 전부 충족\n' > work/t/work.md; }
+     # 교정 턴(검증자 반환)에서 지도 기준을 바꾸는 구현자: 승인된 기준이 아니므로 재검증 기준이 되면 안 된다.
+     case "$2" in *"별도 검증자가 다음 사유로"*) [ -z "${FAKE_REMAP:-}" ] || printf '# t\n\n## 기준\n\n| ID | 결과 |\n| --- | --- |\n| C1 | 출력 |\n| C7 | 바꾼 기준 |\n' > work/t/work.md;; esac
+     exit 0;;
+esac
+FAKE
+chmod +x "$vf/bin/claude"
+OKV='"설명.\n{\"verdict\": \"OK\", \"conditions\": [{\"id\": \"C1\", \"result\": \"충족\", \"evidence\": \"python3 x 실행 결과 1\"}], \"out_of_scope\": []}"'
+RETV='"{\"verdict\": \"RETURN\", \"conditions\": [{\"id\": \"C1\", \"result\": \"미충족\", \"evidence\": \"출력 없음\"}], \"return_reason\": \"C1 미충족\"}"'
+vrun() {  # vrun <이름> <판정 줄...>: 가짜 검증자가 차례로 낼 답을 받아 weight-disposable 을 승인 턴 포함·EVALS_VERIFY=1 로 돈다
+  d="$vf/$1"; shift; mkdir -p "$d"; : > "$d/verdicts"; for v in "$@"; do printf '%s\n' "$v" >> "$d/verdicts"; done
+  FAKE_DIR=$d EVALS_VERIFY=1 EVALS_APPROVE=1 EVALS_RESULTS=$d/r PATH="$vf/bin:$PATH" bash "$here/run.sh" weight-disposable HEAD claude > "$d/out" 2>&1; echo $? > "$d/rc"
+  meta=$(ls "$d"/r/*.meta.json 2>/dev/null | head -1)
+}
+mget() { python3 -I -c 'import json,sys; m=json.load(open(sys.argv[1])); print(m.get(sys.argv[2]))' "$meta" "$1" 2>/dev/null; }
+vrun empty '""'
+[ "$(mget verifier)" = unverified ] && [ "$(mget completion)" = unverified ] && ok "검증: 빈 답은 미확인이고 완료가 아님" || ng "검증 빈 답: $(mget verifier)/$(mget completion)"
+vrun prose '"좋아 보입니다. 모든 조건을 충족합니다."'
+[ "$(mget verifier)" = unverified ] && ok "검증: 형식 없는 칭찬은 미확인" || ng "검증 형식 없음: $(mget verifier)"
+vrun okunmet '"{\"verdict\": \"OK\", \"conditions\": [{\"id\": \"C1\", \"result\": \"미확인\", \"evidence\": \"못 돌림\"}]}"'
+[ "$(mget verifier)" = unverified ] && ok "검증: OK 인데 미확인 조건이 있으면 미확인" || ng "검증 OK+미확인: $(mget verifier)"
+vrun noevidence '"{\"verdict\": \"OK\", \"conditions\": [{\"id\": \"C1\", \"result\": \"충족\", \"evidence\": \"\"}]}"'
+[ "$(mget verifier)" = unverified ] && ok "검증: 근거 없는 충족은 미확인" || ng "검증 근거 없음: $(mget verifier)"
+vrun ok "$OKV"
+[ "$(mget verifier)" = ok ] && [ "$(mget completion)" = verified ] && [ "$(mget verify_rounds)" = 1 ] && ok "검증: 형식대로 모두 충족이면 완료" || ng "검증 OK: $(mget verifier)/$(mget completion)"
+python3 -I "$here/report.py" "$vf/ok/r" | awk 'NR==2{exit !($(NF-4)==1 && $(NF-3)==0 && $(NF-2)==0)}' && ok "보고: 검증 완료를 단계 통과와 따로 셈" || ng "보고 검증 완료 열: $(python3 -I "$here/report.py" "$vf/ok/r")"
+! grep -q IMPL-ANSWER-MARKER "$vf/ok/vprompt.1" && grep -q '사용자 원문 1' "$vf/ok/vprompt.1" && grep -q 'made-by-impl.txt' "$vf/ok/vprompt.1" \
+  && grep -q 'PLAN-MARKER' "$vf/ok/vprompt.1" \
+  && ok "검증: 검증자는 원문·승인 원문이 가리키는 계획·작업 시작부터의 변경을 받고 구현 뒤 답(자기평가)은 받지 않음" || ng "검증 입력 독립성"
+FAKE_NOPLAN=1 vrun noplan "$OKV"
+grep -q '추출 실패' "$vf/noplan/vprompt.1" && ok "검증: 승인 직전 계획을 추출하지 못하면 성공처럼 비우지 않고 추출 실패를 적음" || ng "검증 계획 추출 실패 표시"
+vrun again "$RETV" "$OKV"
+[ "$(mget verifier)" = ok ] && [ "$(mget verify_rounds)" = 2 ] && [ "$(grep -c '' "$vf/again/impl")" = 3 ] && grep -q 'made-by-impl.txt' "$vf/again/vprompt.2" \
+  && [ "$(grep -c turn "$vf/again/vprompt.2")" -gt "$(grep -c turn "$vf/again/vprompt.1")" ] \
+  && ok "검증: RETURN → 구현자 교정 턴 → 새 버전을 다시 판정" || ng "검증 재검증: $(mget verifier) rounds=$(mget verify_rounds)"
+vrun limit "$RETV" "$RETV" "$RETV"
+[ "$(mget verifier)" = incomplete ] && [ "$(mget verify_rounds)" = 2 ] && [ "$(mget completion)" = incomplete ] && ok "검증: 재검증 한도에 닿으면 미완료(성공 아님)" || ng "검증 한도: $(mget verifier) rounds=$(mget verify_rounds)"
+FAKE_VWRITE=1 vrun touched "$OKV"
+[ "$(mget verifier)" = unverified ] && grep -q '추적 파일' "$meta" && ok "검증: 검증자가 추적 파일을 바꾸면 그 판정은 미확인" || ng "검증 수정 무효: $(mget verifier)"
+FAKE_VARTIFACT=1 vrun artifact "$OKV"
+[ "$(mget verifier)" = ok ] && ok "검증: 검사가 만든 새 파일(산출물·캐시)은 판정을 무효로 만들지 않음" || ng "검증 산출물: $(mget verifier) $(mget verify_reason)"
+FAKE_VRC=5 vrun crash "$OKV"
+[ "$(mget verifier)" = unverified ] && [ "$(mget verifier_exit_code)" = 5 ] && [ "$(mget exit_code)" = 0 ] && [ "$(cat "$vf/crash/rc")" = 0 ] \
+  && ok "검증: 검증자 종료 코드 5 는 보존되고 미확인, 구현자 종료 코드는 그대로" || ng "검증자 오류: $(mget verifier) vrc=$(mget verifier_exit_code) rc=$(mget exit_code)"
+vrun oos '"{\"verdict\": \"OK\", \"conditions\": [{\"id\": \"C1\", \"result\": \"충족\", \"evidence\": \"실행 결과\"}], \"out_of_scope\": [\"새 요구: 음수 입력 처리\"]}"'
+[ "$(mget verifier)" = ok ] && grep -q '음수 입력' "$meta" && ok "검증: 범위 밖 반례는 완료를 막지 않고 따로 남음" || ng "검증 범위 밖: $(mget verifier)"
+FAKE_MAP=1 vrun map "$OKV"
+grep -q 'C9 | 기존 보장' "$vf/map/vprompt.1" && ! grep -q SELF-ASSESS-MARKER "$vf/map/vprompt.1" && [ "$(mget verifier)" = unverified ] && grep -q 'C9' "$meta" \
+  && ok "검증: 작업 지도의 기준만 넘기고(증거·자기평가 제외) 그 ID 를 필수 조건으로 요구" || ng "검증 지도 기준: $(mget verifier) $(mget verify_reason)"
+FAKE_BREAK=1 vrun checkfail "$OKV"
+[ "$(mget verifier)" = ok ] && [ "$(mget completion)" = check-failed ] && [ "$(mget check_passed)" = False ] \
+  && ok "검증: 검증자가 OK 여도 결정적 행동 검사가 실패하면 완료(verified)로 세지 않음" || ng "검증 OK+검사 실패: $(mget verifier)/$(mget completion)"
+FAKE_MAP=1 FAKE_REMAP=1 vrun remap "$RETV" "$OKV"
+grep -q 'C9 | 기존 보장' "$vf/remap/vprompt.2" && grep -q '승인 뒤 작업 지도의 기준을 바꿨다' "$vf/remap/vprompt.2" && ! grep -q '승인 뒤 작업 지도의 기준을 바꿨다' "$vf/remap/vprompt.1" \
+  && [ "$(mget baseline_changed_after_approval)" = True ] && grep -q 'C9' "$meta" \
+  && ok "검증: 재검증은 구현자가 고친 지도가 아니라 처음 고정한 기준(C9 유지)으로 하고, 기준 변경을 알림" || ng "검증 기준 고정: $(mget verifier) $(mget verify_reason)"
+# 필수 조건 누락: 사례가 필수 조건을 정하면 그 ID 가 모두 있어야 한다
+cp -R "$here/cases/weight-disposable" "$here/cases/zz-selftest-required"; printf 'C1 결과 출력\nC2 기존 보장\n' > "$here/cases/zz-selftest-required/verify-conditions.txt"
+d="$vf/required"; mkdir -p "$d"; printf '%s\n' "$OKV" > "$d/verdicts"
+FAKE_DIR=$d EVALS_VERIFY=1 EVALS_RESULTS=$d/r PATH="$vf/bin:$PATH" bash "$here/run.sh" zz-selftest-required HEAD claude > "$d/out" 2>&1; meta=$(ls "$d"/r/*.meta.json | head -1)
+rm -rf "$here/cases/zz-selftest-required"
+[ "$(mget verifier)" = unverified ] && grep -q 'C2' "$meta" && grep -q 'C2 기존 보장' "$d/vprompt.1" && ok "검증: 필수 조건(C2) 결과가 빠지면 미확인" || ng "검증 필수 조건: $(mget verifier) $(mget verify_reason)"
+# 판정 검사 자체의 오류(예외)는 실패가 아니라 미확인이다
+cp -R "$here/cases/weight-disposable" "$here/cases/zz-selftest-crash"; printf 'raise RuntimeError("판정기 고장")\n' > "$here/cases/zz-selftest-crash/check.py"
+d="$vf/crashcheck"; mkdir -p "$d"; : > "$d/verdicts"
+FAKE_DIR=$d EVALS_RESULTS=$d/r PATH="$vf/bin:$PATH" bash "$here/run.sh" zz-selftest-crash HEAD claude > "$d/out" 2>&1; meta=$(ls "$d"/r/*.meta.json | head -1)
+rm -rf "$here/cases/zz-selftest-crash"
+grep -q 'check=UNVERIFIED' "$d/out" && [ "$(mget check_unverified)" = True ] && ok "판정 검사 오류는 실패가 아니라 미확인" || ng "판정 검사 오류: $(cat "$d/out")"
+# Codex 검증 분기: 임시 홈을 지운 뒤에도 검증자의 실패 종료 코드가 남는다
+cat > "$vf/bin/codex" <<'FAKE'
+#!/bin/sh
+[ "$1" = --version ] && { echo fake 0; exit 0; }
+for a in "$@"; do case "$a" in *"당신은 별도 검증자다"*) echo '{"type": "item.completed", "item": {"type": "agent_message", "text": ""}}'; exit 9;; esac; done
+echo '{"type": "thread.started", "thread_id": "fake-thread"}'; echo '{"type": "item.completed", "item": {"type": "agent_message", "text": "IMPL"}}'; exit 0
+FAKE
+chmod +x "$vf/bin/codex"; d="$vf/codex"; mkdir -p "$d"
+EVALS_VERIFY=1 EVALS_RESULTS=$d/r PATH="$vf/bin:$PATH" bash "$here/run.sh" weight-disposable HEAD codex > "$d/out" 2>&1; meta=$(ls "$d"/r/*.meta.json | head -1)
+[ "$(mget verifier)" = unverified ] && [ "$(mget verifier_exit_code)" = 9 ] && ok "검증(Codex): 검증자 종료 코드 9 가 정리 뒤에도 보존" || ng "Codex 검증 종료 코드: $(mget verifier) vrc=$(mget verifier_exit_code)"
+grep -q '"judge_version": "[0-9a-f]\{12\}"' "$meta" && grep -q '"stage": "original-input"' "$meta" && ok "meta 에 판정기 지문·단계가 남음" || ng "meta 판정기 지문·단계"
+rm -rf "${vf:?}"
+# 승인 관문 훅(모델 없음): 승인 판별·턴마다 닫힘·수정 도구 차단·셸 미차단·턴 끝 변경 알림·오류 시 막음
 python3 -I "$here/gatetest.py" > "${TMPDIR:-/tmp}/gatetest.$$" 2>&1 && ok "승인 관문 시험 $(tail -1 "${TMPDIR:-/tmp}/gatetest.$$")" || { ng "승인 관문 시험"; grep -v '^ok' "${TMPDIR:-/tmp}/gatetest.$$"; }
 rm -f "${TMPDIR:-/tmp}/gatetest.$$"
 printf '%d passed, %d failed\n' "$pass" "$failed"

@@ -1,5 +1,10 @@
 # 출발 상태: 목록에 완료 항목도 [x] 로 보이는 할 일 CLI. list 와 export 가 같은 함수를 쓰고, 정산 시스템이 export CSV 를 가져간다.
-mkdir -p tests
+# EVALS_LANG=python(기본)·js 로 같은 동작의 CLI 를 다른 언어로 만든다. 어느 언어든 실행은 bin/todo, 검사는 bin/test 다(판정도 이 둘만 쓴다).
+lang=${EVALS_LANG:-python}
+mkdir -p bin tests
+printf 'todo.json\n__pycache__/\nnode_modules/\n' > .gitignore
+case "$lang" in
+python)
 cat > todo.py <<'TODO_EOF'
 """할 일 목록 CLI. 할 일은 todo.json 에 저장한다.
 
@@ -85,8 +90,99 @@ class TodoTest(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 TEST_EOF
-cat > README.md <<'README_EOF'
+printf '#!/bin/sh\nexec python3 "$(dirname "$0")/../todo.py" "$@"\n' > bin/todo
+printf '#!/bin/sh\ncd "$(dirname "$0")/.." && exec python3 -m unittest discover -s tests\n' > bin/test
+src="todo.py"
+;;
+js)
+cat > todo.js <<'TODO_EOF'
+// 할 일 목록 CLI. 할 일은 todo.json 에 저장한다.
+//
+// 사용:
+//   bin/todo add "<내용>"      할 일 추가
+//   bin/todo list              할 일 목록 출력 (번호, [x] 완료 표시, 내용)
+//   bin/todo done <번호>       완료로 표시
+//   bin/todo export <파일.csv> 모든 할 일을 CSV 로 내보낸다(회계·보고용 정산 시스템이 매주 이 파일을 가져간다)
+const fs = require("fs");
+
+const STORE = "todo.json";
+const USAGE = fs.readFileSync(__filename, "utf8").split("\n").filter((l) => l.startsWith("//")).map((l) => l.slice(3)).join("\n");
+
+function load() {
+  return fs.existsSync(STORE) ? JSON.parse(fs.readFileSync(STORE, "utf8")) : [];
+}
+
+function save(items) {
+  fs.writeFileSync(STORE, JSON.stringify(items, null, 1));
+}
+
+// list 가 보여 줄 할 일. export 도 이 함수를 쓴다.
+function visible(items) {
+  return items;
+}
+
+function csvCell(value) {
+  const s = String(value);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function main(argv) {
+  const [cmd, ...args] = argv;
+  const items = load();
+  if (cmd === "add") {
+    items.push({ id: items.length + 1, text: args[0], done: false });
+    save(items);
+  } else if (cmd === "list") {
+    for (const it of visible(items)) console.log(`${it.id}. [${it.done ? "x" : " "}] ${it.text}`);
+  } else if (cmd === "done") {
+    for (const it of items) if (it.id === Number(args[0])) it.done = true;
+    save(items);
+  } else if (cmd === "export") {
+    const rows = [["id", "text", "done"], ...visible(items).map((it) => [it.id, it.text, it.done ? "True" : "False"])];
+    fs.writeFileSync(args[0], rows.map((r) => r.map(csvCell).join(",")).join("\r\n") + "\r\n");
+  } else {
+    console.log(USAGE);
+    return 1;
+  }
+  return 0;
+}
+
+process.exitCode = main(process.argv.slice(2));
+TODO_EOF
+cat > tests/todo.test.js <<'TEST_EOF'
+const { test } = require("node:test");
+const assert = require("node:assert");
+const { execFileSync } = require("node:child_process");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+
+const TODO = path.resolve(__dirname, "..", "bin", "todo");
+const run = (cwd, ...args) => execFileSync(TODO, args, { cwd, encoding: "utf8" });
+const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "todo-"));
+
+test("add and list", () => {
+  const dir = tmp();
+  run(dir, "add", "우유 사기");
+  assert.match(run(dir, "list"), /1\. \[ \] 우유 사기/);
+});
+
+test("done marks item", () => {
+  const dir = tmp();
+  run(dir, "add", "우유 사기");
+  run(dir, "done", "1");
+  assert.match(run(dir, "list"), /1\. \[x\] 우유 사기/);
+});
+TEST_EOF
+printf '#!/bin/sh\nexec node "$(dirname "$0")/../todo.js" "$@"\n' > bin/todo
+printf '#!/bin/sh\ncd "$(dirname "$0")/.." && exec node --test\n' > bin/test
+src="todo.js"
+;;
+*) echo "지원하지 않는 EVALS_LANG: $lang" >&2; exit 1;;
+esac
+chmod +x bin/todo bin/test
+cat > README.md <<README_EOF
 # 할 일 CLI
 
-`python3 todo.py` 로 쓰는 작은 할 일 목록. 시험: `python3 -m unittest discover -s tests`
+\`bin/todo\` 로 쓰는 작은 할 일 목록(구현: \`$src\`). 시험: \`bin/test\`
 README_EOF

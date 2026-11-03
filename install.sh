@@ -87,7 +87,8 @@ for path in (".claude/settings.json", ".codex/hooks.json"):
     os.replace(tmp, path)
 PY
   [ "$remove" = 0 ] || { printf '%s\n' 'Approval gate hook entries removed (not in this kit version).'; return 0; }
-  printf '%s\n' 'Approval gate hook registered in .claude/settings.json and .codex/hooks.json. Codex: trust the hooks once when it asks at startup.'
+  printf '%s\n' 'Approval gate hook registered in .claude/settings.json and .codex/hooks.json. Codex: trust the hooks once when it asks at startup.' \
+    'Gate scope: blocks edit tools before approval; shell commands are not blocked in advance, product file changes are reported at turn end (the gate never reverts files).'
 }
 
 # 훅 설정 파일이 있으면 쓰기 전에 JSON 객체인지 확인한다(깨진 설정 때문에 설치가 도중에 멈추지 않게)

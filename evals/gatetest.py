@@ -35,41 +35,20 @@ with tempfile.TemporaryDirectory() as t:
     check("승인 없는 요청 턴: work/ 아래 설계 기록은 쓸 수 있다", not edit(str(repo / "work/x/work.md")) and not patch("work/x/work.md"))
     check("work/ 를 벗어나는 경로(..)는 막는다", edit(str(repo / "work/../app.py")))
     check("읽기 도구는 막지 않는다", not call("pre", {"tool_name": "Read", "tool_input": {"file_path": "app.py"}}))
-    for c in ["ls -la; cat a.py | head -5", "rg -n 'a|b' src", "git status && git diff HEAD", "sed -n 1,20p a.py", "find . -name '*.py'",
-              "cat a.py 2>/dev/null", "printenv NODE_OPTIONS", "grep x a 2>&1 | wc -l", "rtk git log -3", "cd sub && ls", "rtk read AGENTS.md",
-              "git -C . status", "git --no-pager -C . diff", "rg \">\" src", "echo '>'", "sed -n '/w/p' a.py",
-              "rtk proxy sh -c 'if [ -f v ]; then cat v; else cat AGENTS.md; fi'", "rtk --raw-output=true rg --files -g '!node_modules'",
-              "rtk python3 -m unittest discover -s tests", "python3 -m pytest -q tests/test_a.py",
-              "rtk rm tests/__pycache__/t.cpython-314.pyc", "rm -rf .pytest_cache tests/__pycache__",
-              "rtk pnpm --dir apps/starter test", "pnpm --dir apps/starter typecheck", "npm run lint", "pnpm --filter web-kit check",
-              "pnpm test src/a.test.ts", "node --version", "pnpm -v",
-              "command -v node", "rtk proxy sh -c 'command -v node; node --version; pnpm --version'",
-              'export PATH="$HOME/.nvm/versions/node/v24.19.0/bin:$PATH"; unset NODE_OPTIONS; pnpm typecheck',
-              "rtk proxy env -u NODE_OPTIONS PATH=/x/bin:$PATH pnpm test", "env ls", "rg 'foo$' src", "grep -n '^x$' a", "ls *.md", "uniq -c a.txt", "date +%Y", "date -u", "tree -L 2", "sed -n '1,40p' a.py", "sed -n '/start/,/end/p' a", "sed 's/a/b/g' a", "sed -n -e '1p' -e '$p' a", "sort --reverse a", "sort --numeric-sort a", "rg --hidden x", "git log --oneline -3", "node -v", "python3 --version", 'echo "NODE_OPTIONS=[$NODE_OPTIONS]"', "ls ~/.nvm/versions/node", "cat $F", "/x/v24/bin/node --version",
-              "env -u NODE_OPTIONS PATH=/x/bin:/usr/bin /x/bin/node --version", "python3 -m pytest -q tests/test_a.py -k login", "python3 -B -m unittest discover -s tests -p 'test_*.py'"]:
-        check(f"읽기 전용 셸은 둔다: {c}", not bash(c))
-    for c in ["echo x > app.py", "sed -i '' s/a/b/ a.py", "python3 -c 'open(\"a\",\"w\")'", "cat a\npython3 x.py", "ls; rm -rf src",
-              "find . -delete", "git checkout -- a.py", "cat $(echo a)", "tee a.py < b", "awk '{print > \"o\"}' a", "git branch new",
-              "sed -n 'w out' src", "sed 's/a/b/w out' src", "sort -o out src", "git diff --no-index --output=o /dev/null src",
-              "git remote add x /tmp/n", "cat <> new", "awk -f work/r.awk src", "/tmp/cat src", "", "sh -c 'echo x > a.py'", "python3 -m unittest; rm a",
-              "python3 -m pytest $(rm -rf x)", "python3 -m http.server", "rm app.py", "rm -rf __pycache__/../src",
-              "pnpm lint --fix", "npx eslint . --fix", "pnpm install", "pnpm add left-pad", "npx tsc -p tsconfig.app.json",
-              "pnpm test -u", "env -u X python3 x.py", "export X=1; rm a.py", "node version", "npm run lint:fix", "pnpm test-update", "npx tsc --noEmit false",
-              "npx eslint . --output-file report.json", "npx tsc --noEmit --generateTrace trace", "pnpm test --outputFile=r.json",
-              "pnpm lint -- --fix", "npx tsc -p tsconfig.app.json --noEmit", "pnpm --dir -x test", "npm test $TEST_ARGS", "npm test {--test-reporter-destination=r,x}", "pnpm test *", "python3 -m pytest --junitxml=o.xml", "pytest ~/x", "python3 pytest", "python3 -B pytest", "python3 unittest", "xxd -r payload.hex app.txt", "uniq a.txt app.txt", "tree -o app.txt", "file -C -m x", "date 010100002030", "date -s now",
-              "sed -n -e p -e 'w app.txt' input.txt", "sed -n -ewapp.txt input.txt", "sed -n -e p -fscript.sed i", "sed -n '/x/w out' i",
-              "awk -fscript.awk i", "awk 'BEGIN { print 1 | \"tee a\" }'", "sort -ro app.txt i", "sort -roapp.txt i",
-              "sort -S 1b --compress-program=./c.sh i", "file --compile -m magic", "file -cC -m magic", "git -c core.fsmonitor=./w status",
-              "git grep --open-files-in-pager='tee a' x", "rg --pre ./w.sh x a", "rtk grep x a --pre ./w.sh", "rtk proxy sed -n -ewa i",
-              "bash -v", "python3 -v", "env NODE_OPTIONS=--require=./w.cjs npm test", "export NODE_OPTIONS=--require=./w.cjs; npm test",
-              "NODE_OPTIONS=--require=./w.cjs npm test", "sort --o app.txt i", "rtk proxy sort --o app.txt i", "sort --out=app.txt i", "sort --outp app.txt i", "sort --compress=./c i", "file --com -m magic", "file --compi -m m",
-              "git --no-pager diff --ext app.txt", "git diff --textc", "rg --pre=./w x", "rg --hostname=./w x", "awk --fi s.awk i", "/x/bin/node script.js", "./tool --version", "sort $X a", 'pnpm test "$X"', 'X=--outputFile=r pnpm test $X', "node -e 'require(\"fs\").writeFileSync(\"a\",\"x\")'", "node script.js", "pnpm test > out.txt"]:
-        check(f"쓰기·실행 셸은 막는다: {c!r}", bash(c))
-    check("cmd 필드로 온 셸도 검사한다", call("pre", {"tool_name": "exec_command", "tool_input": {"cmd": "touch app.py"}}))
+    # 셸은 내용을 해석하지 않는다: 어느 언어의 검사 명령도, 셸 쓰기도 미리 막지 않는다(쓰기는 턴 끝 사후 감지).
+    for c in ["ls -la; cat a.py | head -5", "python3 -m pytest -q", "pnpm test", "go test ./...", "composer test", "vendor/bin/phpunit",
+              "php artisan test", "./gradlew test", "mvn -q test", "cargo test", "bundle exec rspec", "dotnet test", "npx tsc --noEmit",
+              "rm -rf __pycache__", "echo x > app.py", "sed -i '' s/a/b/ a.py", ""]:
+        check(f"셸은 미리 막지 않는다: {c!r}", not bash(c))
+    check("cmd 필드로 온 셸·열린 셸 입력도 미리 막지 않는다", not call("pre", {"tool_name": "exec_command", "tool_input": {"cmd": "touch app.py"}})
+          and not call("pre", {"tool_name": "write_stdin", "tool_input": {"chars": "x"}}))
+    import re as _re
+    src = GATE.read_text(encoding="utf-8")
+    check("관문 코드에 셸 명령 목록·언어별 검사식·캐시 예외가 없다",
+          not _re.search(r"READ_ONLY|TEST_RUN|JS_CHECK|__pycache__|pytest_cache|\\.pyc|pnpm|unittest", src))
     check("command 가 없는 apply_patch 입력도 대상을 찾아 막는다",
           call("pre", {"tool_name": "apply_patch", "tool_input": {"input": "*** Begin Patch\n*** Add File: app.py\n+x\n*** End Patch"}}))
-    check("이름으로 쓰기임이 드러나는 도구는 막는다", call("pre", {"tool_name": "mcp__files__write_file", "tool_input": {"path": "a"}})
-          and call("pre", {"tool_name": "write_stdin", "tool_input": {"chars": "x"}}))
+    check("이름으로 쓰기임이 드러나는 도구는 막는다", call("pre", {"tool_name": "mcp__files__write_file", "tool_input": {"path": "a"}}))
     check("계획 도구(TodoWrite·update_plan)는 막지 않는다", not call("pre", {"tool_name": "TodoWrite", "tool_input": {"todos": []}})
           and not call("pre", {"tool_name": "update_plan", "tool_input": {"plan": []}}))
     # 승인 판별 고정 표본(work/approval-retro 합의). 표본 밖의 드문 말은 문서의 한계로 두고 에이전트가 다시 확인한다.
@@ -89,32 +68,126 @@ with tempfile.TemporaryDirectory() as t:
     check("승인 턴: 편집과 셸을 연다", not edit("app.py") and not bash("python3 -m pytest"))
     check("다른 세션의 승인은 쓰지 않는다", call("pre", {"tool_name": "Edit", "tool_input": {"file_path": "app.py"}, "session_id": "s2"}))
     check("session_id 가 없으면 승인이 없는 것으로 본다", call("pre", {"tool_name": "Edit", "tool_input": {"file_path": "app.py"}, "session_id": None}))
+    # 승인 수명: 승인은 턴이 아니라 이 작업의 승인 대상에 묶인다. 상태 질문은 유지, 철회·승인 아님이 분명한 승인 말은 닫는다.
+    say("어디까지 됐어요?")
+    check("승인 뒤 상태 질문(승인 말 없음)은 승인을 유지한다", not edit("app.py"))
+    say("테스트는 몇 개 돌렸나요")
+    check("승인 뒤 물음표 없는 상태 질문도 승인을 유지한다", not edit("app.py"))
+    say("취소합니다.")
+    check("철회 메시지는 승인을 닫는다", edit("app.py") and not bash("python3 x.py"))
+    say("어디까지 됐어요?")
+    check("철회 뒤 상태 질문은 다시 열지 않는다", edit("app.py"))
+    say("승인합니다.")
+    say("승인하지 않습니다.")
+    check("승인 말이 들어 있지만 승인이 아닌 메시지(부정)는 닫는다", edit("app.py"))
+    say("승인합니다.")
+    say("진행해 주세요?")
+    check("승인 말이 든 질문은 닫는다(다시 확인하는 쪽)", edit("app.py"))
+    say("승인합니다.")
     say("그런데 재가입은 막아 주세요.")
-    check("다음 사용자 메시지가 승인이 아니면 다시 닫힌다", edit("app.py") and bash("python3 x.py"))
+    check("한계: 지도에 올리지 않은 말뿐인 범위 변경은 관문이 닫지 않는다(검증자가 원문과 대조)", not edit("app.py"))
     say("바로 구현해 주세요: scripts/calc.py 로 두 수의 합")
     check("요청 메시지 안의 '바로 구현' 은 승인이다", not edit("scripts/calc.py"))
+    rec_file = lambda sid="s": repo / ".git" / "awk-gate" / (__import__("hashlib").sha256(sid.encode()).hexdigest()[:24] + ".approval")
+    rec = lambda sid="s": json.loads(rec_file(sid).read_text())
+    check("지도 없는 승인은 대화 안의 계획에 대한 승인으로 기록하고 승인 원문을 남긴다",
+          rec()["conversation_only"] and rec()["prompt"].startswith("바로 구현해 주세요") and rec()["targets"] == {})
 
-    stop = lambda: call("stop", {}) or json.loads(subprocess.run([sys.executable, "-I", str(GATE), "stop"], capture_output=True, text=True,
-                input=json.dumps({"cwd": str(repo), "session_id": "s"})).stdout or "{}").get("decision") == "block"
+    # 승인과 작업 지도: 이 세션이 쓴 지도만 연결, 기준 변경(추가·삭제·수정)·지도 삭제·승인 뒤 새 지도는 닫고, 증거 갱신·다른 작업 지도는 영향 없음
+    def write_map(path, crit, evidence="", via_tool=True, sid="s"):
+        f = repo / path
+        if via_tool:
+            call("pre", {"tool_name": "Write", "tool_input": {"file_path": str(f)}, "session_id": sid})
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(f"# 작업\n\n## 기준\n\n{crit}\n\n## 증거\n\n{evidence}\n")
+    s2 = lambda text: call("prompt", {"prompt": text, "session_id": "m"})
+    edit2 = lambda f: call("pre", {"tool_name": "Edit", "tool_input": {"file_path": f}, "session_id": "m"})
+    write_map("work/other/work.md", "| O1 | 다른 작업 |", via_tool=False)  # 다른 세션·사용자가 쓴 다른 작업 지도
+    s2("회원 탈퇴를 만들어 주세요.")
+    write_map("work/withdraw/work.md", "| W1 | 탈퇴하면 로그인 불가 |", sid="m")
+    check("승인 전: 지도는 쓸 수 있고 제품 편집은 막힌다", edit2("app.py"))
+    s2("추천안대로 승인합니다. 진행해 주세요.")
+    check("승인 대상은 이 세션이 쓴 지도만이다(다른 작업 지도는 연결하지 않음)", sorted(rec("m")["targets"]) == ["work/withdraw/work.md"]
+          and not rec("m")["conversation_only"])
+    check("승인 뒤 제품 편집이 열린다", not edit2("app.py"))
+    write_map("work/withdraw/work.md", "| W1 | 탈퇴하면 로그인 불가 |", "| W1 | pytest 통과 | 충족 |", sid="m")
+    check("승인 뒤 `## 증거` 만 갱신하면 승인이 유지된다", not edit2("app.py"))
+    write_map("work/other/work.md", "| O1 | 다른 작업 | 바뀜 |", via_tool=False)
+    s2("어디까지 됐어요?")
+    check("다른 작업의 지도가 (이 세션의 턴 밖에서) 바뀌어도 이 승인은 그대로다", not edit2("app.py"))
+    s2("승인합니다.")
+    check("다시 승인하면 그때의 기준으로 다시 묶인다", not edit2("app.py"))
+    write_map("work/withdraw/work.md", "| W1 | 탈퇴하면 로그인 불가 |\n| W2 | 재가입도 막는다 |", sid="m")
+    check("승인 뒤 이 작업 지도의 기준에 조건을 더하면 닫힌다", edit2("app.py"))
+    s2("어디까지 됐어요?")
+    check("기준이 바뀐 채로는 상태 질문으로 다시 열리지 않는다", edit2("app.py"))
+    write_map("work/withdraw/work.md", "| W1 | 탈퇴하면 로그인 불가 |\n| W2 | 재가입도 막는다 |", "approved: true\n사용자 승인됨", sid="m")
+    check("에이전트가 지도 증거에 approved: true·승인됨을 써도 열리지 않는다(사용자 메시지만 연다)", edit2("app.py"))
+    s2("승인합니다.")
+    write_map("work/withdraw/work.md", "| W1 | 탈퇴하면 로그인 불가 |", sid="m")
+    check("승인 뒤 기준에서 조건을 지우면 닫힌다", edit2("app.py"))
+    s2("승인합니다.")
+    (repo / "work/withdraw/work.md").unlink()
+    check("승인 뒤 승인 대상 지도를 (셸로) 지우면 닫힌다", edit2("app.py"))
+    s2("진행해 주세요: work/withdraw 다시 만들고 진행")
+    write_map("work/withdraw/work.md", "| W1 | 탈퇴하면 로그인 불가 |", sid="m")
+    check("기준이 있는 지도를 승인 뒤 다시 만들면 닫힌다", edit2("app.py"))
+    s2("work/withdraw/work.md 기준대로 승인합니다.")
+    check("승인 메시지가 지도 경로를 가리키면 그 근거와 함께 대상으로 묶는다",
+          rec("m")["targets"].get("work/withdraw/work.md") in ("승인 메시지가 경로로 가리킴", "승인 전에 이 세션이 쓴 지도") and not edit2("app.py"))
+    write_map("work/extra/work.md", "| X1 | 승인 뒤 새로 정한 범위 |", via_tool=False)
+    check("승인 뒤 이 세션의 턴 동안 (셸로) 새 지도를 쓰면 보호 없이 넘어가지 않고 닫힌다", edit2("app.py"))
+    stop_m = subprocess.run([sys.executable, "-I", str(GATE), "stop"], capture_output=True, text=True,
+                            input=json.dumps({"cwd": str(repo), "session_id": "m"}))
+    check("기준 변경으로 닫힌 턴 끝에는 (제품 변경이 없으면) 막지 않는다", '"block"' not in stop_m.stdout)
+    import shutil
+    shutil.rmtree(repo / "work")
+    say("취소합니다.")  # 아래 턴 끝 검사들은 승인이 닫힌 세션 s 에서 본다
+
+    def stop_reason():
+        r = subprocess.run([sys.executable, "-I", str(GATE), "stop"], capture_output=True, text=True,
+                           input=json.dumps({"cwd": str(repo), "session_id": "s"}))
+        out = json.loads(r.stdout) if r.stdout.strip() else {}
+        return out.get("reason", "") if out.get("decision") == "block" else ""
+    stop = lambda: bool(stop_reason())
     say("검색만 해 주세요.")
     check("승인 없는 턴에 제품 파일이 그대로면 턴을 끝낼 수 있다", not stop())
     (repo / "app.py").write_text("hidden write\n")
-    check("승인 없는 턴에 숨은 쓰기로 제품 파일이 바뀌면 되돌리게 막는다", stop())
+    reason = stop_reason()
+    check("승인 없는 턴에 셸 쓰기로 제품 파일이 바뀌면 턴 끝에 그 파일 이름을 알린다", "app.py" in reason)
+    check("관문은 바뀐 파일을 되돌리지 않고, 일괄 되돌리기를 시키지 않는다",
+          (repo / "app.py").read_text() == "hidden write\n" and "일괄 되돌리기 금지" in reason and "확실한 파일만" in reason)
     import hashlib
     blocks_file = repo / ".git" / "awk-gate" / (hashlib.sha256(b"s").hexdigest()[:24] + ".blocks")
-    check("같은 턴 끝에 두 번 불려도(전역·프로젝트 훅) 같은 판단을 내고 되돌리기 요청 횟수는 한 번만 센다",
+    check("같은 턴 끝에 두 번 불려도(전역·프로젝트 훅) 같은 판단을 내고 알림 횟수는 한 번만 센다",
           stop() and blocks_file.read_text().strip() == "1")
     (repo / "work").mkdir(exist_ok=True); (repo / "app.py").unlink(); (repo / "work" / "w.md").write_text("x")
+    say("검색만 해 주세요.")
+    (repo / "work" / "w.md").write_text("y")
     check("work/ 기록만 바뀌면 막지 않는다", not stop())
-    (repo / "tests" / "__pycache__").mkdir(parents=True); (repo / "tests" / "__pycache__" / "t.cpython-314.pyc").write_bytes(b"\0")
-    (repo / ".pytest_cache").mkdir(); (repo / ".pytest_cache" / "v").write_text("x")
-    (repo / "src" / "deep" / "__pycache__").mkdir(parents=True); (repo / "src" / "deep" / "__pycache__" / "note").write_text("x")
-    (repo / "src" / ".pytest_cache" / "v").mkdir(parents=True); (repo / "src" / ".pytest_cache" / "v" / "nodeids").write_text("[]")
-    (repo / "__pycache__").mkdir(); (repo / "__pycache__" / "x.pyc").write_bytes(b"\0")
-    check("테스트 캐시(__pycache__ 안 .pyc, .pytest_cache)만 생기면 막지 않는다", not stop())
-    (repo / "src" / "a.py").write_text("x=1\n")
-    check("캐시와 함께 하위 경로의 제품 파일이 생기면 막는다", stop())
+    # 사용자가 턴 시작 전에 만든 미커밋 변경은 알림 대상이 아니고 내용도 그대로 남는다
+    (repo / "user.txt").write_text("사용자 작업 중\n")
+    say("검색만 해 주세요.")
+    (repo / "agent.txt").write_text("에이전트가 셸로 씀\n")
+    reason = stop_reason()
+    check("턴 시작 전부터 있던 사용자 변경은 알림에 넣지 않고 그대로 둔다",
+          "agent.txt" in reason and "user.txt" not in reason and (repo / "user.txt").read_text() == "사용자 작업 중\n")
+    (repo / "agent.txt").unlink(); (repo / "user.txt").unlink()
+    # 생성물은 프로젝트 .gitignore 가 정한다(언어별 예외 없음): 무시되지 않은 캐시는 제품 파일 변화로 보고, 무시된 것은 보지 않는다
+    say("검사만 해 주세요.")
+    (repo / "build").mkdir(); (repo / "build" / "out.o").write_bytes(b"\0")
+    check("프로젝트가 무시하지 않은 생성물은 변경으로 알린다", "build/out.o" in stop_reason())
+    (repo / ".gitignore").write_text("build/\n")
+    say("검사만 해 주세요.")
+    (repo / "build" / "out2.o").write_bytes(b"\0")
+    check("프로젝트 .gitignore 가 무시하는 생성물은 보지 않는다", not stop())
+    (repo / "src").mkdir(); (repo / "src" / "a.py").write_text("x=1\n")
+    check("생성물과 함께 제품 파일이 생기면 알린다", "src/a.py" in stop_reason())
     (repo / "src" / "a.py").unlink()
+    (repo / "keep.txt").write_text("k\n"); subprocess.run(["git", "add", "keep.txt"], cwd=repo)
+    say("검사만 해 주세요.")
+    (repo / "keep.txt").unlink()
+    check("승인 없는 턴에 셸이 지운 제품 파일도 알린다", "keep.txt" in stop_reason())
     say("검사만 해 주세요.")
     (repo / "app2.py").write_text("x\n")
     stop(); (repo / "app2.py").unlink()

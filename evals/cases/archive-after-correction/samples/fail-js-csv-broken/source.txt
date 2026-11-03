@@ -1,0 +1,1 @@
+fail-csv-broken 의 JavaScript 변형(같은 승인 직전 계획·같은 판정 기대). 제품 구현만 todo.js 로 옮겼다. 원래 출처: fail-csv-broken/source.txt

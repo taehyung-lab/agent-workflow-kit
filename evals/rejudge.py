@@ -26,15 +26,24 @@ for root in sys.argv[1:]:
         ran = len(list(Path(base).parent.glob(Path(base).name + ".t*.jsonl")))
         env["EVALS_GATE"] = "true" if gate else "false"
         env["EVALS_INPUT"] = m.get("input", "with-approval" if ran > prompts else "original")
+        env["EVALS_LANG"] = m.get("lang") or ""
         r = subprocess.run([sys.executable, "-I", str(cases / m["case"] / "check.py"), base + ".files", base + ".jsonl"],
                            capture_output=True, text=True, env=env)
         out = (r.stdout + r.stderr).strip()
-        old = "PASS" if m["check_passed"] else ("REVIEW" if m.get("check_needs_review") else "FAIL")
-        new = {0: "PASS", 2: "REVIEW"}.get(r.returncode, "FAIL")
+        old = "PASS" if m["check_passed"] else ("REVIEW" if m.get("check_needs_review") else ("UNVERIFIED" if m.get("check_unverified") else "FAIL"))
+        new = {0: "PASS", 2: "REVIEW", 1: "FAIL"}.get(r.returncode, "UNVERIFIED")
+        if not out.startswith(new):  # 판정 검사 자체의 오류(예외 등)는 실패가 아니라 미확인이다
+            new = "UNVERIFIED"
         if old != new:
             print(f"{Path(base).name}: {old} -> {new}  {out[:120]}")
         import hashlib
         check_hash = hashlib.sha256((cases / m["case"] / "check.py").read_bytes()).hexdigest()[:12]
-        m.setdefault("rejudge_history", []).append({"verdict": old, "check_output": m.get("check_output", "")})
-        m.update(check_passed=r.returncode == 0, check_needs_review=r.returncode == 2, check_output=out, rejudged=True, check_sha=check_hash)
+        # 원시 기록(.jsonl·.files)은 바꾸지 않는다. 이전 판정과 그때의 판정기 지문을 이력으로 남기고 새 지문을 기록한다.
+        here = Path(__file__).resolve().parent
+        judge_version = hashlib.sha256(b"".join(hashlib.sha256(f.read_bytes()).digest() for f in
+                                               [cases / m["case"] / "check.py"] + [here / n for n in ("judge.py", "observe.py", "transcript.py", "verdict.py")] if f.is_file())).hexdigest()[:12]
+        m.setdefault("rejudge_history", []).append({"verdict": old, "check_output": m.get("check_output", ""),
+                                                    "judge_version": m.get("judge_version"), "check_sha": m.get("check_sha")})
+        m.update(check_passed=new == "PASS", check_needs_review=new == "REVIEW", check_unverified=new == "UNVERIFIED", check_output=out, rejudged=True, check_sha=check_hash,
+                 judge_version=judge_version)
         meta_path.write_text(json.dumps(m, ensure_ascii=False, indent=1), encoding="utf-8")

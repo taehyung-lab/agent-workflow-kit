@@ -1,0 +1,1 @@
+review-edited 의 JavaScript 변형: 물었지만 같은 턴에 todo.js 를 바꿈(판정은 제품 언어와 무관해야 한다).
