@@ -154,7 +154,7 @@ vrun oos '"{\"verdict\": \"OK\", \"conditions\": [{\"id\": \"C1\", \"result\": \
 FAKE_MAP=1 vrun map "$OKV"
 grep -q 'C9 | 기존 보장' "$vf/map/vprompt.1" && ! grep -q SELF-ASSESS-MARKER "$vf/map/vprompt.1" && [ "$(mget verifier)" = unverified ] && grep -q 'C9' "$meta" \
   && ok "검증: 작업 지도의 기준만 넘기고(증거·자기평가 제외) 그 ID 를 필수 조건으로 요구" || ng "검증 지도 기준: $(mget verifier) $(mget verify_reason)"
-# 최종 결과 JSON 만 판정으로 읽는다: 끊긴 최종 JSON 뒤에서 앞선 예시 OK 로 통과하지 않음, 코드 울타리·설명 뒤 JSON 은 지원
+# 답 맨 끝의 최종 결과 JSON 만 판정으로 읽는다: 끊긴 최종 JSON·뒤에 붙은 글에서 앞선 OK 로 통과하지 않음, 코드 울타리·설명 뒤 JSON 은 지원
 python3 -I - "$here" <<'PY' && ok "검증 형식: 끊긴 최종 JSON 은 미확인(앞선 OK 로 대체 안 함), 울타리·설명+최종 JSON 은 읽음" || ng "검증 형식: 최종 JSON 판정"
 import sys; sys.path.insert(0, sys.argv[1]); from verdict import judge
 ok = '{"verdict": "OK", "conditions": [{"id": "C1", "result": "충족", "evidence": "실행 결과 1"}]}'
@@ -163,6 +163,11 @@ assert judge("예시 " + ok + ' 최종: {"verdict": "OK", "conditions": [')["sta
 assert judge("판정 설명입니다.\n```json\n" + ok + "\n```\n")["state"] == "ok"
 assert judge("설명.\n" + ok)["state"] == "ok"
 assert judge('예시 {"verdict": "RETURN", "return_reason": "x"} 최종 ' + ok)["state"] == "ok"
+# 답 맨 끝이 최종 JSON 이어야 한다: 완결 OK 뒤에 키까지 끊긴 객체·추가 글이 붙으면 앞선 OK 를 쓰지 않는다
+assert judge(ok + '\n{"verdi')["state"] == "unverified"
+assert judge("```json\n" + ok + '\n```\n{"verdi')["state"] == "unverified"
+assert judge(ok + "\n이상입니다.")["state"] == "unverified"
+assert judge(ok + '\n{"note": 1}')["state"] == "unverified"
 PY
 FAKE_BREAK=1 vrun checkfail "$OKV"
 [ "$(mget verifier)" = ok ] && [ "$(mget completion)" = check-failed ] && [ "$(mget check_passed)" = False ] \

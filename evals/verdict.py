@@ -25,24 +25,31 @@ ID = r"[A-Z]{1,3}\d{1,3}"
 
 
 def last_json(text):
-    """답의 최종 결과 JSON. 마지막 `"verdict":` 키를 담은 완결 객체여야 한다(코드 울타리 ``` 안이어도 된다).
-    그 뒤에 끊기거나 깨진 결과 JSON 이 있으면 앞선 완결 객체(예시 등)를 대신 쓰지 않는다.
+    """답의 최종 결과 JSON. 답 맨 끝(뒤 공백과 닫는 코드 울타리 ``` 는 빼고)에서 끝나는 완결 객체이고 `verdict` 키가 있어야 한다.
+    그 앞의 설명·예시 JSON 은 읽지 않는다. 끝에 끊긴 객체나 다른 글이 붙어 있으면 앞선 완결 객체로 대신하지 않고 실패로 본다.
     돌려줌: (객체 또는 None, 실패 사유)."""
-    keys = [m.start() for m in re.finditer(r'"verdict"\s*:', text)]
-    if not keys:
-        return None, "결과 형식(JSON)이 없다" if text.strip() else "빈 답"
+    if not text.strip():
+        return None, "빈 답"
+    body = text.rstrip()
+    if body.endswith("```"):
+        body = body[:-3].rstrip()
     dec = json.JSONDecoder()
-    last = keys[-1]
-    for i in range(last, -1, -1):  # 마지막 verdict 키를 감싸는 가장 가까운 여는 괄호부터 해석한다
-        if text[i] != "{":
-            continue
-        try:
-            obj, end = dec.raw_decode(text[i:])
-        except ValueError:
-            continue
-        if isinstance(obj, dict) and i + end > last and "verdict" in obj:
-            return obj, ""
-    return None, "최종 결과 JSON 이 끊기거나 형식이 틀렸다(앞선 JSON 으로 대신하지 않는다)"
+    if body.endswith("}"):
+        # 끝 괄호에서 정확히 끝나는 객체는 가장 바깥 객체 하나뿐이다(안쪽 객체는 그 앞에서 끝난다)
+        for i in range(len(body) - 1, -1, -1):
+            if body[i] != "{":
+                continue
+            try:
+                obj, end = dec.raw_decode(body, i)
+            except ValueError:
+                continue
+            if end == len(body):
+                if isinstance(obj, dict) and "verdict" in obj:
+                    return obj, ""
+                break
+    if '"verdict"' not in text:
+        return None, "결과 형식(JSON)이 없다"
+    return None, "답 끝의 최종 결과 JSON 이 끊기거나 형식이 틀렸다(앞선 JSON 으로 대신하지 않는다)"
 
 
 def judge(final, required=()):
