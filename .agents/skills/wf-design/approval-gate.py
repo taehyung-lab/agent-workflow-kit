@@ -24,9 +24,10 @@ import hashlib, json, os, re, subprocess, sys, time
 from pathlib import Path
 
 TAG = "[approval-gate]"
-# 사용자 메시지가 승인 표현을 담고, 부정·질문·조건·인용 표지가 없을 때만 승인으로 본다.
+# 승인 표현이 든 **문장 안에** 부정·질문·검토·인용 표지가 없으면 승인으로 본다. 다른 문장의 범위 제한("다만 영어는 빼고요")은
+# 승인을 막지 않는다. 그 제한을 지키는 것은 에이전트 몫이고, 관문은 범위를 판단하지 않는다.
 APPROVE = r"(승인합니다|승인할게|승인해요|승인이요|^\s*승인\s*[.!]?\s*$|진행해|진행 해|진행합시다|진행하세요|바로\s*(구현|진행|만들|고쳐|바꿔)|go ahead|approved?\b)"
-NOT_APPROVE = r"(마세요|말고|말아|하지\s*마|않|보류|금지|여부|검토|예시|인지|일까|할까|나요|\?|？|다만|단,|제외|빼고|\bnot\b|don't|\bno\b)"
+NOT_APPROVE = r"(마세요|말고|말아|하지\s*마|않|보류|금지|여부|검토|예시|인지|일까|할까|까요|나요|\?|？|\bnot\b|don't|\bno\b)"
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch"}
 SHELL_TOOLS = {"Bash", "shell", "exec_command", "local_shell", "unified_exec"}
 WRITE_NAME = r"(write|edit|create|delete|remove|update|patch|move|rename|insert|replace|upload|stdin|commit|push)"
@@ -34,7 +35,7 @@ NOT_WRITE = {"TodoWrite", "update_plan", "ExitPlanMode", "EnterPlanMode"}  # 이
 ALLOWED_WRITE_DIR = "work"  # 설계 기록(work/<작업명>/work.md)은 승인 전에도 쓸 수 있다
 SPEC = ["--", ".", ":(exclude).agents", ":(exclude)work", ":(exclude).codex", ":(exclude).claude",
         ":(exclude,glob)**/__pycache__/**", ":(exclude,glob)**/.pytest_cache/**", ":(exclude,glob)**/*.pyc", ":(exclude)CLAUDE.md", ":(exclude)AGENTS.md"]
-READ_ONLY = {"ls", "cat", "head", "tail", "wc", "grep", "rg", "find", "sed", "awk", "pwd", "echo", "printf", "nl", "sort",
+READ_ONLY = {"printenv", "ls", "cat", "head", "tail", "wc", "grep", "rg", "find", "sed", "awk", "pwd", "echo", "printf", "nl", "sort",
              "uniq", "cut", "tr", "file", "stat", "tree", "du", "which", "type", "jq", "diff", "cmp", "basename", "dirname",
              "realpath", "date", "cd", "true", "test", "[", "column", "od", "sha256sum", "shasum", "md5"}
 GIT_READ = {"status", "diff", "log", "show", "ls-files", "rev-parse", "blame", "grep", "cat-file", "shortlog", "describe"}
@@ -46,7 +47,7 @@ EXPANDS = "\x00$"  # 셸이 실행 때 펼치는 $(작은따옴표 밖). 환경 
 _ADDR = r"(\d+|\$|/[^/]*/)(,(\d+|\$|/[^/]*/))?"
 SED_READ = re.compile(r"^(" + _ADDR + r")?\s*([pdq=]|s/[^/]*/[^/]*/[gpI0-9]*)(\s*;\s*(" + _ADDR + r")?\s*([pdq=]|s/[^/]*/[^/]*/[gpI0-9]*))*\s*;?$")
 ENV_OK = re.compile(r"^(PATH|LANG|LC_\w+|TZ|CI|NO_COLOR|FORCE_COLOR|NODE_ENV|TERM|COLUMNS)=")  # 실행할 코드를 바꾸지 않는 환경 변수만 지정한다
-NO_WRITE_OPTIONS = {"echo", "printf", "pwd", "which", "type", "test", "[", "true", "basename", "dirname", "ls", "cat", "head",
+NO_WRITE_OPTIONS = {"printenv", "echo", "printf", "pwd", "which", "type", "test", "[", "true", "basename", "dirname", "ls", "cat", "head",
                     "tail", "wc", "stat", "du", "cd"}  # 어떤 인자를 받아도 파일을 쓰거나 다른 프로그램을 실행하지 않는 명령
 SHELL_WORDS = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "fi", "done", "}"}
 MAX_STOP_BLOCKS = 2
@@ -113,7 +114,13 @@ def product_state(root, seen=None):
 
 
 def is_approval(prompt):
-    return bool(re.search(APPROVE, prompt, re.I | re.M)) and not re.search(NOT_APPROVE, prompt, re.I)
+    for m in re.finditer(APPROVE, prompt, re.I | re.M):
+        start = max(prompt.rfind(c, 0, m.start()) for c in ".!?。？\n") + 1
+        ends = [i for i in (prompt.find(c, m.end()) for c in ".!?。？\n") if i >= 0]
+        end = min(ends) + 1 if ends else len(prompt)
+        if not re.search(NOT_APPROVE, prompt[start:end], re.I):
+            return True
+    return False
 
 
 def tokens(cmd):

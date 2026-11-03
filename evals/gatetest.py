@@ -36,7 +36,7 @@ with tempfile.TemporaryDirectory() as t:
     check("work/ 를 벗어나는 경로(..)는 막는다", edit(str(repo / "work/../app.py")))
     check("읽기 도구는 막지 않는다", not call("pre", {"tool_name": "Read", "tool_input": {"file_path": "app.py"}}))
     for c in ["ls -la; cat a.py | head -5", "rg -n 'a|b' src", "git status && git diff HEAD", "sed -n 1,20p a.py", "find . -name '*.py'",
-              "cat a.py 2>/dev/null", "grep x a 2>&1 | wc -l", "rtk git log -3", "cd sub && ls", "rtk read AGENTS.md",
+              "cat a.py 2>/dev/null", "printenv NODE_OPTIONS", "grep x a 2>&1 | wc -l", "rtk git log -3", "cd sub && ls", "rtk read AGENTS.md",
               "git -C . status", "git --no-pager -C . diff", "rg \">\" src", "echo '>'", "sed -n '/w/p' a.py",
               "rtk proxy sh -c 'if [ -f v ]; then cat v; else cat AGENTS.md; fi'", "rtk --raw-output=true rg --files -g '!node_modules'",
               "rtk python3 -m unittest discover -s tests", "python3 -m pytest -q tests/test_a.py",
@@ -73,9 +73,12 @@ with tempfile.TemporaryDirectory() as t:
     check("계획 도구(TodoWrite·update_plan)는 막지 않는다", not call("pre", {"tool_name": "TodoWrite", "tool_input": {"todos": []}})
           and not call("pre", {"tool_name": "update_plan", "tool_input": {"plan": []}}))
     for text in ["승인하지 말고 먼저 설명만 해 주세요.", "승인 여부를 검토해 주세요", "진행해 주세요는 예시일 뿐입니다", "do not approve",
-                 "보류합니다. 바로 구현하지 마세요", "승인합니다. 다만 결제 모듈은 바꾸지 마세요", "진행해도 될까요?"]:
+                 "보류합니다. 바로 구현하지 마세요", "진행해도 될까요?", "진행해 주실 수 있나요?", "승인할게요?"]:
         say(text)
         check(f"승인이 아니다: {text}", edit("app.py"))
+    for text in ["승인합니다. 다만 영어 문구는 빼고요.", "승인합니다. 다만 결제 모듈은 바꾸지 마세요", "진행해 주세요. 테스트는 꼭 돌려 주세요."]:
+        say(text)
+        check(f"범위를 좁히는 다른 문장이 있어도 승인이다: {text}", not edit("app.py"))
     say("좋습니다. 승인합니다.")
     check("승인 턴: 편집과 셸을 연다", not edit("app.py") and not bash("python3 -m pytest"))
     check("다른 세션의 승인은 쓰지 않는다", call("pre", {"tool_name": "Edit", "tool_input": {"file_path": "app.py"}, "session_id": "s2"}))
