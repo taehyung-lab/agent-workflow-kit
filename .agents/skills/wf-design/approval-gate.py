@@ -11,6 +11,8 @@
 예: 사용자가 "회원 탈퇴 기능을 만들어 주세요" 라고만 보내면 에이전트는 코드를 읽을 수는 있지만 accounts.py 를 고치려는 순간
 거절 사유가 돌아온다. 에이전트는 만들 결과와 미정을 보여 주고 묻는다. 사용자가 "승인합니다" 라고 답한 턴에 쓰기가 열린다.
 
+역할 나눔: 셸 명령의 실행 전 판정은 흔한 쓰기 실수를 먼저 막는 장치다. 셸은 옵션·설정·외부 프로그램으로 쓰기를 숨길 수 있어
+실행 전 판정만으로 완전하지 않다. 승인 전 턴에 제품 파일이 바뀌지 않았다는 최종 보장은 턴 끝 상태 검사(stop)가 맡는다.
 전제: 에이전트가 일부러 관문을 부수려 하지는 않지만 묻지 않고 넘어가려 할 수는 있다. 승인 기록(`.git/awk-gate/`)과
 이 파일은 Codex 작업 공간 쓰기 모드에서는 각각 읽기 전용(.git)·작업 공간 안이다. Claude 는 같은 보호가 없다.
 의도적인 위조까지 막으려면 하네스의 읽기 전용 실행 모드(운영체제 수준 쓰기 제한)를 함께 써야 한다.
@@ -33,18 +35,32 @@ SPEC = ["--", ".", ":(exclude).agents", ":(exclude)work", ":(exclude).codex", ":
         ":(exclude)**/__pycache__/**", ":(exclude)**/.pytest_cache/**", ":(exclude)**/*.pyc", ":(exclude)CLAUDE.md", ":(exclude)AGENTS.md"]
 READ_ONLY = {"ls", "cat", "head", "tail", "wc", "grep", "rg", "find", "sed", "awk", "pwd", "echo", "printf", "nl", "sort",
              "uniq", "cut", "tr", "file", "stat", "tree", "du", "which", "type", "jq", "diff", "cmp", "basename", "dirname",
-             "realpath", "date", "cd", "true", "test", "[", "column", "od", "xxd", "sha256sum", "shasum", "md5"}
+             "realpath", "date", "cd", "true", "test", "[", "column", "od", "sha256sum", "shasum", "md5"}
 GIT_READ = {"status", "diff", "log", "show", "ls-files", "rev-parse", "blame", "grep", "cat-file", "shortlog", "describe"}
 GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
 RTK_READ = {"read", "ls", "grep", "find", "json", "log", "diff", "deps", "gain"}
 OPERATORS = ["&&", "||", ";;", ">>", "&>", ">&", "<>", "<<<", "<<", ";", "|", "&", ">", "<", "(", ")"]
+GLOB = "\x01"  # 따옴표 밖의 {} * ? [ ~: 셸이 실행 때 다른 인자로 펼칠 수 있다
+EXPANDS = "\x00$"  # 셸이 실행 때 펼치는 $(작은따옴표 밖). 환경 변수 지정 값에서만 허용한다
+_ADDR = r"(\d+|\$|/[^/]*/)(,(\d+|\$|/[^/]*/))?"
+SED_READ = re.compile(r"^(" + _ADDR + r")?\s*([pdq=]|s/[^/]*/[^/]*/[gpI0-9]*)(\s*;\s*(" + _ADDR + r")?\s*([pdq=]|s/[^/]*/[^/]*/[gpI0-9]*))*\s*;?$")
+ENV_OK = re.compile(r"^(PATH|LANG|LC_\w+|TZ|CI|NO_COLOR|FORCE_COLOR|NODE_ENV|TERM|COLUMNS)=")  # 실행할 코드를 바꾸지 않는 환경 변수만 지정한다
+NO_WRITE_OPTIONS = {"echo", "printf", "pwd", "which", "type", "test", "[", "true", "basename", "dirname", "ls", "cat", "head",
+                    "tail", "wc", "stat", "du", "cd"}  # 어떤 인자를 받아도 파일을 쓰거나 다른 프로그램을 실행하지 않는 명령
 SHELL_WORDS = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "fi", "done", "}"}
 MAX_STOP_BLOCKS = 2
-TEST_RUN = re.compile(r"^(rtk\s+)?(python3?\s+-m\s+(unittest|pytest)|pytest)(\s+[-\w./:=]+)*$")
+TEST_RUN = re.compile(r"^(rtk\s+)?(python3?(\s+-B)?\s+-m\s+(unittest|pytest)|pytest)"
+                      r"(\s+(discover|-q|-v|-x|(-k|-s|-p|-t)\s+[\w./:*?-]+|[\w./:][\w./:-]*))*$")
+# 패키지 매니저로 돌리는 프로젝트의 기존 검사 스크립트(테스트·타입 검사·린트·전체 검사). 스크립트 이름 뒤에는 파일 경로만 받는다
+# (옵션을 붙이면 출력 파일·고치기 같은 쓰기가 열릴 수 있어 승인이 필요하다). 도구를 직접 부르는 실행(npx tsc 등)도 승인이 필요하다.
+JS_CHECK = re.compile(r"^(rtk\s+)?(pnpm|npm|yarn|bun)(\s+(--dir|-C|--filter|--prefix|--workspace|-w)\s+[^\s-]\S*)*(\s+run)?"
+                      r"\s+(test|typecheck|type-check|lint|check)(\s+[^\s-][^\s]*)*$")
+VERSION = re.compile(r"^(rtk\s+)?(command\s+-v\s+[\w.-]+|[\w.-]+\s+--version|(node|pnpm|npm|yarn|bun|deno|go|tsc)\s+(-v|-V))$")  # 도구 존재·버전 확인
 REASON = (f"{TAG} 사용자가 이번 메시지에서 승인하지 않아 제품 파일 쓰기와 읽기 전용으로 확인되지 않는 셸 명령을 막았습니다. "
           "읽어서 조사한 뒤, 사용자가 받을 결과(원문·계약 근거와 함께)와 아직 정해지지 않은 점, 확인 방법을 보여 주고 "
           "추천과 함께 승인을 물으세요. 다른 명령으로 우회하지 마세요. 사용자가 '승인합니다'·'진행해 주세요' 처럼 답한 턴에 쓰기가 열립니다. "
-          "설계 기록은 work/ 아래에 쓸 수 있습니다.")
+          "설계 기록은 work/ 아래에 쓸 수 있습니다. 조사 중 검사는 승인 없이 돌릴 수 있습니다: package.json 의 test·typecheck·lint·check 스크립트"
+          "(예: pnpm --dir <앱> test, 옵션 없이)나 python3 -m pytest·unittest. 도구를 직접 부르는 실행(./node_modules/.bin/tsc, npx vitest 등)은 승인이 필요합니다.")
 
 
 def log(what):
@@ -57,7 +73,8 @@ def log(what):
 
 
 def git(root, *args, ok=(0,)):
-    r = subprocess.run(["git", "-C", str(root), *args], capture_output=True)
+    # 저장소 설정의 외부 프로그램(fsmonitor·외부 diff·textconv)이 관문의 상태 수집 중에 실행되지 않게 끈다.
+    r = subprocess.run(["git", "-C", str(root), "-c", "core.fsmonitor=false", "-c", "diff.external=", *args], capture_output=True)
     if r.returncode not in ok:
         raise RuntimeError(f"git {' '.join(args[:2])} 실패")
     return r.stdout
@@ -68,13 +85,29 @@ def locate(cwd):
     return Path(out[0]), Path(out[1], "awk-gate")
 
 
-def product_state(root):
-    """제품 파일(work/·키트·지침·캐시 제외)의 HEAD 대비 상태 지문."""
-    head = git(root, "rev-parse", "--verify", "-q", "HEAD", ok=(0, 1)).strip()
-    h = hashlib.sha256(head + (git(root, "diff", "--binary", "HEAD", *SPEC) if head else b""))
-    for f in sorted(x for x in git(root, "ls-files", "-z", "--others", "--exclude-standard", *SPEC).decode().split("\0") if x):
+def product_state(root, seen=None):
+    """제품 파일(work/·키트·지침·캐시 제외)의 상태 지문. 파일 목록만 git 에서 받고 내용은 디스크에서 직접 읽는다
+    (git diff 는 저장소 설정의 clean filter·외부 diff 같은 프로그램을 실행할 수 있어 쓰지 않는다)."""
+    files = git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", *SPEC).decode().split("\0")
+    seen = (seen or set()) | {os.path.realpath(root)}
+    h = hashlib.sha256()
+    for f in sorted(set(x for x in files if x)):
         p = Path(root, f)
-        h.update(f.encode() + b"\0" + (p.read_bytes() if p.is_file() and not p.is_symlink() else b"link"))
+        if p.is_symlink():
+            h.update(f.encode() + b"\0link:" + os.readlink(p).encode() + b"\0")
+        elif p.is_file():
+            mode = b"x" if os.access(p, os.X_OK) else b"-"  # 실행 권한 변경도 제품 변경이다(git 이 기록하는 유일한 권한)
+            try:
+                body = hashlib.sha256(p.read_bytes()).digest()
+            except OSError:  # 읽을 수 없게 된 파일도 변경으로 센다(크기·수정 시각·권한으로 지문을 만든다)
+                st = p.stat()
+                body = f"unreadable:{st.st_mode}:{st.st_size}:{st.st_mtime_ns}".encode()
+            h.update(f.encode() + b"\0" + mode + body)
+        elif p.is_dir() and (p / ".git").exists() and os.path.realpath(p) not in seen:  # 하위 저장소(몇 단계든): 체크아웃 버전과 파일
+            head = git(p, "rev-parse", "--verify", "-q", "HEAD", ok=(0, 1)).strip()
+            h.update(f.encode() + b"\0sub:" + head + product_state(p, seen).encode())
+        else:
+            h.update(f.encode() + b"\0missing\0")
     return h.hexdigest()
 
 
@@ -100,7 +133,7 @@ def tokens(cmd):
             elif c == "\\" and q == '"' and i + 1 < len(cmd):
                 i += 1; cur += cmd[i]
             else:
-                cur += c
+                cur += EXPANDS if (c == "$" and q == '"') else c
         elif c in "'\"":
             q, quoted = c, True
         elif c == "\\" and i + 1 < len(cmd):
@@ -113,7 +146,7 @@ def tokens(cmd):
             op = next((o for o in OPERATORS if cmd.startswith(o, i)), None)
             if op:
                 flush(); out.append((op, True)); i += len(op); continue
-            cur += c
+            cur += EXPANDS if c == "$" else (GLOB + c if c in "{}*?[~" else c)
         i += 1
     if q:
         return None
@@ -153,19 +186,49 @@ def shell_read_only(cmd):
     return True
 
 
+def long_opt(args, *names):
+    """긴 옵션이 names 중 하나이거나 그 줄임(--out → --output)이면 참. GNU 도구는 겹치지 않는 줄임을 받는다."""
+    for a in args:
+        if a.startswith("--") and len(a) > 2:
+            opt = a[2:].split("=", 1)[0]
+            if any(n.startswith(opt) for n in names):
+                return True
+    return False
+
+
 def segment_read_only(seg):
-    while seg and (re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", seg[0]) or seg[0] in SHELL_WORDS):  # 환경 변수 지정·if/then 같은 셸 문법어
+    while seg and (ENV_OK.match(seg[0]) or seg[0] in SHELL_WORDS):  # 환경 변수 지정·if/then 같은 셸 문법어
         seg = seg[1:]
     if seg[:1] == ["for"] or seg in (["fi"], ["done"], ["}"], ["esac"]):
         return True
     if not seg:
         return True
     name, args = seg[0], seg[1:]
-    if "/" in name:  # 경로로 부른 실행 파일은 이름만으로 믿지 않는다
-        return False
+    if "/" in name:  # 경로로 부른 실행 파일은 이름만으로 믿지 않는다(알려진 도구의 버전 확인만 둔다)
+        return bool(re.match(r"^(node|pnpm|npm|yarn|bun|deno|python3?)$", os.path.basename(name))) and args in (["--version"], ["-v"], ["-V"])
     if name in ("sh", "bash", "zsh") and len(args) == 2 and args[0] in ("-c", "-lc"):  # sh -c '<읽기 명령>'
         return shell_read_only(args[1])
-    if TEST_RUN.match(" ".join(seg)):  # 조사 중 기존 테스트 실행은 둔다. 숨은 쓰기는 턴 끝 상태 검사가 잡는다
+    if name == "rtk" and [a for a in args if not a.startswith("-")][:1] == ["proxy"]:  # rtk proxy <명령>: 명령을 그대로 실행
+        return segment_read_only(args[[a for a in args].index("proxy") + 1:])
+    if name == "unset":
+        return True
+    if name == "export":  # 이 셸의 환경 변수만 바꾼다(예: Node 버전에 맞춘 PATH)
+        return all(ENV_OK.match(x) or re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", x) for x in args)
+    if name == "env":  # env -u NAME NAME=VALUE <명령>: 환경만 바꿔 뒤 명령을 실행한다
+        rest = list(args)
+        while rest and (rest[0] in ("-u", "--unset") or ENV_OK.match(rest[0])):
+            rest = rest[2:] if rest[0] in ("-u", "--unset") else rest[1:]
+        return segment_read_only(rest) if rest else True
+    if any(EXPANDS in x for x in seg) and name not in NO_WRITE_OPTIONS:  # 펼쳐질 값($VAR)이 어떤 옵션이 될지 미리 알 수 없다
+        return False
+    joined = " ".join(seg)
+    if GLOB in joined and (TEST_RUN.match(joined.replace(GLOB, "")) or JS_CHECK.match(joined.replace(GLOB, ""))):
+        return False  # 검사 실행에 펼쳐질 인자를 넘기면 어떤 옵션이 될지 미리 알 수 없다
+    joined, seg = joined.replace(GLOB, ""), [x.replace(GLOB, "") for x in seg]
+    name, args = seg[0], seg[1:]
+    if VERSION.match(joined):
+        return True
+    if TEST_RUN.match(joined) or JS_CHECK.match(joined):  # 조사 중 기존 검사 실행은 둔다. 숨은 쓰기는 턴 끝 상태 검사가 잡는다
         return True
     if name == "rtk":  # rtk 는 명령 출력을 줄여 주는 도구다
         while args and args[0].startswith("-"):  # rtk 자체 선택 항목(--raw-output=true 등)
@@ -175,6 +238,11 @@ def segment_read_only(seg):
         if args and (args[0] in READ_ONLY or args[0] in ("git", "rm")):
             return segment_read_only(args)
         return bool(args) and args[0] in RTK_READ and not any(a.startswith("-o") or a.startswith("--output") for a in args)
+    if name == "git" and (any(a == "-c" or a.startswith("-O") for a in args)
+                          or long_opt(args, "config-env", "open-files-in-pager", "ext-diff", "textconv", "filters", "exec-path", "output")):
+        return False
+    if name in ("rg", "grep") and long_opt(args, "pre", "pre-glob", "hostname-bin"):
+        return False
     if name == "git":
         rest = list(args)
         while rest and rest[0].startswith("-"):
@@ -187,18 +255,34 @@ def segment_read_only(seg):
         return bool(targets) and all(re.search(r"(^|/)(__pycache__|\.pytest_cache)(/|$)", a) and ".." not in a for a in targets)
     if name not in READ_ONLY:
         return False
-    if name == "sed":
-        if any(a.startswith("-i") or a.startswith("--in-place") or a in ("-f", "--file") for a in args):
-            return False
-        scripts = [a for a in args if not a.startswith("-")][:1]
-        write_cmd = r"(^|[;{}\s\d$!])[wWe](\s|$)"  # w 파일, W 파일, e 명령
-        write_flag = r"s(.)(?:\\.|(?!\1).)*\1(?:\\.|(?!\1).)*\1[gpIiM0-9]*[we]"  # s/a/b/w 파일
-        return not any(re.search(write_cmd, s) or re.search(write_flag, s) for s in scripts)
-    if name == "sort" and any(a.startswith("-o") or a.startswith("--output") for a in args):
+    if name == "sed":  # 출력만 하는 형태만 둔다: [주소]p·d·=·q, 쓰기 플래그 없는 s/a/b/
+        scripts, rest, plain = [], list(args), True
+        while rest:
+            a = rest.pop(0)
+            if a in ("-n", "-E", "-r", "--quiet", "--silent", "-u", "-z"):
+                continue
+            if a in ("-e", "--expression") and rest:
+                scripts.append(rest.pop(0)); plain = False
+            elif a.startswith("-e") and len(a) > 2:
+                scripts.append(a[2:]); plain = False
+            elif a.startswith("--expression="):
+                scripts.append(a.split("=", 1)[1]); plain = False
+            elif a.startswith("-"):
+                return False  # -i, -f, -s 등 그 밖의 옵션은 승인이 필요하다
+            elif plain and not scripts:
+                scripts.append(a)
+        return bool(scripts) and all(SED_READ.match(x.strip()) for x in scripts)
+    if name == "sort" and (any(re.match(r"^-[a-zA-Z]*o", a) for a in args) or long_opt(args, "output", "compress-program")):
         return False
+    if name == "uniq" and len([a for a in args if not a.startswith("-")]) > 1:  # uniq 입력 출력: 두 번째 파일에 쓴다
+        return False
+    if (name == "tree" and any(a.startswith("-o") for a in args)) or (name == "file" and (any(re.match(r"^-[a-zA-Z]*C", a) for a in args) or long_opt(args, "compile"))):
+        return False
+    if name == "date" and any(not a.startswith(("+", "-u", "-R", "-I", "-r", "-j", "-f")) or a == "-s" for a in args):
+        return False  # 날짜 출력 형식·변환만 둔다(시스템 날짜 설정 제외)
     if name == "find" and any(a in ("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls") for a in args):
         return False
-    if name == "awk" and any(a == "-f" or re.search(r"(system|print[^;]*>|getline|close|fflush)", a) for a in args):
+    if name == "awk" and (long_opt(args, "file", "exec", "include", "load") or any(a.startswith("-f") or re.search(r"(system|print[^;]*[>|]|getline|close|fflush|\|)", a) for a in args)):
         return False
     return True
 
@@ -283,6 +367,9 @@ if __name__ == "__main__":
     except Exception as e:  # 훅 자체 오류: 쓰기·셸만 막고 읽기 도구는 그대로 둔다. 턴 끝 검사는 기록만 남긴다.
         log({"error": repr(e), "mode": mode})
         tool = str(data.get("tool_name") or "") if isinstance(data, dict) else ""
+        if mode == "stop":  # 턴 끝 검사를 하지 못했으면 승인 전 변경이 없다고 볼 수 없으므로 알리고 멈춘다
+            print(json.dumps({"decision": "block", "reason": f"{TAG} 승인 관문이 제품 파일 상태를 확인하지 못했습니다({e!r}). "
+                              "이번 턴에 바꾼 제품 파일이 있으면 되돌리고, 상태를 사용자에게 알리세요."}, ensure_ascii=False))
         if mode == "pre" and (not data or tool in WRITE_TOOLS | SHELL_TOOLS or re.search(WRITE_NAME, tool, re.I)):
             print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                                      "permissionDecisionReason": f"{TAG} 승인 관문 오류로 쓰기를 막았습니다: {e!r}"}}, ensure_ascii=False))
