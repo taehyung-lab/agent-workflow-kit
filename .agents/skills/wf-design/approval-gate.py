@@ -6,7 +6,8 @@
 - `approval-gate.py pre` (PreToolUse): 승인되지 않은 턴에 쓰기 도구로 `work/` 밖을 바꾸거나,
   읽기 전용으로 확인되지 않는 셸 명령·이름으로 쓰기임이 드러나는 도구를 쓰려 하면 거절한다.
 - `approval-gate.py stop` (Stop): 승인되지 않은 턴인데 제품 파일 상태가 턴 시작 때와 달라졌으면(셸의 숨은 쓰기 등
-  PreToolUse 가 놓친 경로) 답을 끝내지 못하게 하고 되돌리게 한다.
+  PreToolUse 가 놓친 경로) 답을 끝내지 못하게 하고 되돌리게 한다. 끝없는 반복을 막으려고 한 턴에 MAX_STOP_BLOCKS 번까지만
+  되돌리게 하고, 그 뒤에도 남으면 턴을 끝내되 표준 오류에 남긴다(사용자는 git status 로 남은 변경을 본다).
 
 예: 사용자가 "회원 탈퇴 기능을 만들어 주세요" 라고만 보내면 에이전트는 코드를 읽을 수는 있지만 accounts.py 를 고치려는 순간
 거절 사유가 돌아온다. 에이전트는 만들 결과와 미정을 보여 주고 묻는다. 사용자가 "승인합니다" 라고 답한 턴에 쓰기가 열린다.
@@ -32,7 +33,7 @@ WRITE_NAME = r"(write|edit|create|delete|remove|update|patch|move|rename|insert|
 NOT_WRITE = {"TodoWrite", "update_plan", "ExitPlanMode", "EnterPlanMode"}  # 이름에 쓰기 낱말이 있지만 파일을 바꾸지 않는 계획 도구
 ALLOWED_WRITE_DIR = "work"  # 설계 기록(work/<작업명>/work.md)은 승인 전에도 쓸 수 있다
 SPEC = ["--", ".", ":(exclude).agents", ":(exclude)work", ":(exclude).codex", ":(exclude).claude",
-        ":(exclude)__pycache__", ":(exclude)*/__pycache__", ":(exclude).pytest_cache", ":(exclude)*/.pytest_cache", ":(exclude)*.pyc", ":(exclude)CLAUDE.md", ":(exclude)AGENTS.md"]
+        ":(exclude,glob)**/__pycache__/**", ":(exclude,glob)**/.pytest_cache/**", ":(exclude,glob)**/*.pyc", ":(exclude)CLAUDE.md", ":(exclude)AGENTS.md"]
 READ_ONLY = {"ls", "cat", "head", "tail", "wc", "grep", "rg", "find", "sed", "awk", "pwd", "echo", "printf", "nl", "sort",
              "uniq", "cut", "tr", "file", "stat", "tree", "du", "which", "type", "jq", "diff", "cmp", "basename", "dirname",
              "realpath", "date", "cd", "true", "test", "[", "column", "od", "sha256sum", "shasum", "md5"}
@@ -321,7 +322,10 @@ def decide(data, root, approved):
 
 
 def main(mode, data):
-    root, state = locate(data.get("cwd"))
+    try:
+        root, state = locate(data.get("cwd"))
+    except RuntimeError:
+        return  # git 저장소가 아니면 상태를 잴 수 없고 키트 설치 프로젝트도 아니다
     if not (root / ".agents" / "agent-workflow-kit.version").is_file():
         return  # 키트가 설치된 프로젝트에서만 동작한다(키트 원본 저장소·관문 파일만 복사된 곳은 그대로 둔다)
     sid = data.get("session_id")
@@ -335,6 +339,7 @@ def main(mode, data):
         flag.write_text("1" if approved else "0")
         start.write_text(product_state(root))
         blocks.write_text("0")
+        (state / f"{key}.laststop").unlink(missing_ok=True)  # 앞 턴의 턴 끝 판단을 새 턴에 다시 쓰지 않는다
         log({"event": "prompt", "approved": approved})
         return
     approved = bool(key) and flag.is_file() and flag.read_text().strip() == "1"
