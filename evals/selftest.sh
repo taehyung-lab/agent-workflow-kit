@@ -49,6 +49,14 @@ FAKE_LOG=$fake/log EVALS_RESULTS=$results PATH="$fake:$PATH" bash "$here/run.sh"
 snap=$(ls -d "$results"/weight-disposable-*-claude-1.files 2>/dev/null | tail -1)
 [ -f "$snap/made-by-fake.txt" ] && ok "끝난 프로젝트 파일 보존" || ng "끝난 프로젝트 파일이 남지 않음"
 grep -q '"exit_code": 7' "${snap%.files}.meta.json" 2>/dev/null && ok "메타데이터에 종료 코드 기록" || ng "메타데이터 종료 코드"
+# 외부 장애(모델 용량 부족)로 끝난 실행은 실패가 아니라 미확인으로 남고 분모에서 빠진다
+cap=$(mktemp -d)
+printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho \x27{"type": "error", "message": "Selected model is at capacity."}\x27\nexit 1\n' > "$fake/claude-cap"
+mkdir "$cap/bin"; cp "$fake/claude-cap" "$cap/bin/claude"; chmod +x "$cap/bin/claude"
+EVALS_RESULTS=$cap PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposable HEAD claude > "$cap/out" 2>&1
+grep -q 'check=UNVERIFIED' "$cap/out" && grep -q '"check_unverified": true' "$cap"/weight-disposable-*-claude-1.meta.json \
+  && python3 -I "$here/report.py" "$cap" | grep -q ' 0/0 ' && ok "외부 장애는 미확인으로 남고 통과 분모에서 빠짐" || ng "외부 장애 분류: $(cat "$cap/out")"
+rm -rf "${cap:?}"
 # 여러 턴: 두 번째 턴이 첫 턴의 세션 id 로 이어 가는지(가짜 하네스가 받은 인자로 확인)
 : > "$fake/log"; FAKE_RC=0 FAKE_LOG=$fake/log EVALS_RESULTS=$results PATH="$fake:$PATH" bash "$here/run.sh" archive-after-correction HEAD claude >/dev/null 2>&1; rc=$?
 [ $rc -eq 0 ] && [ "$(grep -c '' "$fake/log")" -eq 2 ] && sed -n 2p "$fake/log" | grep -q -- '--resume fake-sid' && ok "여러 턴: 두 번째 턴이 같은 세션을 이어 감" || ng "여러 턴 이어 가기(rc=$rc, 호출 $(grep -c '' "$fake/log")회)"

@@ -181,5 +181,32 @@ mv "$t/.agents/agent-workflow-kit.version" "$out"; ln -s "$out" "$t/.agents/agen
 if ! install --update "$t" && grep -q 'symlink' "$tmp/err" && [ -L "$t/.agents/agent-workflow-kit.version" ] \
   && [ "$(cat "$out")" = "$before" ]; then ok "update refuses symlinked version file"; else ng "update refuses symlinked version file"; fi
 
+# 승인 관문 훅: 처음 설치에서 두 설정 파일에 세 사건을 등록하고, 기존 설정·훅은 그대로 둔다
+kit_entries() { python3 -I -c 'import json,sys
+d=json.load(open(sys.argv[1])).get("hooks",{})
+n=lambda e: sum(1 for g in d.get(e,[]) for h in g.get("hooks",[]) if "approval-gate.py" in h.get("command",""))
+print(" ".join(e+":"+str(n(e)) for e in ("UserPromptSubmit","PreToolUse","Stop")))' "$1"; }
+want='UserPromptSubmit:1 PreToolUse:1 Stop:1'
+t="$tmp/hooks"; mkdir -p "$t/.claude" "$t/.codex"
+printf '{"permissions": {"allow": ["Bash(ls)"]}, "hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": "mine.sh"}]}]}}' > "$t/.claude/settings.json"
+printf '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "my-stop.sh"}]}]}}' > "$t/.codex/hooks.json"
+git -C "$kit" checkout -q "$v1"
+if install "$t" && [ "$(kit_entries "$t/.claude/settings.json")" = "$want" ] && [ "$(kit_entries "$t/.codex/hooks.json")" = "$want" ] \
+  && grep -q 'mine.sh' "$t/.claude/settings.json" && grep -q 'Bash(ls)' "$t/.claude/settings.json" && grep -q 'my-stop.sh' "$t/.codex/hooks.json" \
+  && grep -q 'Approval gate hook registered' "$tmp/out"; then ok "install registers approval hooks and keeps project hooks"; else ng "install registers approval hooks and keeps project hooks"; fi
+git -C "$kit" checkout -q -
+# 업데이트를 거듭해도 키트 항목은 사건마다 하나다
+if install --update "$t" && install --update "$t" && [ "$(kit_entries "$t/.claude/settings.json")" = "$want" ] \
+  && [ "$(kit_entries "$t/.codex/hooks.json")" = "$want" ] && grep -q 'mine.sh' "$t/.claude/settings.json"; then ok "update keeps one kit hook per event"; else ng "update keeps one kit hook per event"; fi
+# 깨진 설정 파일이 있으면 아무것도 쓰기 전에 멈춘다
+t="$tmp/hooks-bad"; mkdir -p "$t/.claude"; echo '{broken' > "$t/.claude/settings.json"
+if ! install "$t" && grep -q 'Invalid JSON in .claude/settings.json' "$tmp/err" && [ ! -e "$t/AGENTS.md" ] \
+  && [ "$(cat "$t/.claude/settings.json")" = '{broken' ]; then ok "broken hook settings refused before writing"; else ng "broken hook settings refused before writing"; fi
+# 관문이 빠진 키트로 업데이트하면 키트 항목만 지우고 프로젝트 훅은 남긴다
+git -C "$kit" rm -q .agents/skills/wf-design/approval-gate.py; g commit -qm v4
+t="$tmp/hooks"
+if install --update "$t" && [ "$(kit_entries "$t/.claude/settings.json")" = 'UserPromptSubmit:0 PreToolUse:0 Stop:0' ] \
+  && grep -q 'mine.sh' "$t/.claude/settings.json" && grep -q 'my-stop.sh' "$t/.codex/hooks.json"; then ok "update without gate removes only kit hooks"; else ng "update without gate removes only kit hooks"; fi
+
 printf '%d passed, %d failed\n' "$pass" "$failed"
 [ "$failed" -eq 0 ]

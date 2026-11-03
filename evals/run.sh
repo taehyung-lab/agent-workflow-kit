@@ -50,22 +50,18 @@ for i in $(seq 1 "$times"); do
   # 턴마다 원시 기록을 .tN.jsonl 로 남기고, 판정용 .jsonl 은 모든 턴을 순서대로 이은 것이다(마지막 답 = 마지막 턴의 답).
   turns=("$case_dir/prompt.txt")
   for n in 2 3 4 5 6 7 8 9; do [ ! -f "$case_dir/prompt$n.txt" ] || turns+=("$case_dir/prompt$n.txt"); done
-  # EVALS_APPROVE_TURN=<말> 이면 사례의 턴 뒤에 사용자의 승인 턴을 하나 더 보낸다(승인 관문에서 명시 요청이 승인 뒤 구현되는지와 그 비용을 볼 때).
-  if [ -n "${EVALS_APPROVE_TURN:-}" ]; then printf '%s' "$EVALS_APPROVE_TURN" > "$out.approve.txt"; turns+=("$out.approve.txt"); fi
   start=$(date +%s); rc=0; sid=""; : > "$out.jsonl"; : > "$out.err"
   # Codex 는 전역 지침을 CODEX_HOME 에서 읽는다. 실제 설정을 복사한 임시 홈을 쓰고, 세션을 이어 가도록 모든 턴이 끝날 때까지 둔다.
   # EVALS_CODEX_NETWORK=1 이면 Codex 작업 공간에 네트워크를 허용한다(세션 안에서 다른 세션을 띄우는 후보를 시험할 때).
   net=(); [ "${EVALS_CODEX_NETWORK:-0}" != 1 ] || net=(-c sandbox_workspace_write.network_access=true)
-  # EVALS_HOOK=1 이면 설치된 키트의 승인 관문 훅(.agents/skills/wf-design/approval-gate.py)을 하네스에 등록한다.
-  # 사용자 전역 설정은 건드리지 않는다: Codex 는 임시 홈의 hooks.json, Claude 는 --settings 로만 등록한다.
-  hookcmd='python3 "$(git rev-parse --show-toplevel)/.agents/skills/wf-design/approval-gate.py"'
-  hookjson=$(HOOKCMD=$hookcmd python3 -I -c 'import json,os; c=os.environ["HOOKCMD"]
-print(json.dumps({"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": c + " prompt", "timeout": 30}]}], "PreToolUse": [{"hooks": [{"type": "command", "command": c + " pre", "timeout": 30}]}], "Stop": [{"hooks": [{"type": "command", "command": c + " stop", "timeout": 30}]}]}}))')
-  limit=900; [ "${EVALS_HOOK:-0}" != 1 ] || limit=2400
+  # 승인 관문 훅은 설치기가 프로젝트 설정(.claude/settings.json, .codex/hooks.json)에 등록한 그대로 쓴다(그 커밋의 키트에 관문이 있을 때).
+  # Codex 는 프로젝트 훅을 사용자가 한 번 신뢰해야 실행하므로, 그 신뢰를 대신해 --dangerously-bypass-hook-trust 를 준다.
+  # 훅 판단은 결과 옆 .hook.log 에 남긴다. 사용자 전역 설정은 건드리지 않는다.
+  limit=1200
   export AWK_GATE_LOG="$out.hook.log"
-  csettings=(); [ "${EVALS_HOOK:-0}" != 1 ] || { net+=(--dangerously-bypass-hook-trust); csettings=(--settings "$hookjson"); }
-  if [ "$harness" = codex ]; then ch=$(mktemp -d); cp ~/.codex/auth.json ~/.codex/config.toml "$ch/" 2>/dev/null; [ ! -f ~/.codex/AGENTS.md ] || cp ~/.codex/AGENTS.md "$ch/"
-    [ "${EVALS_HOOK:-0}" != 1 ] || printf '%s\n' "$hookjson" > "$ch/hooks.json"; fi
+  gate=false; ! grep -q approval-gate.py "$work/project/.claude/settings.json" 2>/dev/null || gate=true
+  [ "$harness" != codex ] || net+=(--dangerously-bypass-hook-trust)
+  if [ "$harness" = codex ]; then ch=$(mktemp -d); cp ~/.codex/auth.json ~/.codex/config.toml "$ch/" 2>/dev/null; [ ! -f ~/.codex/AGENTS.md ] || cp ~/.codex/AGENTS.md "$ch/"; fi
   t=0
   for turn in "${turns[@]}"; do
     t=$((t + 1)); prompt=$(cat "$turn"); tout="$out.t$t"
@@ -75,7 +71,7 @@ print(json.dumps({"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", 
       && (cd "$work/project" && tar cf - --exclude=./.git --exclude=./.agents . 2>/dev/null) | tar xf - -C "$work/before-last"
     if [ "$harness" = claude ]; then
       resume=(); [ "$t" -eq 1 ] || resume=(--resume "$sid")
-      (cd "$work/project" && perl -e 'alarm shift; exec @ARGV' "$limit" claude -p "$prompt" ${resume[@]+"${resume[@]}"} ${csettings[@]+"${csettings[@]}"} --output-format stream-json --verbose \
+      (cd "$work/project" && perl -e 'alarm shift; exec @ARGV' "$limit" claude -p "$prompt" ${resume[@]+"${resume[@]}"} --output-format stream-json --verbose \
         --dangerously-skip-permissions --max-turns 30 > "$tout.jsonl" 2> "$tout.err")
     elif [ "$t" -eq 1 ]; then
       CODEX_HOME=$ch perl -e 'alarm shift; exec @ARGV' "$limit" codex exec --json --skip-git-repo-check --sandbox workspace-write ${net[@]+"${net[@]}"} \
@@ -133,8 +129,12 @@ for l in open(sys.argv[1], encoding="utf-8"):
   # Codex 의 exec 기록(--json)에는 하위 에이전트 생성(spawn_agent)이 남지 않는다. 관찰용으로 이 세션의 원본 기록(rollout)을 남긴다.
   [ "$harness" != codex ] || { [ -z "$sid" ] || find "$ch/sessions" -name "rollout-*$sid.jsonl" -exec cat {} + > "$out.rollout.jsonl" 2>/dev/null; rm -rf "${ch:?}"; }
   seconds=$(( $(date +%s) - start ))
-  # 판정 검사는 0=통과, 1=실패, 2=검토 필요(원문을 사람이 판정)를 돌려준다.
-  if [ "$rc" -ne 0 ]; then
+  # 판정 검사는 0=통과, 1=실패, 2=검토 필요(원문을 사람이 판정)를 돌려준다. 3=미확인은 실행기가 정한다:
+  # 하네스가 모델 용량·요청 한도 같은 외부 장애로 끝났으면 판정하지 않고 통과율 분모에서 뺀다(시도·사유는 남긴다).
+  external=$(LC_ALL=C grep -a -o -m1 -iE 'at capacity|rate.?limit|too many requests|overloaded|HTTP 429|stream disconnected|service unavailable' "$out.jsonl" "$out.err" 2>/dev/null | head -1 | cut -d: -f2-)
+  if [ "$rc" -ne 0 ] && [ -n "$external" ]; then
+    verdict="UNVERIFIED 하네스가 외부 장애($external)로 종료 코드 $rc 로 끝나 판정하지 않았다"; check_rc=3
+  elif [ "$rc" -ne 0 ]; then
     verdict="FAIL 하네스가 종료 코드 $rc 로 끝나 판정하지 않았다"; check_rc=1
   else
     verdict=$(EVALS_BEFORE_LAST_TURN="$work/before-last" python3 -I "$case_dir/check.py" "$work/project" "$out.jsonl" 2>&1); check_rc=$?
@@ -145,16 +145,17 @@ for l in open(sys.argv[1], encoding="utf-8"):
   # 값은 환경 변수로 넘겨 따옴표·줄바꿈이 섞인 판정 문구도 그대로 기록한다.
   E_CASE=$case_name E_REF=$ref E_COMMIT=$commit E_HARNESS=$harness E_RUN=$i E_RC=$rc E_SEC=$seconds \
   E_VERSION=$("$harness" --version 2>/dev/null | head -1) E_BYTES=$agents_bytes E_CHECK_RC=$check_rc E_VERDICT=$verdict \
-  E_G1=$(fingerprint ~/.claude/CLAUDE.md) E_G2=$(fingerprint ~/.agents/USER.md) E_G3=$(fingerprint ~/.codex/AGENTS.md) E_G4=$(skills_fingerprint) E_OBS=$observed E_VSTATE=$verify_state \
+  E_G1=$(fingerprint ~/.claude/CLAUDE.md) E_G2=$(fingerprint ~/.agents/USER.md) E_G3=$(fingerprint ~/.codex/AGENTS.md) E_G4=$(skills_fingerprint) E_OBS=$observed E_VSTATE=$verify_state E_GATE=$gate \
   python3 -I -c '
 import json, os, sys
 e = os.environ
 json.dump({"case": e["E_CASE"], "kit_ref": e["E_REF"], "kit_commit": e["E_COMMIT"], "harness": e["E_HARNESS"],
   "run": int(e["E_RUN"]), "harness_version": e["E_VERSION"], "exit_code": int(e["E_RC"]), "seconds": int(e["E_SEC"]),
-  "agents_md_bytes": int(e["E_BYTES"]), "check_passed": e["E_CHECK_RC"] == "0", "check_needs_review": e["E_CHECK_RC"] == "2", "check_output": e["E_VERDICT"], "observed": json.loads(e["E_OBS"] or "{}"), "verifier": e["E_VSTATE"],
+  "agents_md_bytes": int(e["E_BYTES"]), "check_passed": e["E_CHECK_RC"] == "0", "check_needs_review": e["E_CHECK_RC"] == "2", "check_unverified": e["E_CHECK_RC"] == "3", "approval_gate": e["E_GATE"] == "true", "check_output": e["E_VERDICT"], "observed": json.loads(e["E_OBS"] or "{}"), "verifier": e["E_VSTATE"],
   "global_instructions": {"~/.claude/CLAUDE.md": e["E_G1"], "~/.agents/USER.md": e["E_G2"], "~/.codex/AGENTS.md": e["E_G3"], "global skills": e["E_G4"]}},
   open(sys.argv[1], "w"), ensure_ascii=False, indent=1)' "$out.meta.json"
-  printf '%s exit=%s check=%s %s\n' "$name" "$rc" "$([ $check_rc -eq 0 ] && echo PASS || echo FAIL)" "$(printf '%s' "$verdict" | head -1)"
+  shown=FAIL; [ "$check_rc" -ne 0 ] || shown=PASS; [ "$check_rc" -ne 3 ] || shown=UNVERIFIED
+  printf '%s exit=%s check=%s %s\n' "$name" "$rc" "$shown" "$(printf '%s' "$verdict" | head -1)"
   # 판정 검사를 고친 뒤 다시 판정할 수 있게, 끝난 프로젝트의 작업 파일(설치된 키트·git 제외)을 남긴다.
   # 같은 이름으로 다시 실행해도 지난 실행의 파일이 섞이지 않게 먼저 비운다.
   rm -rf "${out:?}.files" "${out:?}.before-last"
