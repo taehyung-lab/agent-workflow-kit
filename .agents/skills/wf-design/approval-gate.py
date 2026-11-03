@@ -38,10 +38,12 @@ GIT_READ = {"status", "diff", "log", "show", "ls-files", "rev-parse", "blame", "
 GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
 RTK_READ = {"read", "ls", "grep", "find", "json", "log", "diff", "deps", "gain"}
 OPERATORS = ["&&", "||", ";;", ">>", "&>", ">&", "<>", "<<<", "<<", ";", "|", "&", ">", "<", "(", ")"]
+GLOB = "\x01"  # 따옴표 밖의 {} * ? [ ~: 셸이 실행 때 다른 인자로 펼칠 수 있다
 EXPANDS = "\x00$"  # 셸이 실행 때 펼치는 $(작은따옴표 밖). 환경 변수 지정 값에서만 허용한다
 SHELL_WORDS = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "fi", "done", "}"}
 MAX_STOP_BLOCKS = 2
-TEST_RUN = re.compile(r"^(rtk\s+)?(python3?\s+-m\s+(unittest|pytest)|pytest)(\s+[-\w./:=]+)*$")
+TEST_RUN = re.compile(r"^(rtk\s+)?(python3?\s+-B\s+|python3?\s+)?(-m\s+(unittest|pytest)|pytest)"
+                      r"(\s+(discover|-q|-v|-x|(-k|-s|-p|-t)\s+[\w./:*?-]+|[\w./:][\w./:-]*))*$")
 # 패키지 매니저로 돌리는 프로젝트의 기존 검사 스크립트(테스트·타입 검사·린트·전체 검사). 스크립트 이름 뒤에는 파일 경로만 받는다
 # (옵션을 붙이면 출력 파일·고치기 같은 쓰기가 열릴 수 있어 승인이 필요하다). 도구를 직접 부르는 실행(npx tsc 등)도 승인이 필요하다.
 JS_CHECK = re.compile(r"^(rtk\s+)?(pnpm|npm|yarn|bun)(\s+(--dir|-C|--filter|--prefix|--workspace|-w)\s+[^\s-]\S*)*(\s+run)?"
@@ -119,7 +121,7 @@ def tokens(cmd):
             op = next((o for o in OPERATORS if cmd.startswith(o, i)), None)
             if op:
                 flush(); out.append((op, True)); i += len(op); continue
-            cur += EXPANDS if c == "$" else c
+            cur += EXPANDS if c == "$" else (GLOB + c if c in "{}*?[~" else c)
         i += 1
     if q:
         return None
@@ -183,6 +185,10 @@ def segment_read_only(seg):
     if any(EXPANDS in x for x in seg):  # 실행 때 펼쳐질 값($VAR)은 어떤 인자·옵션이 될지 미리 알 수 없다
         return False
     joined = " ".join(seg)
+    if GLOB in joined and (TEST_RUN.match(joined.replace(GLOB, "")) or JS_CHECK.match(joined.replace(GLOB, ""))):
+        return False  # 검사 실행에 펼쳐질 인자를 넘기면 어떤 옵션이 될지 미리 알 수 없다
+    joined, seg = joined.replace(GLOB, ""), [x.replace(GLOB, "") for x in seg]
+    name, args = seg[0], seg[1:]
     if VERSION.match(joined):
         return True
     if TEST_RUN.match(joined) or JS_CHECK.match(joined):  # 조사 중 기존 검사 실행은 둔다. 숨은 쓰기는 턴 끝 상태 검사가 잡는다

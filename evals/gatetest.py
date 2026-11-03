@@ -44,7 +44,7 @@ with tempfile.TemporaryDirectory() as t:
               "pnpm test src/a.test.ts", "node --version", "pnpm -v",
               "command -v node", "rtk proxy sh -c 'command -v node; node --version; pnpm --version'",
               'export PATH="$HOME/.nvm/versions/node/v24.19.0/bin:$PATH"; unset NODE_OPTIONS; pnpm typecheck',
-              "rtk proxy env -u NODE_OPTIONS PATH=/x/bin:$PATH pnpm test", "env ls", "rg 'foo$' src", "grep -n '^x$' a"]:
+              "rtk proxy env -u NODE_OPTIONS PATH=/x/bin:$PATH pnpm test", "env ls", "rg 'foo$' src", "grep -n '^x$' a", "ls *.md", "python3 -m pytest -q tests/test_a.py -k login", "python3 -B -m unittest discover -s tests -p 'test_*.py'"]:
         check(f"읽기 전용 셸은 둔다: {c}", not bash(c))
     for c in ["echo x > app.py", "sed -i '' s/a/b/ a.py", "python3 -c 'open(\"a\",\"w\")'", "cat a\npython3 x.py", "ls; rm -rf src",
               "find . -delete", "git checkout -- a.py", "cat $(echo a)", "tee a.py < b", "awk '{print > \"o\"}' a", "git branch new",
@@ -54,7 +54,7 @@ with tempfile.TemporaryDirectory() as t:
               "pnpm lint --fix", "npx eslint . --fix", "pnpm install", "pnpm add left-pad", "npx tsc -p tsconfig.app.json",
               "pnpm test -u", "env -u X python3 x.py", "export X=1; rm a.py", "node version", "npm run lint:fix", "pnpm test-update", "npx tsc --noEmit false",
               "npx eslint . --output-file report.json", "npx tsc --noEmit --generateTrace trace", "pnpm test --outputFile=r.json",
-              "pnpm lint -- --fix", "npx tsc -p tsconfig.app.json --noEmit", "pnpm --dir -x test", "npm test $TEST_ARGS", 'pnpm test "$X"', "cat $F", 'X=--outputFile=r pnpm test $X', "node -e 'require(\"fs\").writeFileSync(\"a\",\"x\")'", "node script.js", "pnpm test > out.txt"]:
+              "pnpm lint -- --fix", "npx tsc -p tsconfig.app.json --noEmit", "pnpm --dir -x test", "npm test $TEST_ARGS", "npm test {--test-reporter-destination=r,x}", "pnpm test *", "python3 -m pytest --junitxml=o.xml", "pytest ~/x", 'pnpm test "$X"', "cat $F", 'X=--outputFile=r pnpm test $X', "node -e 'require(\"fs\").writeFileSync(\"a\",\"x\")'", "node script.js", "pnpm test > out.txt"]:
         check(f"쓰기·실행 셸은 막는다: {c!r}", bash(c))
     check("cmd 필드로 온 셸도 검사한다", call("pre", {"tool_name": "exec_command", "tool_input": {"cmd": "touch app.py"}}))
     check("command 가 없는 apply_patch 입력도 대상을 찾아 막는다",
