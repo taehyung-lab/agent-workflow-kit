@@ -44,7 +44,8 @@ with tempfile.TemporaryDirectory() as t:
               "pnpm test src/a.test.ts", "node --version", "pnpm -v",
               "command -v node", "rtk proxy sh -c 'command -v node; node --version; pnpm --version'",
               'export PATH="$HOME/.nvm/versions/node/v24.19.0/bin:$PATH"; unset NODE_OPTIONS; pnpm typecheck',
-              "rtk proxy env -u NODE_OPTIONS PATH=/x/bin:$PATH pnpm test", "env ls", "rg 'foo$' src", "grep -n '^x$' a", "ls *.md", "uniq -c a.txt", "date +%Y", "date -u", "tree -L 2", "sed -n '1,40p' a.py", "sed -n '/start/,/end/p' a", "sed 's/a/b/g' a", "sed -n -e '1p' -e '$p' a", "node -v", "python3 --version", "python3 -m pytest -q tests/test_a.py -k login", "python3 -B -m unittest discover -s tests -p 'test_*.py'"]:
+              "rtk proxy env -u NODE_OPTIONS PATH=/x/bin:$PATH pnpm test", "env ls", "rg 'foo$' src", "grep -n '^x$' a", "ls *.md", "uniq -c a.txt", "date +%Y", "date -u", "tree -L 2", "sed -n '1,40p' a.py", "sed -n '/start/,/end/p' a", "sed 's/a/b/g' a", "sed -n -e '1p' -e '$p' a", "node -v", "python3 --version", 'echo "NODE_OPTIONS=[$NODE_OPTIONS]"', "ls ~/.nvm/versions/node", "cat $F", "/x/v24/bin/node --version",
+              "env -u NODE_OPTIONS PATH=/x/bin:/usr/bin /x/bin/node --version", "python3 -m pytest -q tests/test_a.py -k login", "python3 -B -m unittest discover -s tests -p 'test_*.py'"]:
         check(f"읽기 전용 셸은 둔다: {c}", not bash(c))
     for c in ["echo x > app.py", "sed -i '' s/a/b/ a.py", "python3 -c 'open(\"a\",\"w\")'", "cat a\npython3 x.py", "ls; rm -rf src",
               "find . -delete", "git checkout -- a.py", "cat $(echo a)", "tee a.py < b", "awk '{print > \"o\"}' a", "git branch new",
@@ -60,7 +61,7 @@ with tempfile.TemporaryDirectory() as t:
               "sort -S 1b --compress-program=./c.sh i", "file --compile -m magic", "file -cC -m magic", "git -c core.fsmonitor=./w status",
               "git grep --open-files-in-pager='tee a' x", "rg --pre ./w.sh x a", "rtk grep x a --pre ./w.sh", "rtk proxy sed -n -ewa i",
               "bash -v", "python3 -v", "env NODE_OPTIONS=--require=./w.cjs npm test", "export NODE_OPTIONS=--require=./w.cjs; npm test",
-              "NODE_OPTIONS=--require=./w.cjs npm test", 'pnpm test "$X"', "cat $F", 'X=--outputFile=r pnpm test $X', "node -e 'require(\"fs\").writeFileSync(\"a\",\"x\")'", "node script.js", "pnpm test > out.txt"]:
+              "NODE_OPTIONS=--require=./w.cjs npm test", "/x/bin/node script.js", "./tool --version", "sort $X a", 'pnpm test "$X"', 'X=--outputFile=r pnpm test $X', "node -e 'require(\"fs\").writeFileSync(\"a\",\"x\")'", "node script.js", "pnpm test > out.txt"]:
         check(f"쓰기·실행 셸은 막는다: {c!r}", bash(c))
     check("cmd 필드로 온 셸도 검사한다", call("pre", {"tool_name": "exec_command", "tool_input": {"cmd": "touch app.py"}}))
     check("command 가 없는 apply_patch 입력도 대상을 찾아 막는다",

@@ -45,6 +45,8 @@ EXPANDS = "\x00$"  # 셸이 실행 때 펼치는 $(작은따옴표 밖). 환경 
 _ADDR = r"(\d+|\$|/[^/]*/)(,(\d+|\$|/[^/]*/))?"
 SED_READ = re.compile(r"^(" + _ADDR + r")?\s*([pdq=]|s/[^/]*/[^/]*/[gpI0-9]*)(\s*;\s*(" + _ADDR + r")?\s*([pdq=]|s/[^/]*/[^/]*/[gpI0-9]*))*\s*;?$")
 ENV_OK = re.compile(r"^(PATH|LANG|LC_\w+|TZ|CI|NO_COLOR|FORCE_COLOR|NODE_ENV|TERM|COLUMNS)=")  # 실행할 코드를 바꾸지 않는 환경 변수만 지정한다
+NO_WRITE_OPTIONS = {"echo", "printf", "pwd", "which", "type", "test", "[", "true", "basename", "dirname", "ls", "cat", "head",
+                    "tail", "wc", "stat", "du", "cd"}  # 어떤 인자를 받아도 파일을 쓰거나 다른 프로그램을 실행하지 않는 명령
 SHELL_WORDS = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "fi", "done", "}"}
 MAX_STOP_BLOCKS = 2
 TEST_RUN = re.compile(r"^(rtk\s+)?(python3?(\s+-B)?\s+-m\s+(unittest|pytest)|pytest)"
@@ -174,8 +176,8 @@ def segment_read_only(seg):
     if not seg:
         return True
     name, args = seg[0], seg[1:]
-    if "/" in name:  # 경로로 부른 실행 파일은 이름만으로 믿지 않는다
-        return False
+    if "/" in name:  # 경로로 부른 실행 파일은 이름만으로 믿지 않는다(알려진 도구의 버전 확인만 둔다)
+        return bool(re.match(r"^(node|pnpm|npm|yarn|bun|deno|python3?)$", os.path.basename(name))) and args in (["--version"], ["-v"], ["-V"])
     if name in ("sh", "bash", "zsh") and len(args) == 2 and args[0] in ("-c", "-lc"):  # sh -c '<읽기 명령>'
         return shell_read_only(args[1])
     if name == "rtk" and [a for a in args if not a.startswith("-")][:1] == ["proxy"]:  # rtk proxy <명령>: 명령을 그대로 실행
@@ -189,7 +191,7 @@ def segment_read_only(seg):
         while rest and (rest[0] in ("-u", "--unset") or ENV_OK.match(rest[0])):
             rest = rest[2:] if rest[0] in ("-u", "--unset") else rest[1:]
         return segment_read_only(rest) if rest else True
-    if any(EXPANDS in x for x in seg):  # 실행 때 펼쳐질 값($VAR)은 어떤 인자·옵션이 될지 미리 알 수 없다
+    if any(EXPANDS in x for x in seg) and name not in NO_WRITE_OPTIONS:  # 펼쳐질 값($VAR)이 어떤 옵션이 될지 미리 알 수 없다
         return False
     joined = " ".join(seg)
     if GLOB in joined and (TEST_RUN.match(joined.replace(GLOB, "")) or JS_CHECK.match(joined.replace(GLOB, ""))):
