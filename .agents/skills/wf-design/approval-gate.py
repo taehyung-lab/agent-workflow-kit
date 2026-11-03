@@ -24,9 +24,17 @@ import hashlib, json, os, re, subprocess, sys, time
 from pathlib import Path
 
 TAG = "[approval-gate]"
-# 사용자 메시지가 승인 표현을 담고, 부정·질문·조건·인용 표지가 없을 때만 승인으로 본다.
-APPROVE = r"(승인합니다|승인할게|승인해요|승인이요|^\s*승인\s*[.!]?\s*$|진행해|진행 해|진행합시다|진행하세요|바로\s*(구현|진행|만들|고쳐|바꿔)|go ahead|approved?\b)"
-NOT_APPROVE = r"(마세요|말고|말아|하지\s*마|않|보류|금지|여부|검토|예시|인지|일까|할까|나요|\?|？|다만|단,|제외|빼고|\bnot\b|don't|\bno\b)"
+# 승인 판별(고정 규칙, 표현 목록을 늘리지 않는다). 사용자의 평소 말투에서 분명한 승인만 잡는다.
+# - 승인 말이 완결된 형태로 있고(뒤가 공백·문장 끝·구두점, 조사 "라고·는·도" 등이 바로 붙지 않음) 그 문장이 질문·부정이 아니면 승인.
+#   승인 말 앞뒤의 범위 제한("영어 문구 빼고 진행해주세요", "진행해주세요 영어 문구 빼고")은 승인을 막지 않는다.
+# - 메시지에 철회 문장("취소합니다", "아직 시작하지 마세요", "멈춰 주세요")이 있으면 승인이 아니다.
+# - 애매한 말(예문 속 승인, 철회 뒤 재승인 등)을 다 가리지는 못한다. 그 경우 에이전트가 쓰기 전에 다시 확인한다(AGENTS.md 2항).
+_SUFFIX = r"(주세요|주십시오|주시죠|줘요|줘|요)"
+APPROVE = (r"(진행\s*해\s*" + _SUFFIX + r"|진행하세요|진행합시다|승인(합니다|할게요|할게|해요|이요)"
+           r"|바로\s*(구현|진행|만들어|고쳐|바꿔|수정|적용|반영)\s*(해)?\s*" + _SUFFIX + r"|go ahead|approved?)(?=[\s.!~…,:;。]|$)"
+           r"|(진행해|승인)(?=\s*[.!~…]*\s*$)")  # 꼬리 없는 "진행해"·"승인"은 문장을 끝낼 때만
+NOT_APPROVE = r"(\?|？|까요|나요|을지|는지|인지|않|안\s*(돼|됩|했)|아니|\bnot\b|don't|never)"  # 승인 말이 든 문장 안의 질문·부정
+REVOKE = r"(^\s*((취소|중지|보류)\s*(합니다|할게요|해\s*주세요|해요)|멈춰|그만|잠깐|아니요|아뇨|wait\b|stop\b|cancel\b)|(^|\s)(시작하지|진행하지|하지)\s*마(세요|요|십시오)?\s*$|(취소|중지|보류)(합니다|할게요|해\s*주세요)\s*$|멈춰\s*주세요\s*$|무시해\s*주세요\s*$)"
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch"}
 SHELL_TOOLS = {"Bash", "shell", "exec_command", "local_shell", "unified_exec"}
 WRITE_NAME = r"(write|edit|create|delete|remove|update|patch|move|rename|insert|replace|upload|stdin|commit|push)"
@@ -34,7 +42,7 @@ NOT_WRITE = {"TodoWrite", "update_plan", "ExitPlanMode", "EnterPlanMode"}  # 이
 ALLOWED_WRITE_DIR = "work"  # 설계 기록(work/<작업명>/work.md)은 승인 전에도 쓸 수 있다
 SPEC = ["--", ".", ":(exclude).agents", ":(exclude)work", ":(exclude).codex", ":(exclude).claude",
         ":(exclude,glob)**/__pycache__/**", ":(exclude,glob)**/.pytest_cache/**", ":(exclude,glob)**/*.pyc", ":(exclude)CLAUDE.md", ":(exclude)AGENTS.md"]
-READ_ONLY = {"ls", "cat", "head", "tail", "wc", "grep", "rg", "find", "sed", "awk", "pwd", "echo", "printf", "nl", "sort",
+READ_ONLY = {"printenv", "ls", "cat", "head", "tail", "wc", "grep", "rg", "find", "sed", "awk", "pwd", "echo", "printf", "nl", "sort",
              "uniq", "cut", "tr", "file", "stat", "tree", "du", "which", "type", "jq", "diff", "cmp", "basename", "dirname",
              "realpath", "date", "cd", "true", "test", "[", "column", "od", "sha256sum", "shasum", "md5"}
 GIT_READ = {"status", "diff", "log", "show", "ls-files", "rev-parse", "blame", "grep", "cat-file", "shortlog", "describe"}
@@ -46,7 +54,7 @@ EXPANDS = "\x00$"  # 셸이 실행 때 펼치는 $(작은따옴표 밖). 환경 
 _ADDR = r"(\d+|\$|/[^/]*/)(,(\d+|\$|/[^/]*/))?"
 SED_READ = re.compile(r"^(" + _ADDR + r")?\s*([pdq=]|s/[^/]*/[^/]*/[gpI0-9]*)(\s*;\s*(" + _ADDR + r")?\s*([pdq=]|s/[^/]*/[^/]*/[gpI0-9]*))*\s*;?$")
 ENV_OK = re.compile(r"^(PATH|LANG|LC_\w+|TZ|CI|NO_COLOR|FORCE_COLOR|NODE_ENV|TERM|COLUMNS)=")  # 실행할 코드를 바꾸지 않는 환경 변수만 지정한다
-NO_WRITE_OPTIONS = {"echo", "printf", "pwd", "which", "type", "test", "[", "true", "basename", "dirname", "ls", "cat", "head",
+NO_WRITE_OPTIONS = {"printenv", "echo", "printf", "pwd", "which", "type", "test", "[", "true", "basename", "dirname", "ls", "cat", "head",
                     "tail", "wc", "stat", "du", "cd"}  # 어떤 인자를 받아도 파일을 쓰거나 다른 프로그램을 실행하지 않는 명령
 SHELL_WORDS = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "fi", "done", "}"}
 MAX_STOP_BLOCKS = 2
@@ -113,7 +121,16 @@ def product_state(root, seen=None):
 
 
 def is_approval(prompt):
-    return bool(re.search(APPROVE, prompt, re.I | re.M)) and not re.search(NOT_APPROVE, prompt, re.I)
+    sentences = [x.strip() for x in re.split(r"[.!?。？\n]+", prompt) if x.strip()]
+    if any(re.search(REVOKE, x, re.I) for x in sentences):
+        return False
+    for m in re.finditer(APPROVE, prompt, re.I | re.M):
+        start = max(prompt.rfind(c, 0, m.start()) for c in ".!?。？\n") + 1
+        ends = [i for i in (prompt.find(c, m.end()) for c in ".!?。？\n") if i >= 0]
+        end = min(ends) + 1 if ends else len(prompt)
+        if not re.search(NOT_APPROVE, prompt[start:end], re.I):
+            return True
+    return False
 
 
 def tokens(cmd):
