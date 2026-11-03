@@ -50,6 +50,9 @@ for i in $(seq 1 "$times"); do
   # 턴마다 원시 기록을 .tN.jsonl 로 남기고, 판정용 .jsonl 은 모든 턴을 순서대로 이은 것이다(마지막 답 = 마지막 턴의 답).
   turns=("$case_dir/prompt.txt")
   for n in 2 3 4 5 6 7 8 9; do [ ! -f "$case_dir/prompt$n.txt" ] || turns+=("$case_dir/prompt$n.txt"); done
+  # EVALS_APPROVE=1 이면 사례의 approve.txt(사용자 승인 턴)를 마지막 턴으로 더한다. 원래 입력과 승인 추가 입력은 meta 의 input 으로 구분된다.
+  input=original
+  if [ "${EVALS_APPROVE:-0}" = 1 ] && [ -f "$case_dir/approve.txt" ]; then turns+=("$case_dir/approve.txt"); input=with-approval; fi
   start=$(date +%s); rc=0; sid=""; : > "$out.jsonl"; : > "$out.err"
   # Codex 는 전역 지침을 CODEX_HOME 에서 읽는다. 실제 설정을 복사한 임시 홈을 쓰고, 세션을 이어 가도록 모든 턴이 끝날 때까지 둔다.
   # EVALS_CODEX_NETWORK=1 이면 Codex 작업 공간에 네트워크를 허용한다(세션 안에서 다른 세션을 띄우는 후보를 시험할 때).
@@ -131,13 +134,18 @@ for l in open(sys.argv[1], encoding="utf-8"):
   seconds=$(( $(date +%s) - start ))
   # 판정 검사는 0=통과, 1=실패, 2=검토 필요(원문을 사람이 판정)를 돌려준다. 3=미확인은 실행기가 정한다:
   # 하네스가 모델 용량·요청 한도 같은 외부 장애로 끝났으면 판정하지 않고 통과율 분모에서 뺀다(시도·사유는 남긴다).
-  external=$(LC_ALL=C grep -a -o -m1 -iE 'at capacity|rate.?limit|too many requests|overloaded|HTTP 429|stream disconnected|service unavailable' "$out.jsonl" "$out.err" 2>/dev/null | head -1 | cut -d: -f2-)
+  # 외부 장애는 오류 사건(Codex error·turn.failed, Claude 오류 결과)과 표준 오류에서만 찾는다(일반 답 속 낱말은 보지 않는다).
+  pat='at capacity|rate.?limit|too many requests|overloaded|HTTP 429|stream disconnected|service unavailable'
+  external=$( { LC_ALL=C grep -a -E '"type": ?"(error|turn\.failed)"|"is_error": ?true' "$out.jsonl"; cat "$out.err"; } 2>/dev/null | LC_ALL=C grep -a -o -m1 -iE "$pat" | head -1)
   if [ "$rc" -ne 0 ] && [ -n "$external" ]; then
-    verdict="UNVERIFIED 하네스가 외부 장애($external)로 종료 코드 $rc 로 끝나 판정하지 않았다"; check_rc=3
+    # 장애 전에 제품 파일을 바꿨으면 위반일 수 있으므로 지우지 않고 사람이 원시 기록으로 판정한다.
+    edited=$(cd "$work/project" && { [ ! -d "$work/before-last" ] || diff -rq --exclude=.git --exclude=.agents --exclude=.claude --exclude=.codex --exclude=work --exclude=__pycache__ "$work/before-last" . 2>/dev/null; } | head -1)
+    if [ -n "$edited" ]; then verdict="REVIEW 외부 장애($external)로 끝났지만 그 전에 제품 파일이 바뀌었다: $edited"; check_rc=2
+    else verdict="UNVERIFIED 하네스가 외부 장애($external)로 종료 코드 $rc 로 끝나 판정하지 않았다"; check_rc=3; fi
   elif [ "$rc" -ne 0 ]; then
     verdict="FAIL 하네스가 종료 코드 $rc 로 끝나 판정하지 않았다"; check_rc=1
   else
-    verdict=$(EVALS_BEFORE_LAST_TURN="$work/before-last" python3 -I "$case_dir/check.py" "$work/project" "$out.jsonl" 2>&1); check_rc=$?
+    verdict=$(EVALS_INPUT=$input EVALS_GATE=$gate EVALS_BEFORE_LAST_TURN="$work/before-last" python3 -I "$case_dir/check.py" "$work/project" "$out.jsonl" 2>&1); check_rc=$?
   fi
   # 사례가 AGENTS.md 를 읽을 수 없게 만들었으면 바이트는 설치에 쓴 키트 checkout 에서 잰다.
   observed=$(python3 -I "$here/observe.py" "$out.jsonl" $( [ ! -f "$case_dir/observe.txt" ] || cat "$case_dir/observe.txt") 2>/dev/null || echo '{}')
@@ -145,13 +153,13 @@ for l in open(sys.argv[1], encoding="utf-8"):
   # 값은 환경 변수로 넘겨 따옴표·줄바꿈이 섞인 판정 문구도 그대로 기록한다.
   E_CASE=$case_name E_REF=$ref E_COMMIT=$commit E_HARNESS=$harness E_RUN=$i E_RC=$rc E_SEC=$seconds \
   E_VERSION=$("$harness" --version 2>/dev/null | head -1) E_BYTES=$agents_bytes E_CHECK_RC=$check_rc E_VERDICT=$verdict \
-  E_G1=$(fingerprint ~/.claude/CLAUDE.md) E_G2=$(fingerprint ~/.agents/USER.md) E_G3=$(fingerprint ~/.codex/AGENTS.md) E_G4=$(skills_fingerprint) E_OBS=$observed E_VSTATE=$verify_state E_GATE=$gate \
+  E_G1=$(fingerprint ~/.claude/CLAUDE.md) E_G2=$(fingerprint ~/.agents/USER.md) E_G3=$(fingerprint ~/.codex/AGENTS.md) E_G4=$(skills_fingerprint) E_OBS=$observed E_VSTATE=$verify_state E_GATE=$gate E_INPUT=$input E_TURNS=${#turns[@]} \
   python3 -I -c '
 import json, os, sys
 e = os.environ
 json.dump({"case": e["E_CASE"], "kit_ref": e["E_REF"], "kit_commit": e["E_COMMIT"], "harness": e["E_HARNESS"],
   "run": int(e["E_RUN"]), "harness_version": e["E_VERSION"], "exit_code": int(e["E_RC"]), "seconds": int(e["E_SEC"]),
-  "agents_md_bytes": int(e["E_BYTES"]), "check_passed": e["E_CHECK_RC"] == "0", "check_needs_review": e["E_CHECK_RC"] == "2", "check_unverified": e["E_CHECK_RC"] == "3", "approval_gate": e["E_GATE"] == "true", "check_output": e["E_VERDICT"], "observed": json.loads(e["E_OBS"] or "{}"), "verifier": e["E_VSTATE"],
+  "agents_md_bytes": int(e["E_BYTES"]), "check_passed": e["E_CHECK_RC"] == "0", "check_needs_review": e["E_CHECK_RC"] == "2", "check_unverified": e["E_CHECK_RC"] == "3", "approval_gate": e["E_GATE"] == "true", "input": e["E_INPUT"], "user_turns": int(e["E_TURNS"]), "check_output": e["E_VERDICT"], "observed": json.loads(e["E_OBS"] or "{}"), "verifier": e["E_VSTATE"],
   "global_instructions": {"~/.claude/CLAUDE.md": e["E_G1"], "~/.agents/USER.md": e["E_G2"], "~/.codex/AGENTS.md": e["E_G3"], "global skills": e["E_G4"]}},
   open(sys.argv[1], "w"), ensure_ascii=False, indent=1)' "$out.meta.json"
   shown=FAIL; [ "$check_rc" -ne 0 ] || shown=PASS; [ "$check_rc" -ne 3 ] || shown=UNVERIFIED

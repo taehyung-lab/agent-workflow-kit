@@ -198,6 +198,18 @@ git -C "$kit" checkout -q -
 # 업데이트를 거듭해도 키트 항목은 사건마다 하나다
 if install --update "$t" && install --update "$t" && [ "$(kit_entries "$t/.claude/settings.json")" = "$want" ] \
   && [ "$(kit_entries "$t/.codex/hooks.json")" = "$want" ] && grep -q 'mine.sh' "$t/.claude/settings.json"; then ok "update keeps one kit hook per event"; else ng "update keeps one kit hook per event"; fi
+# 키트 훅과 같은 그룹에 든 프로젝트 훅·matcher 는 남긴다
+t="$tmp/hooks-group"; mkdir -p "$t/.claude"
+printf '{"hooks": {"PreToolUse": [{"matcher": "Edit", "hooks": [{"type": "command", "command": "mine.sh"}, {"type": "command", "command": "python3 old/approval-gate.py pre"}]}]}}' > "$t/.claude/settings.json"
+git -C "$kit" checkout -q "$v1"
+if install "$t" && grep -q 'mine.sh' "$t/.claude/settings.json" && grep -q '"matcher": "Edit"' "$t/.claude/settings.json" \
+  && [ "$(kit_entries "$t/.claude/settings.json")" = "$want" ] && ! grep -q 'old/approval-gate.py' "$t/.claude/settings.json"; then ok "same-group project hook kept"; else ng "same-group project hook kept"; fi
+git -C "$kit" checkout -q -
+# 훅 설정 부모(.codex)가 심링크면 아무것도 쓰기 전에 멈춘다
+t="$tmp/hooks-link"; out="$tmp/hooks-link-out"; mkdir -p "$t" "$out"; ln -s "$out" "$t/.codex"
+git -C "$kit" checkout -q "$v1"
+if ! install "$t" && grep -q 'Invalid parent: .codex' "$tmp/err" && [ ! -e "$t/AGENTS.md" ] && [ -z "$(ls -A "$out")" ]; then ok "symlinked .codex refused before writing"; else ng "symlinked .codex refused before writing"; fi
+git -C "$kit" checkout -q -
 # 깨진 설정 파일이 있으면 아무것도 쓰기 전에 멈춘다
 t="$tmp/hooks-bad"; mkdir -p "$t/.claude"; echo '{broken' > "$t/.claude/settings.json"
 if ! install "$t" && grep -q 'Invalid JSON in .claude/settings.json' "$tmp/err" && [ ! -e "$t/AGENTS.md" ] \

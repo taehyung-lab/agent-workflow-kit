@@ -69,7 +69,11 @@ for path in (".claude/settings.json", ".codex/hooks.json"):
     data = json.load(open(path, encoding="utf-8")) if os.path.exists(path) and os.path.getsize(path) else {}
     hooks = data.setdefault("hooks", {})
     for event, mode in events.items():
-        groups = [g for g in hooks.get(event, []) if not any("approval-gate.py" in str(h.get("command", "")) for h in g.get("hooks", []))]
+        groups = []
+        for g in hooks.get(event, []):  # 키트 항목만 빼고, 같은 그룹의 다른 훅·matcher 는 그대로 둔다
+            kept = [h for h in g.get("hooks", []) if "approval-gate.py" not in str(h.get("command", ""))]
+            if kept or not g.get("hooks"):
+                groups.append({**g, "hooks": kept} if g.get("hooks") else g)
         if not remove:
             groups.append({"hooks": [{"type": "command", "command": f"{cmd} {mode}", "timeout": 30}]})
         if groups:
@@ -89,6 +93,7 @@ PY
 # 훅 설정 파일이 있으면 쓰기 전에 JSON 객체인지 확인한다(깨진 설정 때문에 설치가 도중에 멈추지 않게)
 hooks_preflight() {
   local f
+  parents_ok .claude/settings.json .codex/hooks.json
   for f in .claude/settings.json .codex/hooks.json; do
     [ -e "$f" ] || [ -L "$f" ] || continue
     [ ! -L "$f" ] && [ -f "$f" ] || fail "Invalid hook settings file: $f"

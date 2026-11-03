@@ -17,7 +17,9 @@ for dir in "$here"/cases/*/; do
     [ ! -d "$sample/files" ] || cp -R "$sample/files/." "$project/"
     # before/ 가 있는 표본은 마지막 턴 직전 상태를 흉내 낸다(없으면 비교하지 않음).
     before=""; [ ! -d "$sample/before" ] || before="$sample/before"
-    EVALS_BEFORE_LAST_TURN=$before python3 -I "$dir/check.py" "$project" "$sample/transcript.jsonl" >/dev/null 2>&1; rc=$?
+    # env.txt 가 있는 표본은 실행기가 판정 검사에 넘기는 환경(EVALS_GATE·EVALS_INPUT 등)을 흉내 낸다.
+    envs=(); [ ! -f "$sample/env.txt" ] || while IFS= read -r kv; do [ -z "$kv" ] || envs+=("$kv"); done < "$sample/env.txt"
+    env ${envs[@]+"${envs[@]}"} EVALS_BEFORE_LAST_TURN=$before python3 -I "$dir/check.py" "$project" "$sample/transcript.jsonl" >/dev/null 2>&1; rc=$?
     case "$kind" in
       pass) [ $rc -eq 0 ] && ok "$name: 통과 표본($(basename "$sample"))을 통과로" || ng "$name: 통과 표본($(basename "$sample"))을 rc=$rc 로 판정" ;;
       review) [ $rc -eq 2 ] && ok "$name: 검토 표본($(basename "$sample"))을 검토 필요로" || ng "$name: 검토 표본($(basename "$sample"))을 rc=$rc 로 판정" ;;
@@ -56,6 +58,15 @@ mkdir "$cap/bin"; cp "$fake/claude-cap" "$cap/bin/claude"; chmod +x "$cap/bin/cl
 EVALS_RESULTS=$cap PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposable HEAD claude > "$cap/out" 2>&1
 grep -q 'check=UNVERIFIED' "$cap/out" && grep -q '"check_unverified": true' "$cap"/weight-disposable-*-claude-1.meta.json \
   && python3 -I "$here/report.py" "$cap" | grep -q ' 0/0 ' && ok "외부 장애는 미확인으로 남고 통과 분모에서 빠짐" || ng "외부 장애 분류: $(cat "$cap/out")"
+# 장애 전에 제품 파일을 바꿨으면 지우지 않고 검토 필요로 남긴다
+printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho changed > made-by-fake.txt\necho \x27{"type": "error", "message": "Selected model is at capacity."}\x27\nexit 1\n' > "$cap/bin/claude"
+EVALS_RESULTS=$cap/r2 PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposable HEAD claude > "$cap/out2" 2>&1
+grep -q 'check=FAIL.*REVIEW 외부 장애' "$cap/out2" && grep -q '"check_needs_review": true' "$cap"/r2/weight-disposable-*-claude-1.meta.json \
+  && ok "장애 전 제품 변경은 검토 필요로 남김" || ng "장애 전 변경 처리: $(cat "$cap/out2")"
+# 일반 답 속 낱말(at capacity)은 외부 장애로 보지 않는다
+printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho \x27{"type": "result", "result": "서버가 at capacity 일 때를 처리했습니다"}\x27\nexit 1\n' > "$cap/bin/claude"
+EVALS_RESULTS=$cap/r3 PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposable HEAD claude > "$cap/out3" 2>&1
+grep -q 'check=FAIL FAIL 하네스가 종료 코드 1' "$cap/out3" && ok "답 속 낱말은 외부 장애로 세지 않음" || ng "답 속 낱말 처리: $(cat "$cap/out3")"
 rm -rf "${cap:?}"
 # 여러 턴: 두 번째 턴이 첫 턴의 세션 id 로 이어 가는지(가짜 하네스가 받은 인자로 확인)
 : > "$fake/log"; FAKE_RC=0 FAKE_LOG=$fake/log EVALS_RESULTS=$results PATH="$fake:$PATH" bash "$here/run.sh" archive-after-correction HEAD claude >/dev/null 2>&1; rc=$?

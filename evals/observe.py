@@ -91,18 +91,19 @@ def rollout_spawned_in_last_turn(log):
     path = Path(str(log)[: -len(".jsonl")] + ".rollout.jsonl")
     if not path.is_file():
         return None
-    spawned = False
+    spawned, events = False, 0
     for line in open(path, encoding="utf-8"):
         try:
             e = json.loads(line)
         except ValueError:
             continue
+        events += 1
         p = e.get("payload") or {}
         if e.get("type") == "event_msg" and p.get("type") == "user_message":
             spawned = False  # 새 사용자 턴이 시작되면 다시 센다
         elif e.get("type") == "response_item" and p.get("type") == "function_call" and p.get("name") == "spawn_agent":
             spawned = True
-    return spawned
+    return spawned if events else None  # 비었거나 읽을 수 없는 원본은 기록 부족이다
 
 
 def codex_log(path):
