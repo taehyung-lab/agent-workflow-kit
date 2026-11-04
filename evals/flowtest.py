@@ -174,6 +174,12 @@ exit 0
         o2 = json.loads(sh(sys.executable, "-I", str(verifier), "finish", "--round", rq2["kept"], cwd=proj, env=base_env, input=json.dumps(OK, ensure_ascii=False)).stdout.strip().splitlines()[-1])
         check(f"검토 중 사용자 메시지({msg[:6]})가 들어오면 고정 입력이 지금 요구가 아니므로 unverified", o2.get("state") == "unverified" and o2.get("completion") != "verified")
         hook("stop", sid_)
+    # 재확인2 C: 대화 승인 턴이 끝난 뒤 새 요청이 오면, 새 승인 전에는 이전 승인으로 검토하지 않는다
+    hook("prompt", "C2", prompt="로그인 버튼 글자를 바꿔 주세요"); hook("prompt", "C2", prompt="진행해 주세요", transcript_path=str(trp)); hook("stop", "C2")
+    hook("prompt", "C2", prompt="영어 문구를 그대로 유지하세요 NEW-REQ-AFTER-STOP")
+    rc2 = json.loads(sh(sys.executable, "-I", str(verifier), "prepare", "--session", "C2", cwd=proj, env=base_env).stdout.strip().splitlines()[-1])
+    check("대화 승인이 끝난 뒤 새 요청이 있으면 이전 승인으로 검토하지 않는다(unverified)", rc2.get("state") == "unverified" and "아직 승인되지 않았" in rc2.get("reason", ""))
+    hook("stop", "C2")
     # 릴리스 검토 P2: 지도의 기준 본문이 비었고 계획도 없으면 입력 부족
     hook("prompt", "E2", prompt="작업해 주세요")
     mpe = proj / "work" / "empty" / "work.md"

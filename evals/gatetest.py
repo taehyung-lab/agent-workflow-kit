@@ -225,6 +225,20 @@ with tempfile.TemporaryDirectory() as t:
     call("prompt", {"prompt": "승인합니다", "session_id": "q5"})
     check("릴리스 검토 P1: 대화 기록 없이 같은 승인이 바로 두 번 와도 원문이 남는다", rec("q5")["requests"] == ["DUP-REQ 요청", "승인합니다"])
     stop_of("q5")
+    # 재확인2 C: Stop 없이 다음 요청 → 재승인해도 그 요청이 원문에 남는다
+    tp("q6", "첫 요청"); tp("q6", "진행해 주세요"); tp("q6", "NEW-REQ 새 요청"); tp("q6", "승인합니다")
+    check("재확인2 C: Stop 이 빠져도 다음 승인의 원문에 새 요청이 남는다", rec("q6")["requests"] == ["NEW-REQ 새 요청", "승인합니다"])
+    stop_of("q6")
+    # 재확인2 D: 기록 손상 → 철회가 무시되지 않고(닫힘) 원문 불완전 표시
+    lg = lambda sid: repo / ".git" / "awk-gate" / (hk(sid) + ".prompts.jsonl")
+    tp("q7", "탈퇴 기능"); write_map("work/q7/work.md", "| Q7 | 탈퇴 |", "q7"); stop_of("q7"); tp("q7", "승인합니다"); stop_of("q7")
+    with open(lg("q7"), "a") as fh: fh.write("[]\n")
+    tp("q7", "취소합니다")
+    check("재확인2 D: 기록에 이상한 줄이 있어도 철회가 적용되고 수정 도구를 막는다", ed("q7") and rec("q7")["approved"] is False)
+    shutil_rm(repo / "work")
+    tp("q8", "ORIG 요청"); lg("q8").unlink(); tp("q8", "진행해 주세요")
+    check("재확인2 D: 승인 전에 기록이 없어지면 원문 불완전으로 표시한다", rec("q8").get("requests_incomplete") is True)
+    stop_of("q8")
     tp("q3", "FIRST-REQ 원래 요청"); tp("q3", "IMPORTANT-REQ 개인정보 영구 삭제")
     for i in range(45):
         tp("q3", f"질문 답변 {i}")

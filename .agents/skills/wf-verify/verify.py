@@ -370,6 +370,11 @@ def prepare(args):
         requests = [f"(승인 전·승인 메시지) {m}" for m in reqs] + [f"(승인 뒤 메시지) {m}" for m in rec.get("after", [])]
         if rec and not reqs:
             problems.append("요청 원문을 확보하지 못했다(입력 부족)")
+        if rec.get("requests_incomplete"):
+            problems.append("사용자 메시지 기록이 손상·누락돼 요청 원문이 완전하지 않다(입력 부족)")
+        if rec and not map_path and rec.get("log_file") and not rec.get("approved") and rec.get("approve_idx") is not None \
+                and len(gate.read_prompts(state_dir / rec["log_file"])) > rec["approve_idx"] + 1:
+            problems.append("대화 승인이 끝난 뒤 새 사용자 메시지가 있다. 새 요청은 아직 승인되지 않았으므로 이전 승인으로 판정하지 않는다(새 계획을 승인받은 뒤 다시 검토)")
         plan = rec.get("plan") if rec else None
         body = ((rec.get('criteria') or {}).get(map_path) or '').strip() if rec and map_path else ""
         criteria = f"### {map_path}\n{body}" if body else ""
