@@ -104,7 +104,7 @@ printf '{"type": "item.completed", "item": {"type": "agent_message", "text": %s}
     def verify(verdicts, **extra):
         d = Path(tempfile.mkdtemp(dir=t))
         (d / "verdicts").write_text("".join(json.dumps(json.dumps(v, ensure_ascii=False), ensure_ascii=False) + "\n" for v in verdicts))
-        r = inbox("python3", str(verifier), "--harness", "codex", "--map", "work/discount/work.md",
+        r = inbox("python3", str(KIT / "evals/verdict.py"), "session", "--tool", str(verifier), "--harness", "codex", "--map", "work/discount/work.md",
                   FAKE_DIR=str(d), PATH=f"{fake}:{env.get('PATH', '/usr/bin:/bin')}", **extra)
         o = json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
         return r.returncode, o, (d / "vprompt.1").read_text() if (d / "vprompt.1").is_file() else ""

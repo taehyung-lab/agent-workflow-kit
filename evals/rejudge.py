@@ -49,7 +49,7 @@ for root in sys.argv[1:]:
         m.setdefault("rejudge_history", []).append({"verdict": old, "check_output": m.get("check_output", ""), "completion": m.get("completion"),
                                                     "judge_version": m.get("judge_version"), "check_sha": m.get("check_sha")})
         if "verifier" in m:  # 검증 루프가 있던 실행만 완료를 다시 계산한다(예전 결과에는 검증 상태가 없다)
-            m["completion"] = completion(m["verifier"], new, m.get("gate_waiting", False))  # 예전 결과에는 대기 기록이 없다(대기로 세지 않음)
+            m["completion"] = completion(m.get("review_state", m["verifier"]), new, m.get("gate_waiting", False), m.get("review_required", False))  # 예전 결과에는 대기 기록이 없다(대기로 세지 않음)
         m.update(check_passed=new == "PASS", check_needs_review=new == "REVIEW", check_unverified=new == "UNVERIFIED", check_output=out, rejudged=True, check_sha=check_hash,
                  judge_version=judge_version)
         meta_path.write_text(json.dumps(m, ensure_ascii=False, indent=1), encoding="utf-8")

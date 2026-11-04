@@ -128,8 +128,8 @@ for l in open(sys.argv[1], encoding="utf-8"):
       approved_plan=$(python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); from transcript import read; print(read(sys.argv[2])[1])' "$here" "$out.t$(( ${#turns[@]} - 1 )).jsonl" 2>/dev/null)
       [ -n "$approved_plan" ] || approved_plan="(추출 실패: 승인 직전 답을 기록에서 읽지 못했다. 승인 원문이 가리키는 계획에 기대는 조건은 미확인으로 둔다)"
     fi
-    # 검증 실행기는 일반 설치와 같은 것(설치된 키트의 .agents/skills/wf-verify/verify.py)을 쓴다. 고정 복사본·검증자 입력·결과 형식 판정·
-    # 재검증 한도를 그 실행기가 맡고, 실행기는 반환 턴만 보낸다. 그 커밋의 키트에 실행기가 없으면 이 저장소의 것을 쓴다(meta.verifier_tool).
+    # 검증 입력 묶기·결과 판정·재검증 한도는 일반 설치와 같은 실행기(설치된 키트의 .agents/skills/wf-verify/verify.py prepare·finish)가 맡고,
+    # 검토자 세션을 띄우는 일만 평가 실행기(verdict.py session)가 한다. 실행기는 반환 턴만 보낸다. 그 커밋의 키트에 실행기가 없으면 이 저장소의 것을 쓴다(meta.verifier_tool).
     # 하네스가 실행기 밖에서 돌기 때문에 관문 기록 대신 사용자 원문·계획·기준·작업 시작 상태를 파일로 넘긴다.
     verifier_tool="$work/project/.agents/skills/wf-verify/verify.py"; [ -f "$verifier_tool" ] || verifier_tool="$kit/.agents/skills/wf-verify/verify.py"
     reqs=(); for turn in "${turns[@]}"; do reqs+=(--request "$turn"); done
@@ -144,8 +144,8 @@ print("" if v is None else str(v).lower() if isinstance(v, bool) else v)' "$1" 2
       verify_rounds=$((verify_rounds + 1))
       vlog="$out.verify$verify_rounds.jsonl"; vh=""
       if [ "$harness" = codex ]; then vh=$(mktemp -d); cp ~/.codex/auth.json ~/.codex/config.toml "$vh/" 2>/dev/null; [ ! -f ~/.codex/AGENTS.md ] || cp ~/.codex/AGENTS.md "$vh/"; fi
-      vjson=$(cd "$work/project" && env ${vh:+CODEX_HOME=$vh} python3 -I "$verifier_tool" --harness "$harness" --rounds "$max_rounds" --log "$vlog" \
-        "${reqs[@]}" "${vargs[@]}" 2>> "$out.err" | tail -1)
+      vjson=$(cd "$work/project" && env ${vh:+CODEX_HOME=$vh} python3 -I "$here/verdict.py" session --tool "$verifier_tool" --harness "$harness" \
+        --rounds "$max_rounds" --log "$vlog" "${reqs[@]}" "${vargs[@]}" 2>> "$out.err" | tail -1)
       [ -z "$vh" ] || rm -rf "${vh:?}"
       [ ! -f "$vlog" ] || cp "$vlog" "$out.verify.jsonl"  # 마지막 판정 기록(이전 판정은 .verifyN.jsonl 로 남는다)
       vstate=$(vget state); verify_reason=$(vget reason); vrc=$(vget verifier_exit_code)
@@ -202,7 +202,7 @@ print("true" if d.get("waiting") else "false")' 2>/dev/null)
   # 사례가 AGENTS.md 를 읽을 수 없게 만들었으면 바이트는 설치에 쓴 키트 checkout 에서 잰다.
   agents_bytes=$( { wc -c < "$work/project/AGENTS.md" || wc -c < "$work/kit/AGENTS.md"; } 2>/dev/null | tr -d ' ')
   # 값은 환경 변수로 넘겨 따옴표·줄바꿈이 섞인 판정 문구도 그대로 기록한다.
-  E_HERE=$here E_CASE=$case_name E_REF=$ref E_COMMIT=$commit E_HARNESS=$harness E_RUN=$i E_RC=$rc E_SEC=$seconds \
+  E_REQUIRED=$( [ -f "$case_dir/review-required" ] && echo true || echo false ) E_HERE=$here E_CASE=$case_name E_REF=$ref E_COMMIT=$commit E_HARNESS=$harness E_RUN=$i E_RC=$rc E_SEC=$seconds \
   E_VERSION=$("$harness" --version 2>/dev/null | head -1) E_BYTES=$agents_bytes E_CHECK_RC=$check_rc E_VERDICT=$verdict \
   E_G1=$(fingerprint ~/.claude/CLAUDE.md) E_G2=$(fingerprint ~/.agents/USER.md) E_G3=$(fingerprint ~/.codex/AGENTS.md) E_G4=$(skills_fingerprint) E_OBS=$observed E_VSTATE=$verify_state E_BCHANGED=${baseline_changed:-false} E_VREASON=$verify_reason E_VROUNDS=$verify_rounds E_VRC=$verifier_rc E_VJSON=$vjson E_LANG=${EVALS_LANG:-} E_JUDGE=$(cd "$here" && shasum -a 256 "cases/$case_name/check.py" judge.py observe.py transcript.py verdict.py ../.agents/skills/wf-verify/verify.py 2>/dev/null | shasum -a 256 | cut -c1-12) E_GATE=$gate E_WAITING=${gate_waiting:-false} E_VTOOL=${verifier_tool:-} E_INPUT=$input E_TURNS=$sent E_PLANNED=${#turns[@]} E_WAIT=$(python3 -I -c 'import json,sys
 n = seen = 0
@@ -223,6 +223,11 @@ import json, os, sys
 e = os.environ
 sys.path.insert(0, e["E_HERE"])
 from verdict import completion
+def review_state(e):
+    if e["E_VSTATE"] != "off":
+        return e["E_VSTATE"]
+    run = json.loads(e["E_OBS"] or "{}").get("verify_run", "none")
+    return run if run in ("ok", "returned", "incomplete", "unverified") else "off"
 json.dump({"case": e["E_CASE"], "kit_ref": e["E_REF"], "kit_commit": e["E_COMMIT"], "harness": e["E_HARNESS"],
   "run": int(e["E_RUN"]), "harness_version": e["E_VERSION"], "exit_code": int(e["E_RC"]), "seconds": int(e["E_SEC"]),
   "agents_md_bytes": int(e["E_BYTES"]), "check_passed": e["E_CHECK_RC"] == "0", "check_needs_review": e["E_CHECK_RC"] == "2", "check_unverified": e["E_CHECK_RC"] == "3", "approval_gate": e["E_GATE"] == "true", "input": e["E_INPUT"], "user_turns": int(e["E_TURNS"]), "planned_turns": int(e["E_PLANNED"]), "unapproved_turns": int(e["E_WAIT"] or 0), "check_output": e["E_VERDICT"], "observed": json.loads(e["E_OBS"] or "{}"), "verifier": e["E_VSTATE"], "verify_reason": e["E_VREASON"], "verify_rounds": int(e["E_VROUNDS"]),
@@ -233,7 +238,12 @@ json.dump({"case": e["E_CASE"], "kit_ref": e["E_REF"], "kit_commit": e["E_COMMIT
   # 검증자가 OK 여도 사례의 결정적 행동 검사(check.py)가 실패·미확인이면 완료로 세지 않는다(검증자가 놓친 것으로 따로 남긴다).
   # 판정 규칙은 verdict.completion 하나다(rejudge.py 도 같은 함수로 다시 계산한다).
   # 사용자 답 대기(gate_waiting)는 구현 실패·검증 실패·미확인과 따로 센다(완료가 아니다).
-  "completion": completion(e["E_VSTATE"], {"0": "PASS", "1": "FAIL", "2": "REVIEW"}.get(e["E_CHECK_RC"], "UNVERIFIED"), e["E_WAITING"] == "true"),
+  # 독립 검토 상태: 실행기가 띄운 검토(EVALS_VERIFY)가 있으면 그것, 없으면 구현자가 스스로 돌린 검토(verify.py finish)의 결과.
+  # 독립 검토가 필수인 사례(review-required 파일)에서 검토가 없으면 review-missing 이다(필요 없어 0회인 것과 구별).
+  "review_state": review_state(e),
+  "review_required": e["E_REQUIRED"] == "true",
+  "completion": completion(review_state(e), {"0": "PASS", "1": "FAIL", "2": "REVIEW"}.get(e["E_CHECK_RC"], "UNVERIFIED"), e["E_WAITING"] == "true",
+                           e["E_REQUIRED"] == "true"),
   "gate_waiting": e["E_WAITING"] == "true", "verifier_tool": e["E_VTOOL"] or None,
   "baseline_changed_after_approval": e["E_BCHANGED"] == "true",
   "global_instructions": {"~/.claude/CLAUDE.md": e["E_G1"], "~/.agents/USER.md": e["E_G2"], "~/.codex/AGENTS.md": e["E_G3"], "global skills": e["E_G4"]}},

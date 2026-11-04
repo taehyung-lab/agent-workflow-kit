@@ -110,16 +110,25 @@ def judge(final, required=()):
     return {**out, "state": "ok", "reason": ""}
 
 
-def completion(verifier, check="REVIEW", waiting=False):
-    """전체 완료 판정. verifier: 검증 상태(off·ok·returned·incomplete·unverified), check: 결정적 행동 검사(PASS·REVIEW·FAIL·UNVERIFIED,
-    일반 작업에는 사례 검사가 없어 REVIEW), waiting: 승인 관문이 사용자 답을 기다리는 중(승인 전·승인이 닫힘).
-    verified 만 완료다. 나머지는 서로 다른 미완료다: waiting-user(사용자 답 대기, 검증 OK 여도) / check-failed(구현 실패: 검증자 OK 여도 행동 검사 실패)
-    / returned·incomplete(검증 실패) / unverified(환경·형식 문제로 확인 못 함) / not-verified(검증을 돌리지 않음)."""
-    if waiting:  # 사용자 답을 기다리는 작업은 검증 OK 여도 완료가 아니다(원시 검사 판정 check 는 meta 에 그대로 남는다)
+def completion(verifier, check="REVIEW", waiting=False, required=False):
+    """전체 완료 판정(한 곳). verifier: 독립 검토 상태(off·ok·returned·incomplete·unverified), check: 직접 증거(PASS·REVIEW·FAIL·UNVERIFIED,
+    REVIEW 는 사람이 원시 기록을 봐야 함), waiting: 승인 관문이 사용자 답을 기다림, required: 이 변경에 독립 검토가 필수인가.
+    - 사용자 답 대기면 waiting-user. 직접 증거가 실패면 검토 OK 여도 check-failed, 직접 증거를 못 얻었으면 unverified.
+    - 검토를 했는데 OK 가 아니면 그 상태(returned·incomplete·unverified). 검토 OK 면 verified.
+    - 검토를 하지 않았는데 필수면 review-missing(호출 누락). 필수가 아니면 직접 증거 PASS 만으로 verified, REVIEW 면 needs-review."""
+    if waiting:
         return "waiting-user"
+    if check == "FAIL":
+        return "check-failed"
+    if check == "UNVERIFIED":
+        return "unverified"
+    if verifier in ("returned", "incomplete", "unverified"):
+        return verifier
     if verifier == "ok":
-        return {"PASS": "verified", "REVIEW": "verified", "FAIL": "check-failed"}.get(check, "unverified")
-    return {"off": "not-verified"}.get(verifier, verifier)
+        return "verified"
+    if required:
+        return "review-missing"
+    return "verified" if check == "PASS" else "needs-review"
 
 
 def section(text):
@@ -261,7 +270,7 @@ def diff(base, target):
     return text, False, failed
 
 
-def prompt_text(requests, plan, conditions, criteria, note, target, change):
+def prompt_text(requests, plan, conditions, criteria, note, target, change, vdir="."):
     parts = [(HERE / "verifier-prompt.txt").read_text(encoding="utf-8")]
     for n, req in enumerate(requests, 1):
         parts.append(f"\n\n## 사용자 원문 {n}\n{req}")
@@ -269,28 +278,10 @@ def prompt_text(requests, plan, conditions, criteria, note, target, change):
         parts.append(f"\n\n## 승인 원문이 가리키는 계획(승인 바로 앞 구현자 답. 사용자가 이 추천안을 승인했다. 원문과 대조하며, 구현 뒤 자기평가가 아니다)\n{plan}\n")
     parts.append(f"\n\n## 필수 조건\n{conditions or '(사례가 정하지 않음. 원문에서 세운다)'}\n")
     parts.append(f"\n\n## 작업 지도의 기준(사용자가 승인한 때의 지도. 구현자가 쓴 합의 조건이므로 원문과 대조한다)\n{criteria or '(없음)'}\n{note}")
-    parts.append(f"\n\n## 대상 버전\n이 폴더의 git 커밋 {target}\n")
+    parts.append(f"\n\n## 대상 버전\n판정 대상 폴더 {vdir} 의 git 커밋 {target}. 이 폴더에서만 읽고 검사를 실행한다(원래 작업 폴더는 보지 않는다).\n")
     parts.append("\n\n## 실행 방법\n저장소 README 와 AGENTS.md 프로젝트 지도에 적힌 실행·검사 명령을 이 폴더에서 실행한다.\n")
     parts.append(f"\n\n## 작업 시작부터 바뀐 내용(diff, 작업 지도 제외)\n{change}")
     return "".join(parts)
-
-
-def call_harness(harness, vdir, prompt, log):
-    """검증자 세션을 띄운다. 돌려줌: 종료 코드(하네스가 없으면 None)."""
-    exe = shutil.which(harness)
-    if not exe:
-        return None
-    env = {k: v for k, v in os.environ.items() if k not in ("AWK_GATE_PROMPT_FROM", "AWK_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")}
-    if harness == "claude":
-        cmd = [exe, "-p", prompt, "--output-format", "stream-json", "--verbose", "--allowedTools", "Read,Grep,Glob,Bash", "--max-turns", "30"]
-    else:
-        cmd = [exe, "exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", "-C", str(vdir), prompt]
-    with open(log, "wb") as out, open(str(log) + ".err", "ab") as err:
-        try:
-            return subprocess.run(cmd, cwd=vdir, stdout=out, stderr=err, stdin=subprocess.DEVNULL, env=env,
-                                  timeout=int(os.environ.get("AWK_VERIFY_TIMEOUT", "900"))).returncode
-        except subprocess.TimeoutExpired:
-            return 124
 
 
 def opt(args, name, many=False):
@@ -320,11 +311,22 @@ def copy_kit_paths(vdir, base):
             shutil.copy2(src, dst)
 
 
+USAGE = ("사용: verify.py prepare --map work/<작업명>/work.md [--rounds N]   → 검토 입력(prompt_file)과 판정 대상 폴더를 만든다\n"
+         "      verify.py finish --round <prepare 가 낸 kept 폴더> [--answer <파일>]   → 검토자의 마지막 답(표준 입력)을 판정한다")
+
+
 def main(args):
-    harness = opt(args, "--harness")
-    if harness not in ("claude", "codex"):
-        print("사용: verify.py --harness claude|codex --map work/<작업명>/work.md [--rounds N]", file=sys.stderr)
+    sub = args[0] if args and args[0] in ("prepare", "finish") else None
+    if sub is None:
+        print(USAGE, file=sys.stderr)
         return 2
+    return prepare(args[1:]) if sub == "prepare" else finish(args[1:])
+
+
+def prepare(args):
+    """검토 입력을 묶는다: 승인된 기준·승인 메시지·승인 뒤 메시지·승인 뒤 변경(diff)과 판정 대상의 고정 복사본. 검토자는 띄우지 않는다
+    (일반 작업은 하네스의 하위 에이전트, 평가는 evals 실행기가 띄운다). 한도에 닿았거나 근거가 불완전하면 여기서 최종 결과를 낸다."""
+    harness = opt(args, "--reviewer") or "subagent"
     asked_max = int(opt(args, "--rounds") or 2)
     root = Path(run(["git", "rev-parse", "--show-toplevel"], cwd=os.getcwd()).stdout.decode().strip() or os.getcwd())
     gate = gate_module()
@@ -341,7 +343,7 @@ def main(args):
         map_path = opt(args, "--map")
         state_dir = gate.locate(root)[1]
         if not map_path:
-            print("사용: verify.py --harness claude|codex --map work/<작업명>/work.md [--rounds N]", file=sys.stderr)
+            print(USAGE, file=sys.stderr)
             return 2
         map_path = str(Path(os.path.realpath(Path(root, map_path))).relative_to(os.path.realpath(root)))
         rec = gate.approved_record(root, state_dir, map_path) or {}
@@ -430,54 +432,35 @@ def main(args):
             result.update(state="unverified", reason=" / ".join(problems))
             rounds.append({"uid": os.urandom(8).hex(), "round": n, "state": "unverified", "reason": result["reason"], "target": target, "ran": False, "kept": str(keep), "at": time.time()})
         else:
-            prompt = prompt_text(requests, plan, conditions, criteria, note, target, change)
+            prompt = prompt_text(requests, plan, conditions, criteria, note, target, change, vdir)
             (keep / "prompt.txt").write_text(prompt, encoding="utf-8")
-            log = keep / "verify.jsonl"  # 원시 기록(표준 오류는 verify.jsonl.err)은 항상 이 회차의 고유 폴더에 남는다
-            result["log"] = str(log)
-            rc = call_harness(harness, vdir, prompt, log)
-            if opt(args, "--log"):  # --log 는 최신 회차 기록을 가리키는 복사본일 뿐이다(덮여도 원시 기록은 위 폴더에 그대로 있다)
-                for src, dst in ((log, Path(opt(args, "--log"))), (Path(str(log) + ".err"), Path(opt(args, "--log") + ".err"))):
-                    if src.is_file():
-                        dst.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(src, dst)
-                result["log_copy"] = opt(args, "--log")
-            touched = [l for l in run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=vdir).stdout.decode().splitlines()
-                       if l and not l.startswith("??")]
-            verdict = judge(final_answer(log), required)
-            result.update(conditions=verdict.get("conditions", []), out_of_scope=verdict.get("out_of_scope", []), verifier_exit_code=rc,
-                          final=final_answer(log))
-            if rc is None:
-                result.update(state="unverified", reason=f"검증 하네스({harness})를 찾지 못했다. 설치·로그인된 하네스가 있으면 다시 실행한다")
-            elif rc != 0:
-                # sandbox(네트워크 차단 등) 안에서는 검증자 모델을 띄우지 못할 수 있다. 완료로 세지 않고 재개 조건을 남긴다.
-                result.update(state="unverified", reason=f"검증자 하네스 종료 코드 {rc}(원시 기록 {log}.err). 재개 조건: 네트워크와 로그인된 "
-                              f"{harness} 하네스를 쓸 수 있는 환경에서 같은 명령을 다시 실행한다")
-            elif touched:
-                result.update(state="unverified", reason="검증자가 판정 대상의 추적 파일을 바꿨다: " + " ".join(touched[:5]))
-            elif verdict["state"] == "returned" and len(ran) + 1 >= rounds_max:
-                result.update(state="incomplete", reason=f"재검증 한도({rounds_max})에 닿았다: 마지막 판정 RETURN")
-            else:
-                result.update(state=verdict["state"], reason=verdict.get("reason", ""))
-            # 검증하는 동안 작업·승인 기준·제품 파일이 바뀌었으면 고정 대상의 판정은 남기되 지금 작업의 결과로 쓰지 않는다
-            fresh = (gate.approved_record(root, state_dir, rec_file) or {}) if rec_file else {}
-            end_task = (fresh.get("approved_at"), json.dumps(fresh.get("targets", {}), sort_keys=True), fresh.get("approved"), map_fp()) if rec_file else start_task
-            if rc is not None and (end_task != start_task or product_print(gate, root) != start_print):
-                result.update(target_state=result["state"], state="unverified",
-                              reason="검증하는 동안 승인·지도 기준·제품 파일이 바뀌었다. 고정 대상의 판정은 남겼지만 지금 버전의 결과가 아니다")
-            rounds.append({"uid": os.urandom(8).hex(), "round": n, "state": result["state"], "target_state": result.get("target_state"), "reason": result.get("reason", ""),
-                           "target": target, "product": start_print, "map": start_task[3], "verifier_exit_code": rc, "ran": rc is not None, "kept": str(keep), "at": time.time()})
+            pending = {"explicit": explicit, "rec_file": rec_file, "state_dir": str(state_dir) if state_dir else None,
+                       "state_file": str(state_file) if explicit else str(vfile), "approved_at": rec.get("approved_at"), "required": required,
+                       "rounds_max": rounds_max, "round": n, "ran_before": len(ran), "start_print": start_print, "start_task": list(start_task),
+                       "target": target, "vdir": str(vdir), "harness": harness, "baseline_changed": changed, "root": str(root)}
+            (keep / "pending.json").write_text(json.dumps(pending, ensure_ascii=False), encoding="utf-8")
+            ready = {"state": "ready", "round": n, "kept": str(keep), "prompt_file": str(keep / "prompt.txt"), "target_dir": str(vdir),
+                     "finish": f"python3 {Path(__file__).resolve()} finish --round {keep}"}
+            print(f"[verify] 검토 입력을 만들었다({n}회차). prompt_file 을 하위 에이전트(검토자)에게 그대로 넘기고, 그 마지막 답을 "
+                  f"표준 입력으로 finish 명령에 넘긴다.", file=sys.stderr)
+            print(json.dumps(ready, ensure_ascii=False))
+            return 0
         (keep / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
+    return finalize(result, rounds, rounds_max, explicit, state_file if explicit else (vfile if rec_file else None), rec, rec_file, state_dir, root, gate)
+
+
+def finalize(result, rounds, rounds_max, explicit, state_path, rec, rec_file, state_dir, root, gate):
+    """회차 기록을 남기고 완료 판정과 함께 결과를 낸다(prepare 의 조기 종료와 finish 가 같은 함수를 쓴다)."""
     vstate = {"rounds": rounds, "state": result["state"], "reason": result.get("reason", ""), "max_rounds": rounds_max}
-    if explicit:
-        state_file.write_text(json.dumps(vstate, ensure_ascii=False))
-    elif rec:  # 회차 기록은 지도 옆에 둔다(승인 시각으로 어느 승인의 회차인지 가린다)
-        vfile.parent.mkdir(parents=True, exist_ok=True)
-        vfile.write_text(json.dumps({**vstate, "approved_at": rec.get("approved_at")}, ensure_ascii=False))
-    # 사용자 답 대기(승인이 철회·기준 변경으로 닫힘)면 검증이 OK 여도 완료가 아니다.
-    now_rec = (gate.approved_record(root, state_dir, rec_file) or {}) if rec_file else {}
+    if state_path:
+        Path(state_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(state_path).write_text(json.dumps({**vstate, "approved_at": (rec or {}).get("approved_at")} if not explicit else vstate, ensure_ascii=False))
+    now_rec = (gate.approved_record(root, Path(state_dir), rec_file) or {}) if rec_file and state_dir else {}
     waiting = bool(rec_file) and gate.status_json(now_rec)["waiting"]
-    result["completion"] = completion(result["state"], waiting=waiting)
-    msg = {"ok": "완료: 독립 검증이 모든 조건 충족을 냈다.",
-           "returned": "돌려보냄: 아래 사유의 원인이 있는 곳(구현·검사·기준)을 고친 뒤 이 명령을 다시 실행해 새 버전을 판정받는다. 원문·계약으로 정할 수 없는 결과가 원인이면 고치지 않고 사용자에게 묻는다.",
+    # 독립 검토 결과의 완료 판정: 직접 증거는 구현자 몫이므로 충족(PASS)을 전제로, 검토가 필수인 경우로 계산한다.
+    result["completion"] = completion(result["state"], "PASS", waiting, required=True)
+    msg = {"ok": "완료: 독립 검토가 모든 조건 충족을 냈다(직접 증거의 충족은 구현자가 따로 보고한다).",
+           "returned": "돌려보냄: 사유를 원문·승인된 기준과 대조한다. 근거로 정할 수 있는 결함이면 원인 자리를 고친 뒤 prepare 부터 다시, 사용자 결정이 필요한 미정이면 추천과 함께 사용자에게 묻는다.",
            "incomplete": "미완료: 재검증 한도에 닿았다. 남은 조건과 사유를 사용자에게 보고한다.",
            "unverified": "미확인: 판정하지 못했다. 완료로 보고하지 않고 사유와 재개 조건을 보고한다."}[result["state"]]
     if result["completion"] == "waiting-user":
@@ -485,6 +468,62 @@ def main(args):
     print(f"[verify] {msg} ({result['round']}회차, 한도 {rounds_max}) {result.get('reason', '')}", file=sys.stderr)
     print(json.dumps(result, ensure_ascii=False))
     return EXIT[result["state"]]
+
+
+def finish(args):
+    """검토자의 마지막 답을 판정한다. --answer 파일(평가는 하네스 기록 .jsonl)이나 표준 입력. 대상 폴더가 바뀌었거나 검토하는 동안
+    승인·지도 기준·제품 파일이 바뀌었으면 미확인. --exit-code 는 평가 실행기가 넘기는 검토자 하네스 종료 코드(none = 하네스 없음)."""
+    keep = Path(opt(args, "--round") or "")
+    if not (keep / "pending.json").is_file():
+        print(USAGE, file=sys.stderr)
+        return 2
+    pd = json.loads((keep / "pending.json").read_text(encoding="utf-8"))
+    if (keep / "result.json").is_file():
+        print("[verify] 이 회차는 이미 판정했다. prepare 로 새 회차를 만든다.", file=sys.stderr)
+        print((keep / "result.json").read_text(encoding="utf-8").strip().replace("\n", " "))
+        return EXIT[json.loads((keep / "result.json").read_text(encoding="utf-8"))["state"]]
+    gate = gate_module()
+    root, rec_file = Path(pd["root"]), pd["rec_file"]
+    state_dir = Path(pd["state_dir"]) if pd["state_dir"] else None
+    src = opt(args, "--answer")
+    raw = Path(src).read_text(encoding="utf-8", errors="replace") if src else sys.stdin.read()
+    answer = final_answer(src) if src and src.endswith(".jsonl") else raw
+    (keep / "answer.txt").write_text(answer, encoding="utf-8")
+    rc_arg = opt(args, "--exit-code")
+    rc = None if rc_arg == "none" else int(rc_arg or 0)
+    vdir, n, rounds_max = Path(pd["vdir"]), pd["round"], pd["rounds_max"]
+    result = {"round": n, "max_rounds": rounds_max, "harness": pd["harness"], "required": pd["required"], "kept": str(keep),
+              "target": pd["target"], "baseline_changed_after_approval": pd["baseline_changed"]}
+    touched = [l for l in run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=vdir).stdout.decode().splitlines()
+               if l and not l.startswith("??")]
+    verdict = judge(answer, pd["required"])
+    result.update(conditions=verdict.get("conditions", []), out_of_scope=verdict.get("out_of_scope", []), verifier_exit_code=rc, final=answer)
+    if rc is None:
+        result.update(state="unverified", reason=f"검토 하네스({pd['harness']})를 찾지 못했다. 설치·로그인된 하네스가 있으면 다시 실행한다")
+    elif rc != 0:
+        result.update(state="unverified", reason=f"검토자 하네스 종료 코드 {rc}. 재개 조건: 검토자를 띄울 수 있는 환경에서 prepare 부터 다시 실행한다")
+    elif touched:
+        result.update(state="unverified", reason="검토자가 판정 대상의 추적 파일을 바꿨다: " + " ".join(touched[:5]))
+    elif verdict["state"] == "returned" and pd["ran_before"] + 1 >= rounds_max:
+        result.update(state="incomplete", reason=f"재검증 한도({rounds_max})에 닿았다: 마지막 판정 RETURN")
+    else:
+        result.update(state=verdict["state"], reason=verdict.get("reason", ""))
+    rec = (gate.approved_record(root, state_dir, rec_file) or {}) if rec_file and state_dir else {}
+    map_fp = gate.maps(root).get(rec_file) if rec_file else None
+    end_task = [rec.get("approved_at"), json.dumps(rec.get("targets", {}), sort_keys=True), rec.get("approved"), map_fp] if rec_file else pd["start_task"]
+    if rc is not None and (end_task != pd["start_task"] or product_print(gate, root) != pd["start_print"]):
+        result.update(target_state=result["state"], state="unverified",
+                      reason="검토하는 동안 승인·지도 기준·제품 파일이 바뀌었다. 고정 대상의 판정은 남겼지만 지금 버전의 결과가 아니다")
+    state_path = Path(pd["state_file"]) if pd["state_file"] else None
+    vstate = json.loads(state_path.read_text()) if state_path and state_path.is_file() else {}
+    if not pd["explicit"] and vstate.get("approved_at") != pd["approved_at"]:
+        vstate = {}  # 앞선 승인의 회차와 섞지 않는다
+    rounds = list(vstate.get("rounds", []))
+    rounds.append({"uid": os.urandom(8).hex(), "round": n, "state": result["state"], "target_state": result.get("target_state"), "reason": result.get("reason", ""),
+                   "target": pd["target"], "product": pd["start_print"], "map": pd["start_task"][3], "verifier_exit_code": rc, "ran": rc is not None,
+                   "kept": str(keep), "at": time.time()})
+    (keep / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
+    return finalize(result, rounds, rounds_max, pd["explicit"], state_path, rec or {"approved_at": pd["approved_at"]}, rec_file, state_dir, root, gate)
 
 
 def cli(args):

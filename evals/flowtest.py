@@ -87,7 +87,7 @@ exit 0
         e = {**base_env, "FAKE_DIR": str(d), "PATH": (f"{fake}:" if path else "") + "/usr/bin:/bin", **env}
         if sid:
             e["CLAUDE_CODE_SESSION_ID"] = sid
-        r = sh(sys.executable, "-I", str(verifier), "--harness", harness, *extra, cwd=proj, env=e)
+        r = sh(sys.executable, "-I", str(KIT / "evals/verdict.py"), "session", "--tool", str(verifier), "--harness", harness, *extra, cwd=proj, env=e)
         out = json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
         prompt = (d / "vprompt.1").read_text() if (d / "vprompt.1").is_file() else ""
         return r.returncode, out, prompt
@@ -95,7 +95,7 @@ exit 0
     def verify(mp, verdicts, harness="claude", path=True, extra=(), **env):
         d = Path(tempfile.mkdtemp(dir=t)); (d / "verdicts").write_text("".join(json.dumps(json.dumps(v, ensure_ascii=False) if isinstance(v, dict) else v, ensure_ascii=False) + "\n" for v in verdicts))
         e = {**base_env, "FAKE_DIR": str(d), "PATH": (f"{fake}:" if path else "") + "/usr/bin:/bin", **env}
-        r = sh(sys.executable, "-I", str(verifier), "--harness", harness, *(("--map", mp) if mp else ()), *extra, cwd=proj, env=e)
+        r = sh(sys.executable, "-I", str(KIT / "evals/verdict.py"), "session", "--tool", str(verifier), "--harness", harness, *(("--map", mp) if mp else ()), *extra, cwd=proj, env=e)
         out = json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
         prompt = (d / "vprompt.1").read_text() if (d / "vprompt.1").is_file() else ""
         return r.returncode, out, prompt
@@ -155,7 +155,7 @@ exit 0
     hook("stop", "M"); hook("prompt", "M", prompt="승인합니다."); hook("stop", "M")
     rc, out, _ = verify(mpm, [OK], FAKE_TOUCH_ORIG=str(proj / mpm))
     check("검증 중 원본 지도의 기준이 바뀌면 unverified(반례6)", out.get("state") == "unverified" and "지도 기준" in out.get("reason", ""))
-    r = sh(sys.executable, "-I", str(verifier), "--harness", "claude", cwd=proj, env=base_env)
+    r = sh(sys.executable, "-I", str(KIT / "evals/verdict.py"), "session", "--tool", str(verifier), "--harness", "claude", cwd=proj, env=base_env)
     check("--map 없이 부르면 사용법과 종료 2", r.returncode == 2 and "--map" in r.stderr)
     hook("prompt", "C", prompt="저장 버튼 색 바꿔 주세요"); hook("prompt", "C", prompt="진행해주세요"); hook("stop", "C")
     hook("prompt", "C", prompt="이것도 해 주세요")
@@ -171,6 +171,32 @@ exit 0
     rc, out, prompt = verify(mpn, [OK])
     check("재검토1: 한도 뒤 재사용은 지도 기준이 같을 때만(기준이 바뀌면 앞선 OK 를 쓰지 않음)", out.get("state") == "incomplete" and not out.get("reused_round"))
     hook("stop", "N")
+    # 일반 작업 경로: 하네스 하위 에이전트가 검토자. prepare 가 입력을 묶고, 구현자가 검토자의 마지막 답을 finish 에 넘긴다(모델 세션을 띄우지 않음).
+    hook("prompt", "P", prompt="로그인 버튼 글자를 '로그인하기'로 바꿔 주세요")
+    mpp = write_map("P", "sub", CRIT); hook("stop", "P"); hook("prompt", "P", prompt="승인합니다."); hook("stop", "P")
+    (proj / "ui.txt").write_text("button=로그인하기\nbutton_en=Login\n")
+    prep = lambda: json.loads(sh(sys.executable, "-I", str(verifier), "prepare", "--map", mpp, cwd=proj, env=base_env).stdout.strip().splitlines()[-1])
+    fin = lambda kept, ans: sh(sys.executable, "-I", str(verifier), "finish", "--round", kept, cwd=proj, env=base_env, input=ans)
+    rdy = prep()
+    check("prepare: 모델을 띄우지 않고 검토 입력(prompt_file)과 판정 대상 폴더를 낸다",
+          rdy.get("state") == "ready" and "| B1 |" in Path(rdy["prompt_file"]).read_text() and Path(rdy["target_dir"]).is_dir()
+          and str(rdy["target_dir"]) in Path(rdy["prompt_file"]).read_text())
+    r = fin(rdy["kept"], "검토 결과입니다.\n" + json.dumps(OK, ensure_ascii=False))
+    o = json.loads(r.stdout.strip().splitlines()[-1])
+    check("finish: 검토자의 마지막 답(표준 입력)을 형식대로 판정해 ok, completion=verified", r.returncode == 0 and o.get("state") == "ok" and o.get("completion") == "verified")
+    r2 = fin(rdy["kept"], json.dumps(RET, ensure_ascii=False))
+    check("같은 회차를 다시 finish 해도 판정을 바꾸지 않는다(새 회차는 prepare 로)", json.loads(r2.stdout.strip().splitlines()[-1]).get("state") == "ok")
+    rdy = prep(); (Path(rdy["target_dir"]) / "ui.txt").write_text("changed\n")
+    o = json.loads(fin(rdy["kept"], json.dumps(OK, ensure_ascii=False)).stdout.strip().splitlines()[-1])
+    check("검토자가 판정 대상을 바꾸면 그 OK 는 unverified", o.get("state") == "unverified" and "추적 파일" in o.get("reason", ""))
+    hook("prompt", "P", prompt="승인합니다."); hook("stop", "P")
+    rdy = prep(); (proj / "ui.txt").write_text("button=검토 중 바뀜\nbutton_en=Login\n")
+    o = json.loads(fin(rdy["kept"], json.dumps(OK, ensure_ascii=False)).stdout.strip().splitlines()[-1])
+    check("검토하는 동안 원본이 바뀌면 과거 대상의 OK 는 무효(unverified)", o.get("state") == "unverified" and o.get("target_state") == "ok")
+    (proj / "ui.txt").write_text("button=로그인하기\nbutton_en=Login\n")
+    src = verifier.read_text(encoding="utf-8")
+    check("설치되는 검증 실행기는 모델 세션을 띄우지 않는다(평가 실행기만 띄움)", "subprocess.run(cmd, cwd=vdir" not in src and "def call_harness" not in src)
+
     # 기준이 승인 뒤 바뀌면: 관문은 닫히고, 검증 OK 여도 완료가 아니다(사용자 답 대기)
     hook("prompt", "G", prompt="버튼 바꿔 주세요")
     mpg = write_map("G", "g", "| B1 | 원래 기준 |")
@@ -219,7 +245,7 @@ exit 0
     outs = []
     for i in range(2):
         d = Path(tempfile.mkdtemp(dir=t)); (d / "verdicts").write_text(json.dumps(json.dumps(OK, ensure_ascii=False), ensure_ascii=False) + "\n")
-        r = sh(sys.executable, "-I", str(verifier), "--harness", "claude", "--request", str(req), "--base-dir", str(basedir),
+        r = sh(sys.executable, "-I", str(KIT / "evals/verdict.py"), "session", "--tool", str(verifier), "--harness", "claude", "--request", str(req), "--base-dir", str(basedir),
                "--state", str(t / f"ev-state-{i}.json"), "--log", str(logp), cwd=proj, env={**base_env, "FAKE_DIR": str(d), "PATH": f"{fake}:/usr/bin:/bin"})
         outs.append(json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {})
     first_raw = Path(outs[0].get("kept", "/x")) / "verify.jsonl"
