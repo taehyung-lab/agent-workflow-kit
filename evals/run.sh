@@ -32,7 +32,7 @@ if [[ "$ref" == *..* ]]; then
   python3 -I "$here/rejudge.py" "$out" > /dev/null || rc=$?
   python3 -I "$here/report.py" --compare "${ref%%..*}" "${ref##*..}" "$out"; exit "$rc"
 fi
-case_dir="$here/cases/$case_name"
+case_dir="$here/cases/$case_name"; [ -d "$case_dir" ] || case_dir="$here/holdout/$case_name"  # holdout: 숨겨 둔 평가 사례(최종 판정 때만)
 [ -f "$case_dir/prompt.txt" ] && [ -f "$case_dir/check.py" ] || fail "사례가 없거나 prompt.txt·check.py 가 빠졌다: $case_dir"
 commit=$(git -C "$kit" rev-parse --verify -q "$ref^{commit}") || fail "키트에 없는 커밋·태그: $ref"
 case "$harness" in claude|codex) command -v "$harness" >/dev/null || fail "$harness 명령이 없다";; *) fail "하네스는 claude 또는 codex";; esac
