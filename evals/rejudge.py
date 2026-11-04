@@ -13,7 +13,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from verdict import completion
 
-cases = Path(__file__).resolve().parent / "cases"
+here_ = Path(__file__).resolve().parent
+case_path = lambda name: (here_ / "cases" / name) if (here_ / "cases" / name).is_dir() else (here_ / "holdout" / name)  # holdout: 숨겨 둔 평가 사례
 for root in sys.argv[1:]:
     for meta_path in sorted(Path(root).rglob("*.meta.json")):
         m = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -26,12 +27,12 @@ for root in sys.argv[1:]:
         # 관문은 프로젝트 설정의 approval-gate.py 등록, 입력은 사례의 prompt 수보다 실행한 턴이 많으면 승인 추가로 본다.
         settings = Path(base + ".files/.claude/settings.json")
         gate = m.get("approval_gate", settings.is_file() and "approval-gate.py" in settings.read_text(encoding="utf-8"))
-        prompts = len(list((cases / m["case"]).glob("prompt*.txt")))
+        prompts = len(list(case_path(m["case"]).glob("prompt*.txt")))
         ran = len(list(Path(base).parent.glob(Path(base).name + ".t*.jsonl")))
         env["EVALS_GATE"] = "true" if gate else "false"
         env["EVALS_INPUT"] = m.get("input", "with-approval" if ran > prompts else "original")
         env["EVALS_LANG"] = m.get("lang") or ""
-        r = subprocess.run([sys.executable, "-I", str(cases / m["case"] / "check.py"), base + ".files", base + ".jsonl"],
+        r = subprocess.run([sys.executable, "-I", str(case_path(m["case"]) / "check.py"), base + ".files", base + ".jsonl"],
                            capture_output=True, text=True, env=env)
         out = (r.stdout + r.stderr).strip()
         old = "PASS" if m["check_passed"] else ("REVIEW" if m.get("check_needs_review") else ("UNVERIFIED" if m.get("check_unverified") else "FAIL"))
@@ -41,11 +42,11 @@ for root in sys.argv[1:]:
         if old != new:
             print(f"{Path(base).name}: {old} -> {new}  {out[:120]}")
         import hashlib
-        check_hash = hashlib.sha256((cases / m["case"] / "check.py").read_bytes()).hexdigest()[:12]
+        check_hash = hashlib.sha256((case_path(m["case"]) / "check.py").read_bytes()).hexdigest()[:12]
         # 원시 기록(.jsonl·.files)은 바꾸지 않는다. 이전 판정과 그때의 판정기 지문을 이력으로 남기고 새 지문을 기록한다.
         here = Path(__file__).resolve().parent
         judge_version = hashlib.sha256(b"".join(hashlib.sha256(f.read_bytes()).digest() for f in
-                                               [cases / m["case"] / "check.py"] + [here / n for n in ("judge.py", "observe.py", "transcript.py", "verdict.py", "../.agents/skills/wf-verify/verify.py")] if f.is_file())).hexdigest()[:12]
+                                               [case_path(m["case"]) / "check.py"] + [here / n for n in ("judge.py", "observe.py", "transcript.py", "verdict.py", "../.agents/skills/wf-verify/verify.py")] if f.is_file())).hexdigest()[:12]
         m.setdefault("rejudge_history", []).append({"verdict": old, "check_output": m.get("check_output", ""), "completion": m.get("completion"),
                                                     "judge_version": m.get("judge_version"), "check_sha": m.get("check_sha")})
         if "verifier" in m:  # 검증 루프가 있던 실행만 완료를 다시 계산한다(예전 결과에는 검증 상태가 없다)
