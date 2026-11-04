@@ -236,6 +236,17 @@ with tempfile.TemporaryDirectory() as t:
     tp("q7", "취소합니다")
     check("재확인2 D: 기록에 이상한 줄이 있어도 철회가 적용되고 수정 도구를 막는다", ed("q7") and rec("q7")["approved"] is False)
     shutil_rm(repo / "work")
+    # 재확인3: 같은 승인 사건의 중복 훅은 대화 승인을 닫지 않는다
+    tp("q9", "버튼 문구 바꿔 주세요"); tp("q9", "진행해 주세요"); tp("q9", "진행해 주세요")
+    check("재확인3: 중복 훅 호출 뒤에도 대화 승인이 열려 있다", rec("q9")["approved"] is True and not ed("q9"))
+    stop_of("q9")
+    # 재확인3: 기록 입출력 오류(잘못된 UTF-8, 파일 자리에 폴더)에서도 철회가 적용된다
+    for sid_, breaker in (("qa", lambda f: open(f, "ab").write(b"\xff\n")), ("qb", lambda f: (f.unlink(), f.mkdir()))):
+        tp(sid_, "탈퇴 기능"); write_map(f"work/{sid_}/work.md", "| Q | 탈퇴 |", sid_); stop_of(sid_); tp(sid_, "승인합니다"); stop_of(sid_)
+        breaker(lg(sid_))
+        tp(sid_, "취소합니다")
+        check(f"재확인3: 기록 입출력 오류({sid_})에서도 철회가 적용되어 수정 도구를 막는다", ed(sid_) and rec(sid_)["approved"] is False)
+        shutil_rm(repo / "work")
     tp("q8", "ORIG 요청"); lg("q8").unlink(); tp("q8", "진행해 주세요")
     check("재확인2 D: 승인 전에 기록이 없어지면 원문 불완전으로 표시한다", rec("q8").get("requests_incomplete") is True)
     stop_of("q8")

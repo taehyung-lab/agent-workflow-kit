@@ -363,9 +363,6 @@ def advance(rec, event, root, now_maps, turn_maps=None, prompt="", extra=(), run
     was_open = bool(rec.get("approved"))
     info = {"decision": None, "closed": [], "reset_start": False}
     if event == "prompt":
-        if rec.get("binding"):  # 앞 턴이 Stop 없이 끝났으면 먼저 묶는다(작업 시작 위치를 정하기 전에)
-            bind(rec, root, now_maps)
-        settle(rec, now_maps)  # 턴 사이에 승인한 지도의 기준이 바뀌었으면 닫힘으로 남긴다
         last = rec.get("last_prompt") or {}
         plog = plog if plog is not None else []
         if not log_ok or len(plog) < rec.get("log_len", 0):  # 기록이 깨지거나 줄었다: 원문을 확보할 수 없다(승인 원문을 입력 부족으로 표시)
@@ -375,9 +372,12 @@ def advance(rec, event, root, now_maps, turn_maps=None, prompt="", extra=(), run
         dup_key = event_key and last.get("key") == event_key and time.time() - last.get("t", 0) < 30
         dup_raw = (not event_key and plog and plog[-1].get("text") == prompt and time.time() - plog[-1].get("t", 0) < 2
                    and not rec.get("stopped"))  # 그 사이 턴이 끝났으면(Stop) 사용자가 다시 보낸 것이다
-        if dup_key or dup_raw:
+        if dup_key or dup_raw:  # 중복 사건에는 어떤 상태 전이도 적용하지 않는다
             info["decision"] = "duplicate"
             return rec, info
+        if rec.get("binding"):  # 실제 다음 메시지인데 앞 턴이 Stop 없이 끝났으면 먼저 묶는다(작업 시작 위치를 정하기 전에)
+            bind(rec, root, now_maps)
+        settle(rec, now_maps)  # 턴 사이에 승인한 지도의 기준이 바뀌었으면 닫힘으로 남긴다
         if not runner:  # 사용자 메시지는 지우지도 줄이지도 않는 세션 기록에 더한다. 승인은 그 구간을 가리킨다.
             plog.append({"text": prompt, "t": time.time()})
             info["appended"] = True
@@ -436,7 +436,7 @@ def read_prompts(path, with_ok=False):
         lines = Path(path).read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
         lines = []
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         lines, ok = [], False
     for line in lines:
         try:
@@ -502,18 +502,18 @@ def main(mode, data):
     if mode == "prompt":
         state.mkdir(exist_ok=True)
         log_path = state / f"{key}.prompts.jsonl"
-        plog, log_ok = read_prompts(log_path, with_ok=True)
         try:
+            plog, log_ok = read_prompts(log_path, with_ok=True)
             rec, info = advance(rec, "prompt", root, now_maps, prompt=str(data.get("prompt") or ""),
                                 runner=os.environ.get("AWK_GATE_PROMPT_FROM") == "runner", snapshot=lambda: snapshot_files(root, state),
                                 plan=lambda: last_answer(data.get("transcript_path")), event_key=prompt_event_key(data), plog=plog,
                                 log_file=log_path.name, log_ok=log_ok)
-        except Exception as e:  # 판단하지 못했으면 승인을 닫는다(철회가 무시되어 쓰기가 열린 채 남지 않게)
-            rec = {**rec, "approved": False, "closed_by": "error", "binding": False}
+            if info.get("appended"):
+                with open(log_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(plog[-1], ensure_ascii=False) + "\n")
+        except Exception as e:  # 기록 읽기·쓰기·판단 어디서든 실패하면 승인을 닫은 상태로 남긴다(철회가 무시되어 쓰기가 열린 채 남지 않게)
+            rec = {**rec, "approved": False, "closed_by": "error", "binding": False, "log_broken": True}
             info = {"decision": f"error-closed: {e!r}"}
-        if info.get("appended"):
-            with open(log_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(plog[-1], ensure_ascii=False) + "\n")
         decision = info["decision"]
         approval.write_text(json.dumps(rec, ensure_ascii=False))
         turnmaps.write_text(json.dumps(now_maps, ensure_ascii=False))
