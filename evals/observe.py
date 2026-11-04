@@ -6,7 +6,9 @@
 - verify_run: 마지막 턴에 독립 검증 실행기(wf-verify/verify.py, 옛 verify.sh)를 실행한 마지막 결과. 실행기가 출력 끝에 찍는 결과 JSON 을
   실행기 자신의 함수(verify.run_result)로 읽는다. "ok"·"returned"·"incomplete"·"unverified"(하네스 없음·빈 답 등, 사유는 verify_run_reason)는
   실행기의 판정이고, "error" 는 실행기 경로를 부른 명령이 결과 JSON 없이 0 이 아닌 코드로 끝난 것(실행 실패), "unknown" 은 그 명령의
-  결과가 기록에 없거나 결과 JSON 이 다른 출력과 섞여 이번 실행의 결과인지 읽은 것인지 가를 수 없는 것, "none" 은 실행 흔적이 없는 것이다.
+  결과가 기록에 없거나 출력이 비었거나, 결과 JSON 이 다른 출력과 섞이거나 종료 코드와 맞지 않아 이번 실행의 판정으로 쓸 수 없는 것,
+  "none" 은 실행 증거가 없는 것이다. 앞선 실행 뒤에 실행기 경로를 부른 명령이 쓸 수 있는 결과를 내지 않으면(빈 출력·끊긴 JSON·읽기 포함)
+  마지막 후보의 판정을 모르므로 unknown 이 되고 앞선 ok 를 이어 쓰지 않는다.
   실행기 경로를 언급했지만 결과 JSON 없이 0 으로 끝난 출력(cat 으로 스크립트를 읽음 등)과, 실행기 경로를 부르지 않고 저장된 결과를 읽은 것은
   실행이 아니다. 실행 흔적은 성공이 아니고, ok 는 검증자 판정이 모든 조건 충족이라는 뜻일 뿐 전체 완료가 아니다: 실행기가 함께 낸
   completion(verified·waiting-user 등)은 verify_run_completion 에 따로 남긴다. 평가의 완료 판정(run.sh 의 completion)과도 따로 센다.
@@ -82,15 +84,22 @@ def verify_run(path):
     for c in commands(path):
         if not re.search(EXECUTOR, c["command"]):
             continue
-        result, only = run_result(c["output"])
-        if result and only:
+        result, doubt = run_result(c["output"], c["exit_code"])
+        if result and not doubt:
             state, reason, done = result["state"], str(result.get("reason") or ""), str(result.get("completion") or "")
         elif result:
-            state, reason, done = "unknown", "실행기 결과 JSON 이 다른 출력과 섞여 있어 이번 실행의 결과인지 저장된 결과를 읽은 것인지 가를 수 없다", ""
+            state, reason, done = "unknown", doubt, ""
         elif c["output"] is None and c["exit_code"] is None:
             state, reason, done = "unknown", "실행기 명령의 결과가 기록에 없다", ""
         elif c["exit_code"] not in (0, None):
             state, reason, done = "error", f"실행기 명령이 결과 없이 종료 코드 {c['exit_code']} 로 끝났다", ""
+        elif not str(c["output"] or "").strip():
+            # 결과도 출력도 없는 실행 후보: 판정을 모르므로 앞선 실행의 결과를 이어 쓰지 않는다
+            state, reason, done = "unknown", "실행기 명령이 출력 없이 끝나 판정을 모른다", ""
+        elif state != "none":
+            # 결과 없이 0 으로 끝난 출력(끊긴 JSON, 스크립트 읽기 등)은 실행인지 읽기인지 출력만으로 가를 수 없다.
+            # 앞선 실행이 있으면 마지막 후보의 판정을 모르는 것이므로 그 결과를 이어 쓰지 않는다(앞선 실행이 없으면 실행 증거 없음 none 그대로).
+            state, reason, done = "unknown", "마지막 실행기 명령이 판정 결과를 내지 않아 앞선 실행의 판정을 이어 쓰지 않는다", ""
     return state, reason, done
 
 

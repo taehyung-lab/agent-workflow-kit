@@ -1,6 +1,6 @@
 ---
 name: wf-design
-description: 요구·연결 영향·해법이 미정인 변경을 설계할 때 읽는다. 확정된 작은 수정은 직접 구현하고, 설계 인계 구현은 wf-implement, 독립 판정은 wf-verify로 보낸다.
+description: 사용자에게 결정을 묻기 전, 또는 요구·연결 영향·해법이 미정인 변경을 설계할 때 읽는다. 확정된 작은 수정은 직접 구현하고, 설계 인계 구현은 wf-implement, 독립 판정은 wf-verify로 보낸다.
 ---
 
 # 조건과 설계

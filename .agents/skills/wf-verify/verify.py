@@ -175,11 +175,12 @@ def final_answer(path):
     return final
 
 
-def run_result(output):
+def run_result(output, exit_code=None):
     """명령 출력에서 이 실행기가 찍는 결과를 찾는다. 실행기의 출력은 표준 오류의 `[verify] ` 줄과, 맨 끝 한 줄의 결과 JSON
-    (state 가 판정 상태이고 completion 이 있음, main·cli 의 마지막 print)뿐이다. 저장된 result.json 은 completion 이 없어 결과가 아니다.
-    돌려줌: (결과 객체 또는 None, 출력이 실행기 출력뿐인가). 다른 글이 섞였으면(예: 스크립트와 저장해 둔 출력을 함께 cat) 그 결과가
-    이번 실행의 것인지 읽은 것인지 출력만으로는 가를 수 없다. 평가 관찰(evals/observe.py)이 이 함수로 검증 실행과 그 판정을 읽는다."""
+    (state 가 판정 상태이고 completion 이 있음, main·cli 의 마지막 print)뿐이고, 종료 코드는 그 state 의 EXIT 값이다.
+    저장된 result.json 은 completion 이 없어 결과가 아니다.
+    돌려줌: (결과 객체 또는 None, 이번 실행의 결과로 볼 수 없는 사유 또는 ""). 다른 글이 섞였거나(예: 스크립트와 저장해 둔 출력을 함께 cat)
+    종료 코드가 결과의 state 와 맞지 않으면 그 결과를 이번 실행의 판정으로 쓰지 않는다. 평가 관찰(evals/observe.py)이 이 함수를 쓴다."""
     lines = [l for l in str(output or "").splitlines() if l.strip()]
     for i in range(len(lines) - 1, -1, -1):
         try:
@@ -187,8 +188,12 @@ def run_result(output):
         except ValueError:
             continue
         if isinstance(obj, dict) and obj.get("state") in EXIT and "completion" in obj:
-            return obj, i == len(lines) - 1 and all(l.startswith("[verify] ") for l in lines[:i])
-    return None, False
+            if i != len(lines) - 1 or not all(l.startswith("[verify] ") for l in lines[:i]):
+                return obj, "실행기 결과 JSON 이 다른 출력과 섞여 있어 이번 실행의 결과인지 저장된 결과를 읽은 것인지 가를 수 없다"
+            if exit_code is not None and exit_code != EXIT[obj["state"]]:
+                return obj, f"결과 state {obj['state']} 와 종료 코드 {exit_code} 가 맞지 않는다"
+            return obj, ""
+    return None, ""
 
 
 # ---- 판정 대상 고정과 입력 ----
