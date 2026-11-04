@@ -178,6 +178,37 @@ assert judge("```json\n" + ok + '\n```\n{"verdi')["state"] == "unverified"
 assert judge(ok + "\n이상입니다.")["state"] == "unverified"
 assert judge(ok + '\n{"note": 1}')["state"] == "unverified"
 PY
+# 검증 실행 관찰(observe.verify_run) 반례 표본(독립 리뷰 7c39b22 의 18개): 앞선 OK 뒤의 오류·빈 출력·끊긴 JSON, 실행기 파일·저장된 결과 읽기,
+# 결과 없는 실행은 ok 로 이어 쓰지 않는다. 두 하네스 기록 형식 모두.
+python3 -I - "$here" <<'PY' && ok "검증 실행 관찰: 반례 18개(두 하네스 × 9)에서 앞선 OK·저장 결과·읽기를 실행 판정으로 쓰지 않음" || ng "검증 실행 관찰 반례"
+import json, sys, tempfile
+from pathlib import Path
+sys.path.insert(0, sys.argv[1]); from observe import verify_run
+V = "python3 .agents/skills/wf-verify/verify.py"
+ok = json.dumps({"state": "ok", "completion": "verified"}); waiting = json.dumps({"state": "ok", "completion": "waiting-user"})
+cases = {"current-ok": [(V, ok, 0)], "waiting": [(V, waiting, 0)], "error-after-ok": [(V, ok, 1)], "malformed-after-ok": [(V, ok + '\n{"state":', 0)],
+         "empty-after-ok": [(V, ok, 0), (V, "", 0)], "invalid-after-ok": [(V, ok, 0), (V, '{"state":', 0)],
+         "read-mixed": [("cat .agents/skills/wf-verify/verify.py old-result.json", "import json\n" + ok, 0)], "read-result": [("cat old-result.json", ok, 0)],
+         "unknown": [(V, None, None)]}
+bad = []
+with tempfile.TemporaryDirectory() as d:
+    for harness in ("claude", "codex"):
+        for name, commands in cases.items():
+            events = []
+            for i, (command, output, code) in enumerate(commands):
+                if harness == "codex":
+                    events.append({"type": "item.completed", "item": {"id": str(i), "type": "command_execution", "command": command, "aggregated_output": output, "exit_code": code}})
+                else:
+                    events.append({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": str(i), "name": "Bash", "input": {"command": command}}]}})
+                    if output is not None:
+                        events.append({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": str(i), "content": (f"Exit code {code}\n" if code else "") + output, "is_error": bool(code)}]}})
+            path = Path(d) / "t.jsonl"; path.write_text("\n".join(map(json.dumps, events)))
+            state, _, completion = verify_run(path)
+            want = (state == "ok" and completion == ("waiting-user" if name == "waiting" else "verified")) if name in ("waiting", "current-ok") else (state != "ok" and completion != "verified")
+            if not want:
+                bad.append(f"{harness}/{name}: {state}/{completion}")
+print("\n".join(bad)); sys.exit(1 if bad else 0)
+PY
 python3 -I - "$here" <<'PY' && ok "완료 분류: verified 만 완료, 사용자 답 대기·구현 실패·검증 실패·미확인을 서로 구별" || ng "완료 분류"
 import sys; sys.path.insert(0, sys.argv[1]); from verdict import completion as c
 assert c("ok", "PASS") == "verified" and c("ok", "REVIEW", True) == "waiting-user" and c("ok", "FAIL", True) == "waiting-user"
