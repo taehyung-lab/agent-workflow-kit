@@ -22,10 +22,14 @@ kit=$(cd -- "$here/.." && pwd -P)
 fail() { printf 'evals: %s\n' "$*" >&2; exit 2; }
 [ "$#" -ge 3 ] || fail '사용: bash evals/run.sh <사례> <키트 커밋·태그 | 기준..대상> <claude|codex> [반복 수]'
 case_name=$1 ref=$2 harness=$3 times=${4:-1}
-# 비교 실행: <기준>..<대상> 이면 같은 사례·하네스·횟수로 두 커밋을 차례로 돌리고 report.py --compare 로 전후를 보여 준다.
+# 비교 실행: <기준>..<대상> 이면 같은 사례·하네스로 두 커밋을 번갈아(기준 1회, 대상 1회, …) 돌린다(시간대·모델 상태의 차이가 한쪽에 몰리지 않게).
+# 끝나면 양쪽 원시 기록을 지금 판정기로 다시 판정(rejudge)한 뒤 report.py --compare 로 전후를 보여 준다(판정기가 달라 비교 불가가 되지 않게).
 if [[ "$ref" == *..* ]]; then
   out=${EVALS_RESULTS:-"$here/results/$(date +%Y%m%d)"}; rc=0
-  for side in "${ref%%..*}" "${ref##*..}"; do EVALS_RESULTS=$out bash "$0" "$case_name" "$side" "$harness" "$times" || rc=$?; done
+  for i in $(seq 1 "$times"); do
+    for side in "${ref%%..*}" "${ref##*..}"; do EVALS_RESULTS=$out EVALS_RUN_OFFSET=$((i - 1)) bash "$0" "$case_name" "$side" "$harness" 1 || rc=$?; done
+  done
+  python3 -I "$here/rejudge.py" "$out" > /dev/null || rc=$?
   python3 -I "$here/report.py" --compare "${ref%%..*}" "${ref##*..}" "$out"; exit "$rc"
 fi
 case_dir="$here/cases/$case_name"
@@ -41,7 +45,7 @@ out_root=${EVALS_RESULTS:-"$here/results/$(date +%Y%m%d)"}
 # 이후 턴은 프로젝트 폴더로 옮겨 실행하므로 결과 폴더는 절대 경로로 바꿔 둔다(상대 경로면 2턴 기록을 쓰지 못한다).
 mkdir -p "$out_root" && out_root=$(cd -- "$out_root" && pwd -P)
 status=0
-for i in $(seq 1 "$times"); do
+for i in $(seq $((1 + ${EVALS_RUN_OFFSET:-0})) $((times + ${EVALS_RUN_OFFSET:-0}))); do  # 비교 실행은 번호를 이어 받아 결과 이름이 겹치지 않게 한다
   work=$(mktemp -d)
   # 지정한 커밋의 키트를 깨끗한 checkout 으로 만들어 install.sh 로 설치한다(설치기가 미커밋 키트를 거절하므로).
   git clone -q "$kit" "$work/kit" && git -C "$work/kit" checkout -q "$commit" || fail "키트 checkout 실패: $commit"

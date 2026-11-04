@@ -1,0 +1,3 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": "todo.py"}}]}}
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Agent", "input": {"prompt": "승인 기준과 diff 로 CSV 형식 변경을 독립 판정하라"}}]}}
+{"type": "result", "result": "CSV 열 이름을 바꿨습니다."}
