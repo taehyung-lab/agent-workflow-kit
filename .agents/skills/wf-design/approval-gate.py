@@ -318,6 +318,49 @@ def approved_record(root, state, map_path):
     return best
 
 
+def advance(rec, event, root, now_maps, turn_maps=None, prompt="", extra=(), runner=False, snapshot=None):
+    """승인 상태가 바뀌는 유일한 곳. 사건(prompt·pre·stop) 하나와 지금 관찰(지도 지문)을 받아 다음 기록을 낸다.
+    파일 읽기·쓰기와 도구 거절은 main 이 맡는다. 돌려줌: (새 기록, {decision, closed(닫힌 원인 지도), reset_start(턴 끝 감지 시작점을 지금으로)})."""
+    was_open = bool(rec.get("approved"))
+    info = {"decision": None, "closed": [], "reset_start": False}
+    if event == "prompt":
+        if rec.get("binding"):  # 앞 턴이 Stop 없이 끝났으면 지금 묶는다
+            bind(rec, root, now_maps)
+        settle(rec, now_maps)  # 턴 사이에 승인한 지도의 기준이 바뀌었으면 닫힘으로 남긴다
+        if runner:
+            info["decision"] = "runner"  # 평가 실행기가 보낸 사용자 아닌 입력(검증 반환 등): 승인을 바꾸지 않는다
+        elif is_approval(prompt):
+            # 후보: 승인 메시지가 가리킨 지도, 승인 전에 이 세션이 수정 도구로 쓴 지도, 둘 다 없으면 지난 승인의 지도. 턴 끝(bind)에 확정한다.
+            targets = {m: now_maps[m] for m in named_maps(root, prompt) if now_maps.get(m)}
+            for m in rec.get("wrote", []):
+                if now_maps.get(m):
+                    targets.setdefault(m, now_maps[m])
+            if not targets:
+                targets = {m: now_maps[m] for m in rec.get("targets", {}) if now_maps.get(m)}
+            rec = {"approved": True, "binding": True, "kind": "map" if targets else "conversation", "targets": targets, "criteria": {},
+                   "prompt": prompt, "after": [], "touched": [], "wrote": [], "approved_at": time.time(), "base": snapshot() if snapshot else None}
+            info["decision"] = "open"
+        elif is_revoke(prompt) or mentions_approval(prompt):
+            rec.update(approved=False, closed_by="revoke")
+            info["decision"] = "close"
+        else:
+            if rec.get("approved"):
+                rec.setdefault("after", []).append(prompt)  # 승인 뒤 사용자 메시지(검증자가 범위 변경을 대조한다)
+            info["decision"] = "keep"
+        rec["seen"] = True
+        return rec, info
+    touch(rec, turn_maps, now_maps, extra)
+    if event == "pre":
+        rec["wrote"] = sorted(set(rec.get("wrote", [])) | set(extra))
+    info["closed"] = settle(rec, now_maps)
+    if event == "stop" and rec.get("binding"):
+        bind(rec, root, now_maps)
+    # 승인 중에 작업이 끝나면(대화 승인의 턴 끝, 지도 정리) 승인 중 변경은 알리지 않고 지금부터 본다. 기준 변경으로 닫힌 것은 그대로 둔다.
+    done = ("turn-end", "map-removed") if event == "stop" else ("map-removed",)
+    info["reset_start"] = was_open and rec.get("closed_by") in done
+    return rec, info
+
+
 def main(mode, data):
     try:
         root, state = locate(data.get("cwd"))
@@ -344,31 +387,9 @@ def main(mode, data):
     turn_maps = read_json(turnmaps, {}) if turnmaps.is_file() else None
     if mode == "prompt":
         state.mkdir(exist_ok=True)
-        if rec.get("binding"):  # 앞 턴이 훅 없이 끝났으면(Stop 누락) 지금 묶는다
-            bind(rec, root, now_maps)
-        settle(rec, now_maps)  # 턴 사이에 승인한 지도의 기준이 바뀌었으면 닫힘으로 남긴다(다른 지도는 이 세션이 쓴 것으로 보지 않는다)
-        prompt = str(data.get("prompt") or "")
-        if os.environ.get("AWK_GATE_PROMPT_FROM") == "runner":
-            decision = "runner"  # 평가 실행기가 보낸 사용자 아닌 입력(검증 반환 등): 승인을 바꾸지 않는다
-        elif is_approval(prompt):
-            # 후보: 승인 메시지가 가리킨 지도, 승인 전에 이 세션이 쓴 지도, 둘 다 없으면 지난 승인의 지도. 턴 끝(bind)에 확정한다.
-            targets = {m: now_maps[m] for m in named_maps(root, prompt) if now_maps.get(m)}
-            for m in rec.get("wrote", []):  # 승인 전에 이 세션이 수정 도구로 쓴 지도
-                if now_maps.get(m):
-                    targets.setdefault(m, now_maps[m])
-            if not targets:
-                targets = {m: now_maps[m] for m in rec.get("targets", {}) if now_maps.get(m)}
-            rec = {"seen": True, "approved": True, "binding": True, "kind": "map" if targets else "conversation", "targets": targets,
-                   "criteria": {}, "prompt": prompt, "after": [], "touched": [], "wrote": [], "approved_at": time.time(), "base": snapshot_files(root, state)}
-            decision = "open"
-        elif is_revoke(prompt) or mentions_approval(prompt):
-            rec.update(approved=False, closed_by="revoke")
-            decision = "close"
-        else:
-            if rec.get("approved"):
-                rec.setdefault("after", []).append(prompt)  # 승인 뒤 사용자 메시지(검증자가 범위 변경을 대조한다)
-            decision = "keep"
-        rec["seen"] = True
+        rec, info = advance(rec, "prompt", root, now_maps, prompt=str(data.get("prompt") or ""),
+                            runner=os.environ.get("AWK_GATE_PROMPT_FROM") == "runner", snapshot=lambda: snapshot_files(root, state))
+        decision = info["decision"]
         approval.write_text(json.dumps(rec, ensure_ascii=False))
         turnmaps.write_text(json.dumps(now_maps, ensure_ascii=False))
         start.write_text(json.dumps(product_files(root), ensure_ascii=False))
@@ -376,15 +397,13 @@ def main(mode, data):
         (state / f"{key}.laststop").unlink(missing_ok=True)
         log({"event": "prompt", "decision": decision, **status_json(rec)})
         return 0
-    was_open = bool(rec.get("approved"))
     if mode == "pre":
         tool, inp = str(data.get("tool_name") or ""), data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
         extra = [m for m in (rel_map(root, t) for t in write_targets(inp)) if m] if tool in WRITE_TOOLS else []
-        touch(rec, turn_maps, now_maps, extra)
-        rec["wrote"] = sorted(set(rec.get("wrote", [])) | set(extra))
-        closed = settle(rec, now_maps)
+        rec, info = advance(rec, "pre", root, now_maps, turn_maps, extra=extra)
+        closed = info["closed"]
         if state.is_dir():
-            if was_open and rec.get("closed_by") == "map-removed":  # 작업 완료: 승인 중 변경은 알리지 않고 지금부터 본다
+            if info["reset_start"]:
                 start.write_text(json.dumps(product_files(root), ensure_ascii=False))
             approval.write_text(json.dumps(rec, ensure_ascii=False))
         reason = decide(data, root, state, bool(rec.get("approved")), CLOSED_REASON.format(maps=", ".join(closed)) if closed else REASON)
@@ -395,14 +414,12 @@ def main(mode, data):
                                                      "permissionDecisionReason": reason}}, ensure_ascii=False))
         return 0
     # stop
-    touch(rec, turn_maps, now_maps)
-    closed = settle(rec, now_maps)
-    if rec.get("binding"):
-        bind(rec, root, now_maps)
+    rec, info = advance(rec, "stop", root, now_maps, turn_maps)
+    closed = info["closed"]
     if not state.is_dir():
         return 0
     now = product_files(root)
-    if was_open and rec.get("closed_by") in ("turn-end", "map-removed"):  # 승인 중 변경은 알리지 않는다(작업이 끝났다)
+    if info["reset_start"]:
         start.write_text(json.dumps(now, ensure_ascii=False))
     if rec:
         approval.write_text(json.dumps(rec, ensure_ascii=False))
