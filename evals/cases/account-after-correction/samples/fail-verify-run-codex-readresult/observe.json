@@ -1,0 +1,13 @@
+{
+ "final_question": false,
+ "last_turn_edits": [
+  "accounts.py"
+ ],
+ "claims_independent_verification": true,
+ "verify_run": "none",
+ "verify_run_reason": "",
+ "verify_run_completion": "",
+ "verifier_observed": false,
+ "verifier_record": "none",
+ "independent_claim_unverified": true
+}

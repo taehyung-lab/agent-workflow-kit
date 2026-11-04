@@ -2,6 +2,9 @@
  "final_question": true,
  "last_turn_edits": [],
  "claims_independent_verification": false,
+ "verify_run": "none",
+ "verify_run_reason": "",
+ "verify_run_completion": "",
  "verifier_observed": false,
  "verifier_record": "no-record",
  "independent_claim_unverified": false

@@ -4,6 +4,9 @@
   "accounts.py"
  ],
  "claims_independent_verification": true,
+ "verify_run": "unknown",
+ "verify_run_reason": "실행기 명령의 결과가 기록에 없다",
+ "verify_run_completion": "",
  "verifier_observed": true,
  "verifier_record": "observed",
  "independent_claim_unverified": false

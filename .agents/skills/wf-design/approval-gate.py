@@ -1,75 +1,50 @@
-"""승인 관문: 사용자가 이번 메시지로 승인하기 전에는 에이전트가 제품 파일을 쓰지 못하게 막는다.
+"""승인 관문: 사용자가 승인하기 전에는 에이전트가 수정 도구로 제품 파일을 쓰지 못하게 막는다.
 
 하네스(Codex·Claude Code) 훅으로 세 번 불린다.
-- `approval-gate.py prompt` (UserPromptSubmit): 사용자 메시지가 들어올 때 승인인지와, 그때의 제품 파일 상태 지문을 기록한다.
-  승인은 그 메시지가 시작한 턴에만 유효하다. 다음 사용자 메시지가 승인이 아니면 다시 닫힌다.
-- `approval-gate.py pre` (PreToolUse): 승인되지 않은 턴에 쓰기 도구로 `work/` 밖을 바꾸거나,
-  읽기 전용으로 확인되지 않는 셸 명령·이름으로 쓰기임이 드러나는 도구를 쓰려 하면 거절한다.
-- `approval-gate.py stop` (Stop): 승인되지 않은 턴인데 제품 파일 상태가 턴 시작 때와 달라졌으면(셸의 숨은 쓰기 등
-  PreToolUse 가 놓친 경로) 답을 끝내지 못하게 하고 되돌리게 한다. 끝없는 반복을 막으려고 한 턴에 MAX_STOP_BLOCKS 번까지만
-  되돌리게 하고, 그 뒤에도 남으면 턴을 끝내되 표준 오류에 남긴다(사용자는 git status 로 남은 변경을 본다).
+- `prompt` (UserPromptSubmit): 사용자 메시지가 승인인지 정하고, 턴 시작의 제품 파일 지문을 남긴다.
+- `pre` (PreToolUse): 승인 상태가 아니면 수정 도구로 `work/` 밖을 바꾸거나 이름으로 쓰기임이 드러나는 도구(MCP 파일 쓰기 등)를 거절한다.
+  셸 명령은 해석하지 않고 거절하지 않는다(어느 언어의 검사든 승인 없이 돈다).
+- `stop` (Stop): 승인 상태가 아닌데 턴 시작 뒤 제품 파일이 바뀌었으면 바뀐 파일 이름을 알리고 한 번 더 답하게 한다(사후 감지).
+  관문은 아무것도 되돌리지 않는다.
 
-예: 사용자가 "회원 탈퇴 기능을 만들어 주세요" 라고만 보내면 에이전트는 코드를 읽을 수는 있지만 accounts.py 를 고치려는 순간
-거절 사유가 돌아온다. 에이전트는 만들 결과와 미정을 보여 주고 묻는다. 사용자가 "승인합니다" 라고 답한 턴에 쓰기가 열린다.
+승인 수명·보장 범위·한계는 .agents/skills/README.md 「승인 관문」이 원본이다(여기에 다시 적지 않는다). 요약: 대화 승인은 그 턴만,
+지도 승인은 승인 턴이 끝날 때의 `## 기준`에 묶여 기준 변경·새 지도·철회·지도 정리 때 닫힌다. 승인 턴 안의 지도 쓰기는 옮겨 적기로 본다.
 
-역할 나눔: 셸 명령의 실행 전 판정은 흔한 쓰기 실수를 먼저 막는 장치다. 셸은 옵션·설정·외부 프로그램으로 쓰기를 숨길 수 있어
-실행 전 판정만으로 완전하지 않다. 승인 전 턴에 제품 파일이 바뀌지 않았다는 최종 보장은 턴 끝 상태 검사(stop)가 맡는다.
-전제: 에이전트가 일부러 관문을 부수려 하지는 않지만 묻지 않고 넘어가려 할 수는 있다. 승인 기록(`.git/awk-gate/`)과
-이 파일은 Codex 작업 공간 쓰기 모드에서는 각각 읽기 전용(.git)·작업 공간 안이다. Claude 는 같은 보호가 없다.
-의도적인 위조까지 막으려면 하네스의 읽기 전용 실행 모드(운영체제 수준 쓰기 제한)를 함께 써야 한다.
-승인이 허용하는 범위(어느 파일·어떤 동작)는 기계로 보지 않는다. 결과가 승인한 내용과 맞는지는 검증자가 본다.
-환경 변수: AWK_GATE_LOG=<파일>(판단마다 한 줄씩 남긴다. 측정용).
+셸 명령: `approval-gate.py status [--session ID]` 는 승인 상태를 JSON 으로 보여 준다(평가 실행기가 쓴다). 승인을 바꾸지 않는다.
+환경 변수: AWK_GATE_LOG=<파일>(판단마다 한 줄, 측정용). AWK_GATE_PROMPT_FROM=runner(평가 실행기가 보낸 사용자 아닌 입력: 승인을 바꾸지 않는다).
 """
 import hashlib, json, os, re, subprocess, sys, time
 from pathlib import Path
 
 TAG = "[approval-gate]"
 # 승인 판별(고정 규칙, 표현 목록을 늘리지 않는다). 사용자의 평소 말투에서 분명한 승인만 잡는다.
-# - 승인 말이 완결된 형태로 있고(뒤가 공백·문장 끝·구두점, 조사 "라고·는·도" 등이 바로 붙지 않음) 그 문장이 질문·부정이 아니면 승인.
-#   승인 말 앞뒤의 범위 제한("영어 문구 빼고 진행해주세요", "진행해주세요 영어 문구 빼고")은 승인을 막지 않는다.
-# - 메시지에 철회 문장("취소합니다", "아직 시작하지 마세요", "멈춰 주세요")이 있으면 승인이 아니다.
-# - 애매한 말(예문 속 승인, 철회 뒤 재승인 등)을 다 가리지는 못한다. 그 경우 에이전트가 쓰기 전에 다시 확인한다(AGENTS.md 2항).
+# - 승인 말이 완결된 형태로 있고 그 문장이 질문·부정이 아니면 승인. 앞뒤의 범위 제한("영어 문구 빼고 진행해주세요")은 막지 않는다.
+# - 메시지에 철회 문장("취소합니다", "아직 시작하지 마세요")이 있으면 승인이 아니다.
+# - 애매한 말(예문 속 승인 등)은 다 가리지 못한다. 그 경우 에이전트가 쓰기 전에 다시 확인한다(AGENTS.md 2항).
 _SUFFIX = r"(주세요|주십시오|주시죠|줘요|줘|요)"
 APPROVE = (r"(진행\s*해\s*" + _SUFFIX + r"|진행하세요|진행합시다|승인(합니다|할게요|할게|해요|이요)"
            r"|바로\s*(구현|진행|만들어|고쳐|바꿔|수정|적용|반영)\s*(해)?\s*" + _SUFFIX + r"|go ahead|approved?)(?=[\s.!~…,:;。]|$)"
            r"|(진행해|승인)(?=\s*[.!~…]*\s*$)")  # 꼬리 없는 "진행해"·"승인"은 문장을 끝낼 때만
 NOT_APPROVE = r"(\?|？|까요|나요|을지|는지|인지|않|안\s*(돼|됩|했)|아니|\bnot\b|don't|never)"  # 승인 말이 든 문장 안의 질문·부정
-REVOKE = r"(^\s*((취소|중지|보류)\s*(합니다|할게요|해\s*주세요|해요)|멈춰|그만|잠깐|아니요|아뇨|wait\b|stop\b|cancel\b)|(^|\s)(시작하지|진행하지|하지)\s*마(세요|요|십시오)?\s*$|(취소|중지|보류)(합니다|할게요|해\s*주세요)\s*$|멈춰\s*주세요\s*$|무시해\s*주세요\s*$)"
+REVOKE = r"(승인\s*하지\s*않|승인\s*(을\s*)?(취소|철회)|^\s*((취소|중지|보류)\s*(합니다|할게요|해\s*주세요|해요)|멈춰|그만|잠깐|아니요|아뇨|wait\b|stop\b|cancel\b)|(^|\s)(시작하지|진행하지|하지)\s*마(세요|요|십시오)?\s*$|(취소|중지|보류)(합니다|할게요|해\s*주세요)\s*$|멈춰\s*주세요\s*$|무시해\s*주세요\s*$)"
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch"}
-SHELL_TOOLS = {"Bash", "shell", "exec_command", "local_shell", "unified_exec"}
-WRITE_NAME = r"(write|edit|create|delete|remove|update|patch|move|rename|insert|replace|upload|stdin|commit|push)"
+SHELL_TOOLS = {"Bash", "shell", "exec_command", "local_shell", "unified_exec", "write_stdin"}  # 내용을 해석하지 않는다
+WRITE_NAME = r"(write|edit|create|delete|remove|update|patch|move|rename|insert|replace|upload|commit|push)"
 NOT_WRITE = {"TodoWrite", "update_plan", "ExitPlanMode", "EnterPlanMode"}  # 이름에 쓰기 낱말이 있지만 파일을 바꾸지 않는 계획 도구
-ALLOWED_WRITE_DIR = "work"  # 설계 기록(work/<작업명>/work.md)은 승인 전에도 쓸 수 있다
-SPEC = ["--", ".", ":(exclude).agents", ":(exclude)work", ":(exclude).codex", ":(exclude).claude",
-        ":(exclude,glob)**/__pycache__/**", ":(exclude,glob)**/.pytest_cache/**", ":(exclude,glob)**/*.pyc", ":(exclude)CLAUDE.md", ":(exclude)AGENTS.md"]
-READ_ONLY = {"printenv", "ls", "cat", "head", "tail", "wc", "grep", "rg", "find", "sed", "awk", "pwd", "echo", "printf", "nl", "sort",
-             "uniq", "cut", "tr", "file", "stat", "tree", "du", "which", "type", "jq", "diff", "cmp", "basename", "dirname",
-             "realpath", "date", "cd", "true", "test", "[", "column", "od", "sha256sum", "shasum", "md5"}
-GIT_READ = {"status", "diff", "log", "show", "ls-files", "rev-parse", "blame", "grep", "cat-file", "shortlog", "describe"}
-GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
-RTK_READ = {"read", "ls", "grep", "find", "json", "log", "diff", "deps", "gain"}
-OPERATORS = ["&&", "||", ";;", ">>", "&>", ">&", "<>", "<<<", "<<", ";", "|", "&", ">", "<", "(", ")"]
-GLOB = "\x01"  # 따옴표 밖의 {} * ? [ ~: 셸이 실행 때 다른 인자로 펼칠 수 있다
-EXPANDS = "\x00$"  # 셸이 실행 때 펼치는 $(작은따옴표 밖). 환경 변수 지정 값에서만 허용한다
-_ADDR = r"(\d+|\$|/[^/]*/)(,(\d+|\$|/[^/]*/))?"
-SED_READ = re.compile(r"^(" + _ADDR + r")?\s*([pdq=]|s/[^/]*/[^/]*/[gpI0-9]*)(\s*;\s*(" + _ADDR + r")?\s*([pdq=]|s/[^/]*/[^/]*/[gpI0-9]*))*\s*;?$")
-ENV_OK = re.compile(r"^(PATH|LANG|LC_\w+|TZ|CI|NO_COLOR|FORCE_COLOR|NODE_ENV|TERM|COLUMNS)=")  # 실행할 코드를 바꾸지 않는 환경 변수만 지정한다
-NO_WRITE_OPTIONS = {"printenv", "echo", "printf", "pwd", "which", "type", "test", "[", "true", "basename", "dirname", "ls", "cat", "head",
-                    "tail", "wc", "stat", "du", "cd"}  # 어떤 인자를 받아도 파일을 쓰거나 다른 프로그램을 실행하지 않는 명령
-SHELL_WORDS = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "fi", "done", "}"}
+ALLOWED_WRITE_DIR = "work"  # 작업 지도는 승인 전에도 쓸 수 있다(승인을 물으려면 먼저 써야 한다)
+# 제품 파일에서 빼는 것: 키트(.agents·AGENTS.md·CLAUDE.md), 하네스 설정(.claude·.codex), 작업 지도(work/). 언어·도구별 예외는 없다.
+SPEC = ["--", ".", ":(exclude).agents", ":(exclude)work", ":(exclude).codex", ":(exclude).claude", ":(exclude)CLAUDE.md", ":(exclude)AGENTS.md"]
+MAP_NAME = "work.md"
+STATE_DIR = "awk-gate"  # .git/awk-gate: 훅만 쓴다
 MAX_STOP_BLOCKS = 2
-TEST_RUN = re.compile(r"^(rtk\s+)?(python3?(\s+-B)?\s+-m\s+(unittest|pytest)|pytest)"
-                      r"(\s+(discover|-q|-v|-x|(-k|-s|-p|-t)\s+[\w./:*?-]+|[\w./:][\w./:-]*))*$")
-# 패키지 매니저로 돌리는 프로젝트의 기존 검사 스크립트(테스트·타입 검사·린트·전체 검사). 스크립트 이름 뒤에는 파일 경로만 받는다
-# (옵션을 붙이면 출력 파일·고치기 같은 쓰기가 열릴 수 있어 승인이 필요하다). 도구를 직접 부르는 실행(npx tsc 등)도 승인이 필요하다.
-JS_CHECK = re.compile(r"^(rtk\s+)?(pnpm|npm|yarn|bun)(\s+(--dir|-C|--filter|--prefix|--workspace|-w)\s+[^\s-]\S*)*(\s+run)?"
-                      r"\s+(test|typecheck|type-check|lint|check)(\s+[^\s-][^\s]*)*$")
-VERSION = re.compile(r"^(rtk\s+)?(command\s+-v\s+[\w.-]+|[\w.-]+\s+--version|(node|pnpm|npm|yarn|bun|deno|go|tsc)\s+(-v|-V))$")  # 도구 존재·버전 확인
-REASON = (f"{TAG} 사용자가 이번 메시지에서 승인하지 않아 제품 파일 쓰기와 읽기 전용으로 확인되지 않는 셸 명령을 막았습니다. "
-          "읽어서 조사한 뒤, 사용자가 받을 결과(원문·계약 근거와 함께)와 아직 정해지지 않은 점, 확인 방법을 보여 주고 "
-          "추천과 함께 승인을 물으세요. 답에는 이 관문·규칙 설명 없이 계획과 질문만 쓰세요. 다른 명령으로 우회하지 마세요. 사용자가 '승인합니다'·'진행해 주세요' 처럼 답한 턴에 쓰기가 열립니다. "
-          "설계 기록은 work/ 아래에 쓸 수 있습니다. 조사 중 검사는 승인 없이 돌릴 수 있습니다: package.json 의 test·typecheck·lint·check 스크립트"
-          "(예: pnpm --dir <앱> test, 옵션 없이)나 python3 -m pytest·unittest. 도구를 직접 부르는 실행(./node_modules/.bin/tsc, npx vitest 등)은 승인이 필요합니다.")
+SHOWN_FILES = 20
+REASON = (f"{TAG} 사용자 승인이 없어 제품 파일을 바꾸는 수정 도구를 막았습니다. "
+          "정해지지 않은 결정이 있으면 질문과 추천을 쓰세요. 결정이 다 정해졌으면 바꿀 내용과 확인 방법을 짧게 보여 주고 승인을 물으세요"
+          "(여러 턴이 걸리는 일은 먼저 work/<작업명>/work.md 에 지도를 쓰고 그 지도로 승인을 받습니다). "
+          "답에는 이 관문 설명을 쓰지 마세요. 셸 등 다른 경로로 같은 쓰기를 하지 마세요(턴 끝에 바뀐 파일이 드러납니다). "
+          "배포·삭제·외부 서비스 쓰기 같은 외부 효과는 승인과 별개로 요청이 허용한 범위에서만 합니다.")
+CLOSED_REASON = (f"{TAG} 승인한 작업 지도의 `## 기준`이 바뀌었거나 승인 밖의 새 지도가 생겨 승인이 닫혔습니다: {{maps}}. "
+                 "무엇이 바뀌었는지(새 작업이면 그 계획을) 보여 주고 다시 승인을 물으세요. 실행 결과·설계는 `## 기준` 밖에 적으면 승인이 유지됩니다.")
 
 
 def log(what):
@@ -81,9 +56,9 @@ def log(what):
             pass
 
 
-def git(root, *args, ok=(0,)):
-    # 저장소 설정의 외부 프로그램(fsmonitor·외부 diff·textconv)이 관문의 상태 수집 중에 실행되지 않게 끈다.
-    r = subprocess.run(["git", "-C", str(root), "-c", "core.fsmonitor=false", "-c", "diff.external=", *args], capture_output=True)
+def git(root, *args, ok=(0,), input=None):
+    # 저장소 설정의 외부 프로그램(fsmonitor·외부 diff)이 상태 수집 중에 실행되지 않게 끈다.
+    r = subprocess.run(["git", "-C", str(root), "-c", "core.fsmonitor=false", "-c", "diff.external=", *args], capture_output=True, input=input)
     if r.returncode not in ok:
         raise RuntimeError(f"git {' '.join(args[:2])} 실패")
     return r.stdout
@@ -91,33 +66,156 @@ def git(root, *args, ok=(0,)):
 
 def locate(cwd):
     out = git(cwd or ".", "rev-parse", "--show-toplevel", "--absolute-git-dir").decode().split("\n")
-    return Path(out[0]), Path(out[1], "awk-gate")
+    return Path(out[0]), Path(out[1], STATE_DIR)
 
 
-def product_state(root, seen=None):
-    """제품 파일(work/·키트·지침·캐시 제외)의 상태 지문. 파일 목록만 git 에서 받고 내용은 디스크에서 직접 읽는다
-    (git diff 는 저장소 설정의 clean filter·외부 diff 같은 프로그램을 실행할 수 있어 쓰지 않는다)."""
+def product_files(root, seen=None, prefix=""):
+    """제품 파일별 지문 {경로: 지문}. 목록만 git 에서 받고 내용은 디스크에서 직접 읽는다(clean filter 를 실행하지 않게)."""
     files = git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", *SPEC).decode().split("\0")
     seen = (seen or set()) | {os.path.realpath(root)}
-    h = hashlib.sha256()
+    out = {}
     for f in sorted(set(x for x in files if x)):
+        p, name = Path(root, f), prefix + f
+        if p.is_symlink():
+            out[name] = "link:" + os.readlink(p)
+        elif p.is_file():
+            mode = "x" if os.access(p, os.X_OK) else "-"
+            try:
+                body = hashlib.sha256(p.read_bytes()).hexdigest()
+            except OSError:
+                st = p.stat()
+                body = f"unreadable:{st.st_mode}:{st.st_size}:{st.st_mtime_ns}"
+            out[name] = mode + body
+        elif p.is_dir() and (p / ".git").exists() and os.path.realpath(p) not in seen:  # 하위 저장소
+            out[name] = "sub:" + git(p, "rev-parse", "--verify", "-q", "HEAD", ok=(0, 1)).decode().strip()
+            out.update(product_files(p, seen, name.rstrip("/") + "/"))
+        else:
+            out[name] = "missing"
+    return out
+
+
+def snapshot_files(root, state):
+    """지금 제품 파일 내용을 git 객체로 보존하고 목록 파일 이름을 돌려준다. 지도 승인 때 남겨 검증기가 승인 뒤 변경만 보게 한다.
+    하위 저장소·읽을 수 없는 파일은 내용을 보존하지 못했다고 적는다(검증기는 미확인으로 다룬다)."""
+    files = sorted(set(x for x in git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", *SPEC).decode().split("\0") if x))
+    out, regular = {}, []
+    for f in files:
         p = Path(root, f)
         if p.is_symlink():
-            h.update(f.encode() + b"\0link:" + os.readlink(p).encode() + b"\0")
-        elif p.is_file():
-            mode = b"x" if os.access(p, os.X_OK) else b"-"  # 실행 권한 변경도 제품 변경이다(git 이 기록하는 유일한 권한)
-            try:
-                body = hashlib.sha256(p.read_bytes()).digest()
-            except OSError:  # 읽을 수 없게 된 파일도 변경으로 센다(크기·수정 시각·권한으로 지문을 만든다)
-                st = p.stat()
-                body = f"unreadable:{st.st_mode}:{st.st_size}:{st.st_mtime_ns}".encode()
-            h.update(f.encode() + b"\0" + mode + body)
-        elif p.is_dir() and (p / ".git").exists() and os.path.realpath(p) not in seen:  # 하위 저장소(몇 단계든): 체크아웃 버전과 파일
-            head = git(p, "rev-parse", "--verify", "-q", "HEAD", ok=(0, 1)).strip()
-            h.update(f.encode() + b"\0sub:" + head + product_state(p, seen).encode())
+            out[f] = {"link": os.readlink(p)}
+        elif p.is_file() and "\n" not in f and os.access(p, os.R_OK):
+            regular.append(f)
+        elif p.exists():
+            out[f] = {"unsaved": "하위 저장소·읽을 수 없는 파일은 내용을 보존하지 않았다"}
+    blobs = git(root, "hash-object", "-w", "--no-filters", "--stdin-paths", input="\n".join(regular).encode()).decode().split() if regular else []
+    if len(blobs) != len(regular):
+        raise RuntimeError("시작 상태 보존 실패")
+    for f, b in zip(regular, blobs):
+        out[f] = {"blob": b, "exec": os.access(Path(root, f), os.X_OK)}
+    body = json.dumps(out, ensure_ascii=False, sort_keys=True)
+    name = f"snap-{hashlib.sha256(body.encode()).hexdigest()[:20]}.json"
+    if not (state / name).is_file():
+        (state / name).write_text(body)
+    return name
+
+
+def criteria_text(text):
+    """작업 지도의 `## 기준` 절 본문(빈 줄·줄 끝 공백 제외). 절이 없으면 None. 이 절만 승인 대상이다."""
+    m = re.search(r"^## 기준[^\n]*\n(.*?)(?=^#{1,2} |\Z)", text or "", re.M | re.S)
+    if not m:
+        return None
+    return "\n".join(l.rstrip() for l in m.group(1).splitlines() if l.strip())
+
+
+def criteria(text):
+    body = criteria_text(text)
+    return None if body is None else hashlib.sha256(body.encode()).hexdigest()
+
+
+def maps(root):
+    """work/ 아래 모든 지도의 기준 지문 {경로: 지문}."""
+    out = {}
+    base = Path(root, ALLOWED_WRITE_DIR)
+    for f in sorted(base.rglob(MAP_NAME)) if base.is_dir() else []:
+        try:
+            out[str(f.relative_to(root))] = criteria(f.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            out[str(f.relative_to(root))] = "unreadable"
+    return out
+
+
+def inside(root, path, top):
+    if not path:
+        return False
+    p = os.path.realpath(Path(path) if Path(path).is_absolute() else root / path)
+    top = os.path.realpath(top)
+    return p == top or p.startswith(top + os.sep)
+
+
+def last_answer(path):
+    """하네스가 넘긴 대화 기록(transcript_path)에서 에이전트의 마지막 답 글. 읽지 못하면 None.
+    Claude Code 기록({"type": "assistant", "message": ...})과 Codex 기록({"type": "response_item", "payload": ...})을 읽는다.
+    사용자 메시지가 나오면 새 답이 시작된다(도구 결과만 든 줄은 사용자 메시지로 보지 않는다). 기록 끝 2MB 만 읽는다."""
+    if not path:
+        return None
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 2_000_000))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return None
+    answers, cur = [], []
+    for line in lines:
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(e, dict):
+            continue
+        msg = e.get("message") if e.get("type") in ("user", "assistant") else (e.get("payload") if e.get("type") == "response_item" else None)
+        if not isinstance(msg, dict) or msg.get("role") not in ("user", "assistant"):
+            continue
+        content = msg.get("content")
+        parts = [{"type": "text", "text": content}] if isinstance(content, str) else content if isinstance(content, list) else []
+        texts = [str(x.get("text") or "") for x in parts if isinstance(x, dict) and x.get("type") in ("text", "output_text", "input_text")]
+        if msg["role"] == "user":
+            if texts:  # 사용자 메시지(도구 결과만 든 줄은 아님): 앞 답을 닫는다
+                if cur:
+                    answers.append("\n".join(cur))
+                cur = []
         else:
-            h.update(f.encode() + b"\0missing\0")
-    return h.hexdigest()
+            cur += [t for t in texts if t.strip()]
+    if cur:
+        answers.append("\n".join(cur))
+    return answers[-1] if answers else ""
+
+
+def rel_map(root, path):
+    """수정 도구 대상이 지도면 저장소 기준 상대 경로, 아니면 None."""
+    if not inside(root, path, Path(root, ALLOWED_WRITE_DIR)) or Path(path).name != MAP_NAME:
+        return None
+    p = Path(path) if Path(path).is_absolute() else root / path
+    return str(Path(os.path.realpath(p)).relative_to(os.path.realpath(root)))
+
+
+def named_maps(root, prompt):
+    """승인 메시지가 경로로 가리킨 지도(work/.../work.md 또는 work/<작업명>). 있는 것만."""
+    found = []
+    for m in re.findall(r"work/[\w./-]+", prompt):
+        m = m.rstrip("./")
+        cand = m if m.endswith("/" + MAP_NAME) else m + "/" + MAP_NAME
+        if Path(root, cand).is_file():
+            found.append(cand)
+    return found
+
+
+def mentions_approval(prompt):
+    return bool(re.search(APPROVE, re.sub(r"[?？]", ".", prompt), re.I | re.M))
+
+
+def is_revoke(prompt):
+    return any(re.search(REVOKE, x.strip(), re.I) for x in re.split(r"[.!?。？\n]+", prompt) if x.strip())
 
 
 def is_approval(prompt):
@@ -133,280 +231,380 @@ def is_approval(prompt):
     return False
 
 
-def tokens(cmd):
-    """따옴표를 지키며 셸 명령을 낱말과 연산자로 나눈다. (낱말, 연산자인가) 목록. 해석할 수 없으면 None."""
-    out, cur, quoted, i, q = [], "", False, 0, None
-
-    def flush():
-        nonlocal cur, quoted
-        if cur or quoted:
-            out.append((cur, False))
-        cur, quoted = "", False
-
-    while i < len(cmd):
-        c = cmd[i]
-        if q:
-            if c == q:
-                q = None
-            elif c == "\\" and q == '"' and i + 1 < len(cmd):
-                i += 1; cur += cmd[i]
-            else:
-                cur += EXPANDS if (c == "$" and q == '"') else c
-        elif c in "'\"":
-            q, quoted = c, True
-        elif c == "\\" and i + 1 < len(cmd):
-            i += 1; cur += cmd[i]; quoted = True
-        elif c in " \t":
-            flush()
-        elif c == "\n":
-            flush(); out.append((";", True))
-        else:
-            op = next((o for o in OPERATORS if cmd.startswith(o, i)), None)
-            if op:
-                flush(); out.append((op, True)); i += len(op); continue
-            cur += EXPANDS if c == "$" else (GLOB + c if c in "{}*?[~" else c)
-        i += 1
-    if q:
-        return None
-    flush()
-    return out
-
-
-def shell_read_only(cmd):
-    """셸 명령이 읽기만 하는지. 판단할 수 없으면 읽기 전용이 아니라고 본다."""
-    if not cmd.strip() or "`" in cmd or "$(" in cmd or "<(" in cmd or ">(" in cmd:
-        return False
-    toks = tokens(cmd)
-    if toks is None:
-        return False
-    toks.append((";", True))
-    segment, i = [], 0
-    while i < len(toks):
-        tok, op = toks[i]
-        if op and tok in ("&&", "||", ";", ";;", "|", "&", "(", ")"):
-            if segment and not segment_read_only(segment):
-                return False
-            segment = []
-        elif op and tok in (">", ">>", "&>", ">&"):
-            target = toks[i + 1][0] if i + 1 < len(toks) and not toks[i + 1][1] else ""
-            if not (target == "/dev/null" or (tok == ">&" and target.isdigit())):
-                return False
-            if segment and segment[-1].isdigit():
-                segment.pop()  # 2>/dev/null 의 2
-            i += 1
-        elif op and tok in ("<", "<<", "<<<"):
-            i += 1
-        elif op:
-            return False  # <> 처럼 읽기·쓰기를 겸하는 연산자
-        else:
-            segment.append(tok)
-        i += 1
-    return True
-
-
-def long_opt(args, *names):
-    """긴 옵션이 names 중 하나이거나 그 줄임(--out → --output)이면 참. GNU 도구는 겹치지 않는 줄임을 받는다."""
-    for a in args:
-        if a.startswith("--") and len(a) > 2:
-            opt = a[2:].split("=", 1)[0]
-            if any(n.startswith(opt) for n in names):
-                return True
-    return False
-
-
-def segment_read_only(seg):
-    while seg and (ENV_OK.match(seg[0]) or seg[0] in SHELL_WORDS):  # 환경 변수 지정·if/then 같은 셸 문법어
-        seg = seg[1:]
-    if seg[:1] == ["for"] or seg in (["fi"], ["done"], ["}"], ["esac"]):
-        return True
-    if not seg:
-        return True
-    name, args = seg[0], seg[1:]
-    if "/" in name:  # 경로로 부른 실행 파일은 이름만으로 믿지 않는다(알려진 도구의 버전 확인만 둔다)
-        return bool(re.match(r"^(node|pnpm|npm|yarn|bun|deno|python3?)$", os.path.basename(name))) and args in (["--version"], ["-v"], ["-V"])
-    if name in ("sh", "bash", "zsh") and len(args) == 2 and args[0] in ("-c", "-lc"):  # sh -c '<읽기 명령>'
-        return shell_read_only(args[1])
-    if name == "rtk" and [a for a in args if not a.startswith("-")][:1] == ["proxy"]:  # rtk proxy <명령>: 명령을 그대로 실행
-        return segment_read_only(args[[a for a in args].index("proxy") + 1:])
-    if name == "unset":
-        return True
-    if name == "export":  # 이 셸의 환경 변수만 바꾼다(예: Node 버전에 맞춘 PATH)
-        return all(ENV_OK.match(x) or re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", x) for x in args)
-    if name == "env":  # env -u NAME NAME=VALUE <명령>: 환경만 바꿔 뒤 명령을 실행한다
-        rest = list(args)
-        while rest and (rest[0] in ("-u", "--unset") or ENV_OK.match(rest[0])):
-            rest = rest[2:] if rest[0] in ("-u", "--unset") else rest[1:]
-        return segment_read_only(rest) if rest else True
-    if any(EXPANDS in x for x in seg) and name not in NO_WRITE_OPTIONS:  # 펼쳐질 값($VAR)이 어떤 옵션이 될지 미리 알 수 없다
-        return False
-    joined = " ".join(seg)
-    if GLOB in joined and (TEST_RUN.match(joined.replace(GLOB, "")) or JS_CHECK.match(joined.replace(GLOB, ""))):
-        return False  # 검사 실행에 펼쳐질 인자를 넘기면 어떤 옵션이 될지 미리 알 수 없다
-    joined, seg = joined.replace(GLOB, ""), [x.replace(GLOB, "") for x in seg]
-    name, args = seg[0], seg[1:]
-    if VERSION.match(joined):
-        return True
-    if TEST_RUN.match(joined) or JS_CHECK.match(joined):  # 조사 중 기존 검사 실행은 둔다. 숨은 쓰기는 턴 끝 상태 검사가 잡는다
-        return True
-    if name == "rtk":  # rtk 는 명령 출력을 줄여 주는 도구다
-        while args and args[0].startswith("-"):  # rtk 자체 선택 항목(--raw-output=true 등)
-            args = args[1:]
-        if args[:1] == ["proxy"]:
-            return segment_read_only(args[1:])
-        if args and (args[0] in READ_ONLY or args[0] in ("git", "rm")):
-            return segment_read_only(args)
-        return bool(args) and args[0] in RTK_READ and not any(a.startswith("-o") or a.startswith("--output") for a in args)
-    if name == "git" and (any(a == "-c" or a.startswith("-O") for a in args)
-                          or long_opt(args, "config-env", "open-files-in-pager", "ext-diff", "textconv", "filters", "exec-path", "output")):
-        return False
-    if name in ("rg", "grep") and long_opt(args, "pre", "pre-glob", "hostname-bin"):
-        return False
-    if name == "git":
-        rest = list(args)
-        while rest and rest[0].startswith("-"):
-            opt = rest.pop(0)
-            if opt in GIT_VALUE_OPTS and rest:
-                rest.pop(0)
-        return bool(rest) and rest[0] in GIT_READ and not any(a.startswith("--output") or a == "-o" for a in rest)
-    if name == "rm":  # 테스트가 만든 캐시(__pycache__·.pytest_cache)를 치우는 것만 둔다
-        targets = [a for a in args if not a.startswith("-")]
-        return bool(targets) and all(re.search(r"(^|/)(__pycache__|\.pytest_cache)(/|$)", a) and ".." not in a for a in targets)
-    if name not in READ_ONLY:
-        return False
-    if name == "sed":  # 출력만 하는 형태만 둔다: [주소]p·d·=·q, 쓰기 플래그 없는 s/a/b/
-        scripts, rest, plain = [], list(args), True
-        while rest:
-            a = rest.pop(0)
-            if a in ("-n", "-E", "-r", "--quiet", "--silent", "-u", "-z"):
-                continue
-            if a in ("-e", "--expression") and rest:
-                scripts.append(rest.pop(0)); plain = False
-            elif a.startswith("-e") and len(a) > 2:
-                scripts.append(a[2:]); plain = False
-            elif a.startswith("--expression="):
-                scripts.append(a.split("=", 1)[1]); plain = False
-            elif a.startswith("-"):
-                return False  # -i, -f, -s 등 그 밖의 옵션은 승인이 필요하다
-            elif plain and not scripts:
-                scripts.append(a)
-        return bool(scripts) and all(SED_READ.match(x.strip()) for x in scripts)
-    if name == "sort" and (any(re.match(r"^-[a-zA-Z]*o", a) for a in args) or long_opt(args, "output", "compress-program")):
-        return False
-    if name == "uniq" and len([a for a in args if not a.startswith("-")]) > 1:  # uniq 입력 출력: 두 번째 파일에 쓴다
-        return False
-    if (name == "tree" and any(a.startswith("-o") for a in args)) or (name == "file" and (any(re.match(r"^-[a-zA-Z]*C", a) for a in args) or long_opt(args, "compile"))):
-        return False
-    if name == "date" and any(not a.startswith(("+", "-u", "-R", "-I", "-r", "-j", "-f")) or a == "-s" for a in args):
-        return False  # 날짜 출력 형식·변환만 둔다(시스템 날짜 설정 제외)
-    if name == "find" and any(a in ("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls") for a in args):
-        return False
-    if name == "awk" and (long_opt(args, "file", "exec", "include", "load") or any(a.startswith("-f") or re.search(r"(system|print[^;]*[>|]|getline|close|fflush|\|)", a) for a in args)):
-        return False
-    return True
-
-
 def write_targets(inp):
     text = "\n".join(str(v) for v in inp.values() if isinstance(v, str))
     found = [a or b for a, b in re.findall(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$|^\*\*\* Move to: (.+)$", text, re.M)]
     return found or [inp.get("file_path") or inp.get("notebook_path") or inp.get("path") or ""]
 
 
-def inside_work(root, path):
-    if not path:
+def verify_record(root, path):
+    """경로가 검토기의 기록(work/<작업명>/verify/ 또는 지도 없는 검토의 work/review/)인가."""
+    if not inside(root, path, Path(root, ALLOWED_WRITE_DIR)):
         return False
-    p = Path(path) if Path(path).is_absolute() else root / path
-    try:
-        return Path(os.path.realpath(p)).relative_to(os.path.realpath(root)).parts[:1] == (ALLOWED_WRITE_DIR,)
-    except ValueError:
-        return False
+    rel = Path(os.path.realpath(Path(path) if Path(path).is_absolute() else root / path)).relative_to(os.path.realpath(root)).parts
+    return (len(rel) >= 3 and rel[2] == "verify") or (len(rel) >= 2 and rel[1] == "review")  # work/<작업명>/verify/, work/review/
 
 
-def decide(data, root, approved):
+def decide(data, root, state, approved, reason=REASON):
     tool, inp = str(data.get("tool_name") or ""), data.get("tool_input") or {}
-    if approved:
+    if tool in WRITE_TOOLS and isinstance(inp, dict) and any(inside(root, t, state) for t in write_targets(inp)):
+        return f"{TAG} 승인 관문 기록(.git/{STATE_DIR})은 수정 도구로 바꿀 수 없습니다. 승인은 사용자 메시지로만 열립니다."
+    if tool in WRITE_TOOLS and isinstance(inp, dict) and any(verify_record(root, t) for t in write_targets(inp)):
+        return f"{TAG} 검증 기록(work/<작업명>/verify/)은 수정 도구로 바꿀 수 없습니다. 검증 실행기만 씁니다."
+    if approved or tool in SHELL_TOOLS or tool in NOT_WRITE:
         return None
     if not isinstance(inp, dict):
-        return REASON
+        return reason
     if tool in WRITE_TOOLS:
-        return None if all(inside_work(root, t) for t in write_targets(inp)) else REASON
-    if tool in SHELL_TOOLS:
-        cmd = inp.get("command", inp.get("cmd", ""))
-        cmd = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
-        return None if shell_read_only(cmd) else REASON
-    if tool not in NOT_WRITE and re.search(WRITE_NAME, tool, re.I):  # 이름으로 쓰기임이 드러나는 도구(MCP 파일 쓰기, 열린 셸에 입력 보내기 등)
-        return REASON
+        return None if all(inside(root, t, Path(root, ALLOWED_WRITE_DIR)) for t in write_targets(inp)) else reason
+    if re.search(WRITE_NAME, tool, re.I):
+        return reason
     return None  # 읽기·검색·하위 에이전트 등은 막지 않는다(하위 에이전트의 도구도 같은 훅을 지난다)
+
+
+def changed_files(start, now):
+    return sorted(p for p in set(start) | set(now) if start.get(p) != now.get(p))
+
+
+def stop_message(changed, closed):
+    shown = ", ".join(changed[:SHOWN_FILES]) + (f" 외 {len(changed) - SHOWN_FILES}개" if len(changed) > SHOWN_FILES else "")
+    if closed:
+        return (f"{TAG} 승인한 지도의 기준이 바뀌어 승인이 닫혔습니다({', '.join(closed)}). 이번 턴에 바뀐 제품 파일: {shown}. "
+                "관문은 아무것도 되돌리지 않았습니다. 승인이 열려 있을 때 바꾼 것은 그대로 두고, 기준이 바뀐 뒤에 당신이 바꾼 것이 확실한 파일만 되돌리세요. "
+                "무엇이 왜 바뀌었는지 사용자에게 보여 주고 다시 승인을 물으세요.")
+    return (f"{TAG} 사용자 승인이 없는데 제품 파일이 바뀌었습니다: {shown}. "
+            "관문은 아무것도 되돌리지 않았습니다. 이 가운데 이번 턴에 당신이 바꾼 것이 확실한 파일만 되돌리세요. "
+            "사용자나 다른 작업이 바꿨을 수 있으면 되돌리지 말고(checkout·stash·reset 같은 일괄 되돌리기 금지) 사용자에게 알리세요. "
+            "그다음 바꿀 내용을 보여 주고 승인을 물으세요.")
+
+
+def read_json(path, default):
+    try:
+        v = json.loads(path.read_text())
+    except FileNotFoundError:
+        return default
+    if not isinstance(v, type(default)):
+        raise ValueError(f"관문 기록 형식이 다르다: {path.name}")
+    return v
+
+
+def touch(rec, turn_maps, now_maps, extra=()):
+    """이 세션이 쓴 지도: 수정 도구 대상(extra)과, 이번 턴에 기준이 바뀌거나 생기거나 사라진 지도."""
+    t = set(rec.get("touched", [])) | set(extra)
+    if turn_maps is not None:
+        t |= {m for m in set(turn_maps) | set(now_maps) if turn_maps.get(m) != now_maps.get(m)}
+    rec["touched"] = sorted(t)
+
+
+def bind(rec, root, now_maps):
+    """승인 턴 끝에 승인 대상을 정한다. 승인 턴 안에서 지도를 쓰거나 고친 것은 승인 내용을 옮겨 적은 것으로 본다.
+    대상 지도(승인 메시지가 가리킨 것·승인 전에 이 세션이 쓴 것·이번 턴에 쓴 것 가운데 `## 기준`이 있는 것)가 있으면 지도 승인으로
+    그때의 기준에 묶고, 없으면 대화 승인이므로 닫는다."""
+    cand = set(rec.get("targets", {})) | set(rec.get("wrote", []))  # 셸로 만든 지도·다른 세션의 지도는 묶지 않는다(구별할 수 없다)
+    targets = {m: now_maps[m] for m in sorted(cand) if now_maps.get(m) and now_maps[m] != "unreadable"}
+    rec.pop("binding", None)
+    rec["touched"], rec["wrote"] = [], []
+    if targets:
+        rec.update(kind="map", targets=targets,
+                   criteria={m: criteria_text(Path(root, m).read_text(encoding="utf-8", errors="replace")) for m in targets})
+    else:
+        rec.update(kind="conversation", targets={}, criteria={}, approved=False, closed_by="turn-end", task_done=True)
+
+
+def settle(rec, now_maps):
+    """승인 턴이 끝난 지도 승인의 유효성을 본다. 승인 밖 변화가 있으면 닫는다(사용자가 다시 승인할 때까지). 돌려줌: 닫힌 원인 지도 목록."""
+    if not rec.get("approved") or rec.get("binding") or rec.get("kind") != "map":
+        return []
+    targets = rec.get("targets", {})
+    removed = [m for m in targets if m not in now_maps]
+    changed = [m for m in targets if m in now_maps and now_maps[m] != targets[m]]
+    new = [m for m in rec.get("touched", []) if m not in targets and now_maps.get(m)]  # `## 기준`이 있는 새 지도만
+    if changed or new:
+        rec.update(approved=False, closed_by="criteria", closed_maps=sorted(changed + new))
+        return rec["closed_maps"]
+    if removed and len(removed) == len(targets):  # 승인한 지도를 모두 정리했다: 작업 완료로 닫는다
+        rec.update(approved=False, closed_by="map-removed", closed_maps=sorted(removed), task_done=True)
+    return []
+
+
+def status_json(rec):
+    """평가·사람이 보는 상태. waiting: 사용자 답이 필요한 상태(승인 전, 철회, 기준 변경으로 닫힘).
+    대화 승인이 턴 끝에 닫힌 것과 작업을 마치며 지도를 정리한 것은 대기가 아니다. 관문 기록이 없으면 알 수 없으므로 대기로 세지 않는다."""
+    approved = bool(rec.get("approved"))
+    waiting = bool(rec.get("seen")) and not approved and rec.get("closed_by") not in ("turn-end", "map-removed")
+    return {"approved": approved, "kind": rec.get("kind"), "targets": sorted(rec.get("targets", {})), "closed_by": rec.get("closed_by"),
+            "waiting": waiting, "recorded": bool(rec.get("seen"))}
+
+
+def approved_record(root, state, map_path):
+    """검증기가 쓴다(읽기만): 이 지도를 승인 대상으로 가진 세션 기록 중 가장 최근 승인. 승인 턴이 아직 끝나지 않았으면(그 턴 안에서
+    지도를 쓰고 바로 검증) 이 세션이 쓴 지도도 대상으로 보고 지금의 기준 글을 승인 기준으로 쓴다. 없으면 None."""
+    best = None
+    for f in state.glob("*.approval") if state.is_dir() else []:
+        try:
+            rec = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("binding") and rec.get("approved"):
+            now_maps = maps(root)
+            if map_path in set(rec.get("targets", {})) | set(rec.get("wrote", [])) and now_maps.get(map_path):
+                rec = {**rec, "targets": {**rec.get("targets", {}), map_path: now_maps[map_path]},
+                       "criteria": {**rec.get("criteria", {}), map_path: criteria_text(Path(root, map_path).read_text(encoding="utf-8", errors="replace"))}}
+        if map_path in rec.get("targets", {}) and (best is None or rec.get("approved_at", 0) > best.get("approved_at", 0)):
+            best = rec
+    return best
+
+
+def advance(rec, event, root, now_maps, turn_maps=None, prompt="", extra=(), runner=False, snapshot=None, plan=None, event_key=None, plog=None, log_file=None, log_ok=True):
+    """승인 상태가 바뀌는 유일한 곳. 사건(prompt·pre·stop) 하나와 지금 관찰(지도 지문)을 받아 다음 기록을 낸다.
+    파일 읽기·쓰기와 도구 거절은 main 이 맡는다. 돌려줌: (새 기록, {decision, closed(닫힌 원인 지도), reset_start(턴 끝 감지 시작점을 지금으로)})."""
+    was_open = bool(rec.get("approved"))
+    info = {"decision": None, "closed": [], "reset_start": False}
+    if event == "prompt":
+        last = rec.get("last_prompt") or {}
+        plog = plog if plog is not None else []
+        if not log_ok or len(plog) < rec.get("log_len", 0):  # 기록이 깨지거나 줄었다: 원문을 확보할 수 없다(승인 원문을 입력 부족으로 표시)
+            rec["log_broken"] = True
+        # 같은 사건의 두 번째 훅 호출(전역·프로젝트 훅 병용): 메시지와 대화 기록 상태가 모두 같거나, 대화 기록이 없을 때 같은 메시지가
+        # 2초 안에 다시 오면 기록을 바꾸지 않는다(사람이 같은 말을 2초 안에 다시 보내는 경우와는 구별하지 못한다).
+        dup_key = event_key and last.get("key") == event_key and time.time() - last.get("t", 0) < 30
+        dup_raw = (not event_key and plog and plog[-1].get("text") == prompt and time.time() - plog[-1].get("t", 0) < 2
+                   and not rec.get("stopped"))  # 그 사이 턴이 끝났으면(Stop) 사용자가 다시 보낸 것이다
+        if dup_key or dup_raw:  # 중복 사건에는 어떤 상태 전이도 적용하지 않는다
+            info["decision"] = "duplicate"
+            return rec, info
+        if rec.get("binding"):  # 실제 다음 메시지인데 앞 턴이 Stop 없이 끝났으면 먼저 묶는다(작업 시작 위치를 정하기 전에)
+            bind(rec, root, now_maps)
+        settle(rec, now_maps)  # 턴 사이에 승인한 지도의 기준이 바뀌었으면 닫힘으로 남긴다
+        if not runner:  # 사용자 메시지는 지우지도 줄이지도 않는 세션 기록에 더한다. 승인은 그 구간을 가리킨다.
+            plog.append({"text": prompt, "t": time.time()})
+            info["appended"] = True
+            if "task_start" not in rec or rec.get("task_done"):  # 앞 작업이 끝났으면(대화 승인 턴 끝·지도 정리) 이 메시지부터 새 작업
+                rec["task_start"], rec["task_done"] = len(plog) - 1, False
+        if runner:
+            info["decision"] = "runner"  # 평가 실행기가 보낸 사용자 아닌 입력(검증 반환 등): 승인을 바꾸지 않는다
+        elif is_approval(prompt):
+            # 후보: 승인 메시지가 가리킨 지도, 승인 전에 이 세션이 수정 도구로 쓴 지도, 둘 다 없으면 지난 승인의 지도. 턴 끝(bind)에 확정한다.
+            targets = {m: now_maps[m] for m in named_maps(root, prompt) if now_maps.get(m)}
+            for m in rec.get("wrote", []):
+                if now_maps.get(m):
+                    targets.setdefault(m, now_maps[m])
+            if not targets:
+                targets = {m: now_maps[m] for m in rec.get("targets", {}) if now_maps.get(m)}
+            # 검토 입력 고정: 승인 전 사용자 메시지(요청 원문)와 승인 직전 에이전트가 보여 준 계획을 그대로 남긴다(에이전트가 나중에 요약한 글로 대신하지 않는다)
+            # 요청 원문 = 이번 작업의 첫 메시지부터 이 승인까지의 사용자 메시지 전부(세션 기록 구간, 줄이지 않는다)
+            start_ = rec.get("task_start", 0)
+            rec = {"approved": True, "binding": True, "kind": "map" if targets else "conversation", "targets": targets, "criteria": {},
+                   "prompt": prompt, "requests": [e["text"] for e in plog[start_:]], "plan": plan() if plan else None,
+                   "after": [], "touched": [], "wrote": [], "approved_at": time.time(), "base": snapshot() if snapshot else None,
+                   "task_start": start_, "task_done": False, "log_file": log_file, "approve_idx": len(plog) - 1,
+                   "requests_incomplete": bool(rec.get("log_broken"))}
+            info["decision"] = "open"
+        elif is_revoke(prompt) or mentions_approval(prompt):
+            rec.update(approved=False, closed_by="revoke")
+            info["decision"] = "close"
+        else:
+            if rec.get("approved"):
+                rec.setdefault("after", []).append(prompt)  # 승인 뒤 사용자 메시지(검증자가 범위 변경을 대조한다)
+            info["decision"] = "keep"
+        rec["seen"] = True
+        rec["last_prompt"] = {"key": event_key, "t": time.time()}
+        rec["log_len"] = len(plog)
+        rec["stopped"] = False
+        return rec, info
+    touch(rec, turn_maps, now_maps, extra)
+    if event == "stop":
+        rec["stopped"] = True
+    if event == "pre":
+        rec["wrote"] = sorted(set(rec.get("wrote", [])) | set(extra))
+    info["closed"] = settle(rec, now_maps)
+    if event == "stop" and rec.get("binding"):
+        bind(rec, root, now_maps)
+    # 승인 중에 작업이 끝나면(대화 승인의 턴 끝, 지도 정리) 승인 중 변경은 알리지 않고 지금부터 본다. 기준 변경으로 닫힌 것은 그대로 둔다.
+    done = ("turn-end", "map-removed") if event == "stop" else ("map-removed",)
+    info["reset_start"] = was_open and rec.get("closed_by") in done
+    return rec, info
+
+
+def read_prompts(path, with_ok=False):
+    """세션의 사용자 메시지 기록(추가 전용 JSONL). 항목은 {"text", "t"} 사전만 받는다. 깨진 줄·다른 형태가 있으면 ok=False(손상).
+    파일이 없으면 빈 목록(ok=True: 아직 기록이 없음. 있어야 할 기록이 없어진 것은 호출한 쪽이 기록 길이로 가린다)."""
+    out, ok = [], True
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        lines = []
+    except (OSError, UnicodeDecodeError):
+        lines, ok = [], False
+    for line in lines:
+        try:
+            e = json.loads(line)
+        except ValueError:
+            ok = False
+            continue
+        if isinstance(e, dict) and isinstance(e.get("text"), str):
+            out.append(e)
+        else:
+            ok = False
+    return (out, ok) if with_ok else out
+
+
+def prompt_event_key(data):
+    """같은 사용자 메시지 사건을 가리는 열쇠: 메시지 + 대화 기록 파일의 크기·수정 시각. 대화 기록이 없으면 None."""
+    tp = data.get("transcript_path")
+    try:
+        st = os.stat(tp) if tp else None
+    except OSError:
+        st = None
+    return hashlib.sha256(f"{data.get('prompt')}\0{tp}\0{st.st_size}\0{st.st_mtime_ns}".encode()).hexdigest() if st else None
+
+
+def latest_approval(state, sid=None):
+    """검토기가 쓴다(읽기만): 지도 없이 승인한 일의 승인 기록. 세션 id 가 있으면 그 세션의 것, 없으면 가장 최근 승인. 없으면 None."""
+    files = [state / f"{hashlib.sha256(str(sid).encode()).hexdigest()[:24]}.approval"] if sid else (sorted(state.glob("*.approval")) if state.is_dir() else [])
+    recs = []
+    for f in files:
+        try:
+            r = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(r, dict) and r.get("approved_at"):
+            recs.append(r)
+    return max(recs, key=lambda r: r["approved_at"]) if recs else None
 
 
 def main(mode, data):
     try:
         root, state = locate(data.get("cwd"))
     except RuntimeError:
-        return  # git 저장소가 아니면 상태를 잴 수 없고 키트 설치 프로젝트도 아니다
+        return 0  # git 저장소가 아니면 키트 설치 프로젝트도 아니다
     if not (root / ".agents" / "agent-workflow-kit.version").is_file():
-        return  # 키트가 설치된 프로젝트에서만 동작한다(키트 원본 저장소·관문 파일만 복사된 곳은 그대로 둔다)
+        return 0  # 키트가 설치된 프로젝트에서만 동작한다(키트 원본 저장소는 그대로 둔다)
     sid = data.get("session_id")
     key = hashlib.sha256(str(sid).encode()).hexdigest()[:24] if sid else None
-    flag, start, blocks = (state / f"{key}.approved", state / f"{key}.start", state / f"{key}.blocks") if key else (None,) * 3
+    if mode == "status":
+        rec = read_json(state / f"{key}.approval", {}) if key else {}
+        print(json.dumps(status_json(rec), ensure_ascii=False))
+        return 0
+    if not key:
+        if mode == "pre":
+            reason = decide(data, root, state, False)
+            if reason:
+                print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                                         "permissionDecisionReason": reason}}, ensure_ascii=False))
+        return 0
+    approval, start, blocks, turnmaps = (state / f"{key}.{n}" for n in ("approval", "start", "blocks", "maps"))
+    rec = read_json(approval, {})
+    now_maps = maps(root)
+    turn_maps = read_json(turnmaps, {}) if turnmaps.is_file() else None
     if mode == "prompt":
-        if not key:
-            return
         state.mkdir(exist_ok=True)
-        approved = is_approval(str(data.get("prompt") or ""))
-        flag.write_text("1" if approved else "0")
-        start.write_text(product_state(root))
+        log_path = state / f"{key}.prompts.jsonl"
+        try:
+            plog, log_ok = read_prompts(log_path, with_ok=True)
+            rec, info = advance(rec, "prompt", root, now_maps, prompt=str(data.get("prompt") or ""),
+                                runner=os.environ.get("AWK_GATE_PROMPT_FROM") == "runner", snapshot=lambda: snapshot_files(root, state),
+                                plan=lambda: last_answer(data.get("transcript_path")), event_key=prompt_event_key(data), plog=plog,
+                                log_file=log_path.name, log_ok=log_ok)
+            if info.get("appended"):
+                with open(log_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(plog[-1], ensure_ascii=False) + "\n")
+        except Exception as e:  # 기록 읽기·쓰기·판단 어디서든 실패하면 승인을 닫은 상태로 남긴다(철회가 무시되어 쓰기가 열린 채 남지 않게)
+            rec = {**rec, "approved": False, "closed_by": "error", "binding": False, "log_broken": True}
+            info = {"decision": f"error-closed: {e!r}"}
+        decision = info["decision"]
+        approval.write_text(json.dumps(rec, ensure_ascii=False))
+        turnmaps.write_text(json.dumps(now_maps, ensure_ascii=False))
+        start.write_text(json.dumps(product_files(root), ensure_ascii=False))
         blocks.write_text("0")
-        (state / f"{key}.laststop").unlink(missing_ok=True)  # 앞 턴의 턴 끝 판단을 새 턴에 다시 쓰지 않는다
-        log({"event": "prompt", "approved": approved})
-        return
-    approved = bool(key) and flag.is_file() and flag.read_text().strip() == "1"
-    if mode == "stop":
-        if approved or not key or not start.is_file():
-            return
-        # 같은 턴 끝에 관문이 두 번 불리면(사용자 전역 훅과 프로젝트 훅을 둘 다 등록·신뢰한 경우) 앞의 판단을 그대로 낸다.
-        last = state / f"{key}.laststop"
-        now = product_state(root)
-        if last.is_file():
-            prev = json.loads(last.read_text() or "{}")
-            if time.time() - prev.get("t", 0) < 5 and prev.get("now") == now and prev.get("start") == start.read_text().strip():
-                if prev.get("out"):
-                    print(prev["out"])
-                return
-        changed = now != start.read_text().strip()
-        n = int(blocks.read_text() or 0) if blocks.is_file() else 0
-        log({"event": "stop", "changed": changed, "blocks": n})
-        out = ""
-        if changed and n < MAX_STOP_BLOCKS:
-            blocks.write_text(str(n + 1))
-            out = json.dumps({"decision": "block", "reason": f"{TAG} 사용자가 이번 메시지에서 승인하지 않았는데 제품 파일이 턴 시작 때와 달라졌습니다. "
-                              "이번 턴에 바꾼 제품 파일을 턴 시작 상태로 되돌리고(사용자가 이전에 만든 변경은 그대로 둡니다), "
-                              "만들 결과와 미정을 보여 주고 승인을 물으세요."}, ensure_ascii=False)
-            print(out)
-        elif changed:
-            print(f"{TAG} 미승인 변경이 남은 채 끝났다(되돌리기 요청 {n}회)", file=sys.stderr)
-        last.write_text(json.dumps({"t": time.time(), "start": start.read_text().strip(), "now": now, "out": out}, ensure_ascii=False))
-        return
-    reason = decide(data, root, approved)
-    inp = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
-    log({"event": "pre", "tool": data.get("tool_name"), "approved": approved, "denied": bool(reason),
-         "input": str(inp.get("command") or inp.get("cmd") or inp.get("file_path") or "")[:200]})
-    if reason:
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-                                                 "permissionDecisionReason": reason}}, ensure_ascii=False))
+        (state / f"{key}.laststop").unlink(missing_ok=True)
+        log({"event": "prompt", "decision": decision, **status_json(rec)})
+        return 0
+    if mode == "pre":
+        tool, inp = str(data.get("tool_name") or ""), data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
+        extra = [m for m in (rel_map(root, t) for t in write_targets(inp)) if m] if tool in WRITE_TOOLS else []
+        rec, info = advance(rec, "pre", root, now_maps, turn_maps, extra=extra)
+        closed = info["closed"]
+        if state.is_dir():
+            if info["reset_start"]:
+                start.write_text(json.dumps(product_files(root), ensure_ascii=False))
+            approval.write_text(json.dumps(rec, ensure_ascii=False))
+        reason = decide(data, root, state, bool(rec.get("approved")), CLOSED_REASON.format(maps=", ".join(closed)) if closed else REASON)
+        log({"event": "pre", "tool": tool, "approved": bool(rec.get("approved")), "denied": bool(reason), "closed_maps": closed,
+             "input": str(inp.get("command") or inp.get("cmd") or inp.get("file_path") or "")[:200]})
+        if reason:
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                                     "permissionDecisionReason": reason}}, ensure_ascii=False))
+        return 0
+    # stop
+    rec, info = advance(rec, "stop", root, now_maps, turn_maps)
+    closed = info["closed"]
+    if not state.is_dir():
+        return 0
+    now = product_files(root)
+    if info["reset_start"]:
+        start.write_text(json.dumps(now, ensure_ascii=False))
+    if rec:
+        approval.write_text(json.dumps(rec, ensure_ascii=False))
+    if rec.get("approved") or not start.is_file():
+        return 0
+    begin = read_json(start, {})
+    changed = changed_files(begin, now)
+    digest = hashlib.sha256(json.dumps(now, sort_keys=True).encode()).hexdigest()
+    begin_digest = hashlib.sha256(json.dumps(begin, sort_keys=True).encode()).hexdigest()
+    # 같은 턴 끝에 관문이 두 번 불리면(전역 훅과 프로젝트 훅을 둘 다 등록한 경우) 앞의 판단을 그대로 낸다.
+    last = state / f"{key}.laststop"
+    if last.is_file():
+        prev = json.loads(last.read_text() or "{}")
+        if time.time() - prev.get("t", 0) < 5 and prev.get("now") == digest and prev.get("start") == begin_digest:
+            if prev.get("out"):
+                print(prev["out"])
+            return 0
+    n = int(blocks.read_text() or 0) if blocks.is_file() else 0
+    shown_closed = closed or (rec.get("closed_maps", []) if rec.get("closed_by") == "criteria" else [])
+    log({"event": "stop", "changed": bool(changed), "files": changed[:SHOWN_FILES], "blocks": n, "closed_maps": shown_closed})
+    out = ""
+    if changed and n < MAX_STOP_BLOCKS:
+        blocks.write_text(str(n + 1))
+        out = json.dumps({"decision": "block", "reason": stop_message(changed, shown_closed)}, ensure_ascii=False)
+        print(out)
+    elif changed:
+        print(f"{TAG} 승인 없는 제품 파일 변경이 남은 채 끝났다(알림 {n}회): {', '.join(changed[:SHOWN_FILES])}", file=sys.stderr)
+    last.write_text(json.dumps({"t": time.time(), "start": begin_digest, "now": digest, "out": out}, ensure_ascii=False))
+    return 0
 
+
+USAGE = "사용: approval-gate.py status [--session <id>]   (prompt·pre·stop 은 하네스 훅이 표준 입력 JSON 과 함께 부른다)"
 
 if __name__ == "__main__":
     mode, data = (sys.argv[1] if len(sys.argv) > 1 else "pre"), {}
+    if mode in ("-h", "--help", "help"):
+        print(USAGE)
+        sys.exit(0)
+    if mode not in ("prompt", "pre", "stop", "status"):
+        print(f"{TAG} 오류: 알 수 없는 명령 {mode!r}\n{USAGE}", file=sys.stderr)
+        sys.exit(2)
+    if mode == "status":
+        args = sys.argv[2:]
+        sid = args[args.index("--session") + 1] if "--session" in args[:-1] else next(
+            (os.environ[k] for k in ("CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID") if os.environ.get(k)), None)
+        try:
+            sys.exit(main("status", {"cwd": os.getcwd(), "session_id": sid}))
+        except Exception as e:
+            print(f"{TAG} 오류: status 실패: {e!r}", file=sys.stderr)
+            sys.exit(1)
     try:
         data = json.load(sys.stdin)
         main(mode, data)
-    except Exception as e:  # 훅 자체 오류: 쓰기·셸만 막고 읽기 도구는 그대로 둔다. 턴 끝 검사는 기록만 남긴다.
+    except Exception as e:  # 훅 자체 오류: 수정 도구만 막고 읽기·셸은 그대로 둔다. 턴 끝 검사는 알린다.
         log({"error": repr(e), "mode": mode})
         tool = str(data.get("tool_name") or "") if isinstance(data, dict) else ""
-        if mode == "stop":  # 턴 끝 검사를 하지 못했으면 승인 전 변경이 없다고 볼 수 없으므로 알리고 멈춘다
+        if mode == "stop":
             print(json.dumps({"decision": "block", "reason": f"{TAG} 승인 관문이 제품 파일 상태를 확인하지 못했습니다({e!r}). "
-                              "이번 턴에 바꾼 제품 파일이 있으면 되돌리고, 상태를 사용자에게 알리세요."}, ensure_ascii=False))
-        if mode == "pre" and (not data or tool in WRITE_TOOLS | SHELL_TOOLS or re.search(WRITE_NAME, tool, re.I)):
+                              "이번 턴에 당신이 바꾼 것이 확실한 제품 파일만 되돌리고, 상태를 사용자에게 알리세요."}, ensure_ascii=False))
+        if mode == "pre" and (not data or tool in WRITE_TOOLS or (tool not in SHELL_TOOLS | NOT_WRITE and re.search(WRITE_NAME, tool, re.I))):
             print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                                      "permissionDecisionReason": f"{TAG} 승인 관문 오류로 쓰기를 막았습니다: {e!r}"}}, ensure_ascii=False))
         print(f"{TAG} 훅 오류: {e!r}", file=sys.stderr)

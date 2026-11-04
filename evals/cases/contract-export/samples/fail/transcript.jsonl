@@ -1,0 +1,2 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": "todo.py"}}]}}
+{"type": "result", "result": "CSV 열 이름을 바꿨습니다."}
