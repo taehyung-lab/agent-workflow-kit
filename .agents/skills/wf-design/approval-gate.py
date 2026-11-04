@@ -8,9 +8,12 @@
   관문은 아무것도 되돌리지 않는다.
 
 승인 수명(규칙 두 개):
-- 대화 승인: 승인 때 이 세션이 승인 전에 쓴 작업 지도도, 승인 메시지가 가리킨 지도도 없으면 그 턴에만 유효하다. 턴 끝에 닫힌다.
+- 승인한 턴 안에서 지도를 쓰거나 고치는 것은 승인 내용(예: "추천안대로 진행해 주세요"로 정한 결정)을 옮겨 적는 것으로 본다.
+  그 턴이 끝날 때 대상이 정해진다.
+- 대화 승인: 승인 턴이 끝날 때 대상 지도(아래)가 없으면 그 턴에만 유효하다. 턴 끝에 닫힌다.
   작은 일(한 곳, 결과가 요청에 다 나온 일)은 지도 없이 대화로 계획을 보여 주고 이 승인으로 한 턴에 끝낸다.
-- 지도 승인: 승인 전에 이 세션이 쓴 지도(work/<작업명>/work.md)나 승인 메시지가 경로로 가리킨 지도가 있으면, 그 지도의 `## 기준` 절에 묶인다.
+- 지도 승인: 승인 메시지가 경로로 가리킨 지도, 승인 전이나 승인 턴에 이 세션이 쓴 지도 가운데 `## 기준`이 있는 것이 있으면, 승인 턴이 끝날 때의
+  그 `## 기준` 절에 묶인다.
   둘 다 없고 지난 승인의 지도가 남아 있으면(철회 뒤 같은 계획을 다시 승인) 그 지도에 다시 묶는다.
   상태 질문 같은 다음 메시지에도 유지되고, 다음 중 하나면 닫힌다(사용자가 다시 승인할 때까지 닫힌 채다).
   사용자 철회 / 승인한 지도의 `## 기준`이 바뀜 / 이 세션이 승인 밖의 새 지도를 씀 / 승인한 지도를 정리(삭제)함(작업 완료).
@@ -214,10 +217,20 @@ def write_targets(inp):
     return found or [inp.get("file_path") or inp.get("notebook_path") or inp.get("path") or ""]
 
 
+def verify_record(root, path):
+    """경로가 검증 실행기의 기록(work/<작업명>/verify/ 아래)인가."""
+    if not inside(root, path, Path(root, ALLOWED_WRITE_DIR)):
+        return False
+    rel = Path(os.path.realpath(Path(path) if Path(path).is_absolute() else root / path)).relative_to(os.path.realpath(root)).parts
+    return len(rel) >= 3 and rel[2] == "verify"
+
+
 def decide(data, root, state, approved, reason=REASON):
     tool, inp = str(data.get("tool_name") or ""), data.get("tool_input") or {}
     if tool in WRITE_TOOLS and isinstance(inp, dict) and any(inside(root, t, state) for t in write_targets(inp)):
         return f"{TAG} 승인 관문 기록(.git/{STATE_DIR})은 수정 도구로 바꿀 수 없습니다. 승인은 사용자 메시지로만 열립니다."
+    if tool in WRITE_TOOLS and isinstance(inp, dict) and any(verify_record(root, t) for t in write_targets(inp)):
+        return f"{TAG} 검증 기록(work/<작업명>/verify/)은 수정 도구로 바꿀 수 없습니다. 검증 실행기만 씁니다."
     if approved or tool in SHELL_TOOLS or tool in NOT_WRITE:
         return None
     if not isinstance(inp, dict):
@@ -235,8 +248,11 @@ def changed_files(start, now):
 
 def stop_message(changed, closed):
     shown = ", ".join(changed[:SHOWN_FILES]) + (f" 외 {len(changed) - SHOWN_FILES}개" if len(changed) > SHOWN_FILES else "")
-    why = f"승인한 지도의 기준이 바뀌어 승인이 닫혔는데({', '.join(closed)})" if closed else "사용자 승인이 없는데"
-    return (f"{TAG} {why} 제품 파일이 바뀌었습니다: {shown}. "
+    if closed:
+        return (f"{TAG} 승인한 지도의 기준이 바뀌어 승인이 닫혔습니다({', '.join(closed)}). 이번 턴에 바뀐 제품 파일: {shown}. "
+                "관문은 아무것도 되돌리지 않았습니다. 승인이 열려 있을 때 바꾼 것은 그대로 두고, 기준이 바뀐 뒤에 당신이 바꾼 것이 확실한 파일만 되돌리세요. "
+                "무엇이 왜 바뀌었는지 사용자에게 보여 주고 다시 승인을 물으세요.")
+    return (f"{TAG} 사용자 승인이 없는데 제품 파일이 바뀌었습니다: {shown}. "
             "관문은 아무것도 되돌리지 않았습니다. 이 가운데 이번 턴에 당신이 바꾼 것이 확실한 파일만 되돌리세요. "
             "사용자나 다른 작업이 바꿨을 수 있으면 되돌리지 말고(checkout·stash·reset 같은 일괄 되돌리기 금지) 사용자에게 알리세요. "
             "그다음 바꿀 내용을 보여 주고 승인을 물으세요.")
@@ -260,14 +276,29 @@ def touch(rec, turn_maps, now_maps, extra=()):
     rec["touched"] = sorted(t)
 
 
+def bind(rec, root, now_maps):
+    """승인 턴 끝에 승인 대상을 정한다. 승인 턴 안에서 지도를 쓰거나 고친 것은 승인 내용을 옮겨 적은 것으로 본다.
+    대상 지도(승인 메시지가 가리킨 것·승인 전에 이 세션이 쓴 것·이번 턴에 쓴 것 가운데 `## 기준`이 있는 것)가 있으면 지도 승인으로
+    그때의 기준에 묶고, 없으면 대화 승인이므로 닫는다."""
+    cand = set(rec.get("targets", {})) | set(rec.get("touched", []))
+    targets = {m: now_maps[m] for m in sorted(cand) if now_maps.get(m) and now_maps[m] != "unreadable"}
+    rec.pop("binding", None)
+    rec["touched"] = []
+    if targets:
+        rec.update(kind="map", targets=targets,
+                   criteria={m: criteria_text(Path(root, m).read_text(encoding="utf-8", errors="replace")) for m in targets})
+    else:
+        rec.update(kind="conversation", targets={}, criteria={}, approved=False, closed_by="turn-end")
+
+
 def settle(rec, now_maps):
-    """지도 승인의 유효성을 본다. 승인 밖 변화가 있으면 닫는다(사용자가 다시 승인할 때까지). 돌려줌: 닫힌 원인 지도 목록."""
-    if not rec.get("approved") or rec.get("kind") != "map":
+    """승인 턴이 끝난 지도 승인의 유효성을 본다. 승인 밖 변화가 있으면 닫는다(사용자가 다시 승인할 때까지). 돌려줌: 닫힌 원인 지도 목록."""
+    if not rec.get("approved") or rec.get("binding") or rec.get("kind") != "map":
         return []
     targets = rec.get("targets", {})
     removed = [m for m in targets if m not in now_maps]
     changed = [m for m in targets if m in now_maps and now_maps[m] != targets[m]]
-    new = [m for m in rec.get("touched", []) if m not in targets and m in now_maps]
+    new = [m for m in rec.get("touched", []) if m not in targets and now_maps.get(m)]  # `## 기준`이 있는 새 지도만
     if changed or new:
         rec.update(approved=False, closed_by="criteria", closed_maps=sorted(changed + new))
         return rec["closed_maps"]
@@ -278,22 +309,30 @@ def settle(rec, now_maps):
 
 def status_json(rec):
     """평가·사람이 보는 상태. waiting: 사용자 답이 필요한 상태(승인 전, 철회, 기준 변경으로 닫힘).
-    대화 승인이 턴 끝에 닫힌 것과 작업을 마치며 지도를 정리한 것은 대기가 아니다."""
+    대화 승인이 턴 끝에 닫힌 것과 작업을 마치며 지도를 정리한 것은 대기가 아니다. 관문 기록이 없으면 알 수 없으므로 대기로 세지 않는다."""
     approved = bool(rec.get("approved"))
-    waiting = not approved and rec.get("closed_by") not in ("turn-end", "map-removed")
+    waiting = bool(rec.get("seen")) and not approved and rec.get("closed_by") not in ("turn-end", "map-removed")
     return {"approved": approved, "kind": rec.get("kind"), "targets": sorted(rec.get("targets", {})), "closed_by": rec.get("closed_by"),
-            "waiting": waiting}
+            "waiting": waiting, "recorded": bool(rec.get("seen"))}
 
 
 def approved_record(root, state, map_path):
-    """검증기가 쓴다: 이 지도를 승인 대상으로 가진 세션 기록 중 가장 최근 승인. 없으면 None."""
+    """검증기가 쓴다(읽기만): 이 지도를 승인 대상으로 가진 세션 기록 중 가장 최근 승인. 승인 턴이 아직 끝나지 않았으면(그 턴 안에서
+    지도를 쓰고 바로 검증) 이 세션이 쓴 지도도 대상으로 보고 지금의 기준 글을 승인 기준으로 쓴다. 없으면 None."""
     best = None
     for f in state.glob("*.approval") if state.is_dir() else []:
         try:
             rec = json.loads(f.read_text())
         except (OSError, ValueError):
             continue
-        if isinstance(rec, dict) and map_path in rec.get("targets", {}) and (best is None or rec.get("approved_at", 0) > best.get("approved_at", 0)):
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("binding") and rec.get("approved"):
+            now_maps = maps(root)
+            if map_path in set(rec.get("targets", {})) | set(rec.get("touched", [])) and now_maps.get(map_path):
+                rec = {**rec, "targets": {**rec.get("targets", {}), map_path: now_maps[map_path]},
+                       "criteria": {**rec.get("criteria", {}), map_path: criteria_text(Path(root, map_path).read_text(encoding="utf-8", errors="replace"))}}
+        if map_path in rec.get("targets", {}) and (best is None or rec.get("approved_at", 0) > best.get("approved_at", 0)):
             best = rec
     return best
 
@@ -321,22 +360,25 @@ def main(mode, data):
     approval, start, blocks, turnmaps = (state / f"{key}.{n}" for n in ("approval", "start", "blocks", "maps"))
     rec = read_json(approval, {})
     now_maps = maps(root)
+    turn_maps = read_json(turnmaps, {}) if turnmaps.is_file() else None
     if mode == "prompt":
         state.mkdir(exist_ok=True)
+        if rec.get("binding"):  # 앞 턴이 훅 없이 끝났으면(Stop 누락) 지금 묶는다
+            bind(rec, root, now_maps)
+        settle(rec, now_maps)  # 턴 사이에 승인한 지도의 기준이 바뀌었으면 닫힘으로 남긴다(다른 지도는 이 세션이 쓴 것으로 보지 않는다)
         prompt = str(data.get("prompt") or "")
         if os.environ.get("AWK_GATE_PROMPT_FROM") == "runner":
             decision = "runner"  # 평가 실행기가 보낸 사용자 아닌 입력(검증 반환 등): 승인을 바꾸지 않는다
         elif is_approval(prompt):
+            # 후보: 승인 메시지가 가리킨 지도, 승인 전에 이 세션이 쓴 지도, 둘 다 없으면 지난 승인의 지도. 턴 끝(bind)에 확정한다.
             targets = {m: now_maps[m] for m in named_maps(root, prompt) if now_maps.get(m)}
-            for m in rec.get("touched", []):  # 승인 전에 이 세션이 쓴 지도
+            for m in rec.get("touched", []):
                 if now_maps.get(m):
                     targets.setdefault(m, now_maps[m])
-            if not targets:  # 철회·기준 변경 뒤 같은 지도를 다시 승인: 지난 승인의 지도가 남아 있으면 다시 묶는다
+            if not targets:
                 targets = {m: now_maps[m] for m in rec.get("targets", {}) if now_maps.get(m)}
-            texts = {m: criteria_text(Path(root, m).read_text(encoding="utf-8", errors="replace")) for m in targets}
-            rec = {"approved": True, "kind": "map" if targets else "conversation", "targets": targets, "criteria": texts,
-                   "prompt": prompt, "after": [], "touched": [], "approved_at": time.time(),
-                   "base": snapshot_files(root, state) if targets else None}
+            rec = {"seen": True, "approved": True, "binding": True, "kind": "map" if targets else "conversation", "targets": targets,
+                   "criteria": {}, "prompt": prompt, "after": [], "touched": [], "approved_at": time.time(), "base": snapshot_files(root, state)}
             decision = "open"
         elif is_revoke(prompt) or mentions_approval(prompt):
             rec.update(approved=False, closed_by="revoke")
@@ -345,6 +387,7 @@ def main(mode, data):
             if rec.get("approved"):
                 rec.setdefault("after", []).append(prompt)  # 승인 뒤 사용자 메시지(검증자가 범위 변경을 대조한다)
             decision = "keep"
+        rec["seen"] = True
         approval.write_text(json.dumps(rec, ensure_ascii=False))
         turnmaps.write_text(json.dumps(now_maps, ensure_ascii=False))
         start.write_text(json.dumps(product_files(root), ensure_ascii=False))
@@ -352,7 +395,6 @@ def main(mode, data):
         (state / f"{key}.laststop").unlink(missing_ok=True)
         log({"event": "prompt", "decision": decision, **status_json(rec)})
         return 0
-    turn_maps = read_json(turnmaps, {}) if turnmaps.is_file() else None
     was_open = bool(rec.get("approved"))
     if mode == "pre":
         tool, inp = str(data.get("tool_name") or ""), data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
@@ -360,7 +402,7 @@ def main(mode, data):
         touch(rec, turn_maps, now_maps, extra)
         closed = settle(rec, now_maps)
         if state.is_dir():
-            if was_open and not rec.get("approved"):  # 승인 중에 닫혔다: 지금 상태부터 턴 끝 감지(승인 중 변경은 알리지 않는다)
+            if was_open and rec.get("closed_by") == "map-removed":  # 작업 완료: 승인 중 변경은 알리지 않고 지금부터 본다
                 start.write_text(json.dumps(product_files(root), ensure_ascii=False))
             approval.write_text(json.dumps(rec, ensure_ascii=False))
         reason = decide(data, root, state, bool(rec.get("approved")), CLOSED_REASON.format(maps=", ".join(closed)) if closed else REASON)
@@ -373,12 +415,12 @@ def main(mode, data):
     # stop
     touch(rec, turn_maps, now_maps)
     closed = settle(rec, now_maps)
-    if rec.get("approved") and rec.get("kind") == "conversation":
-        rec.update(approved=False, closed_by="turn-end")  # 대화 승인은 그 턴에만 유효하다
+    if rec.get("binding"):
+        bind(rec, root, now_maps)
     if not state.is_dir():
         return 0
     now = product_files(root)
-    if was_open and not rec.get("approved"):  # 이 턴의 승인 중 변경은 알리지 않는다. 닫힌 뒤의 변경만 본다.
+    if was_open and rec.get("closed_by") in ("turn-end", "map-removed"):  # 승인 중 변경은 알리지 않는다(작업이 끝났다)
         start.write_text(json.dumps(now, ensure_ascii=False))
     if rec:
         approval.write_text(json.dumps(rec, ensure_ascii=False))
@@ -397,12 +439,12 @@ def main(mode, data):
                 print(prev["out"])
             return 0
     n = int(blocks.read_text() or 0) if blocks.is_file() else 0
-    log({"event": "stop", "changed": bool(changed), "files": changed[:SHOWN_FILES], "blocks": n, "closed_maps": closed})
+    shown_closed = closed or (rec.get("closed_maps", []) if rec.get("closed_by") == "criteria" else [])
+    log({"event": "stop", "changed": bool(changed), "files": changed[:SHOWN_FILES], "blocks": n, "closed_maps": shown_closed})
     out = ""
     if changed and n < MAX_STOP_BLOCKS:
         blocks.write_text(str(n + 1))
-        out = json.dumps({"decision": "block", "reason": stop_message(changed, closed or rec.get("closed_maps", []) if rec.get("closed_by") == "criteria" else [])},
-                         ensure_ascii=False)
+        out = json.dumps({"decision": "block", "reason": stop_message(changed, shown_closed)}, ensure_ascii=False)
         print(out)
     elif changed:
         print(f"{TAG} 승인 없는 제품 파일 변경이 남은 채 끝났다(알림 {n}회): {', '.join(changed[:SHOWN_FILES])}", file=sys.stderr)

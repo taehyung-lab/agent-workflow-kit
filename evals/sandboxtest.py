@@ -114,6 +114,7 @@ printf '{"type": "item.completed", "item": {"type": "agent_message", "text": %s}
     # 2) 승인(사용자 메시지, 훅) → 구현(셸, sandbox 안) → 검증(sandbox 안, 가짜 하네스)
     hook("prompt", "S", prompt="승인합니다.")
     check("사용자 승인은 훅으로 열리고 지도에 묶인다", not denied("S") and rec("S")["kind"] == "map")
+    hook("stop", "S")
     inbox("sh", "-c", "printf 'import sys\\np, n, d = map(int, sys.argv[1:4])\\nprint(p * n * (100 - d) // 100)\\n' > price.py")
     before = tree_print(state)
     rc, o, p = verify([RET])
@@ -136,6 +137,7 @@ printf '{"type": "item.completed", "item": {"type": "agent_message", "text": %s}
     check("검증자 하네스가 실패하면 미확인(5)과 재개 조건, 완료가 아님", rc == 5 and "재개 조건" in o.get("reason", "") and o.get("completion") != "verified")
     r = inbox("python3", str(gate), "status", "--session", "S")
     check("status 도 경계 안에서 동작하고 승인 상태를 보여 준다", r.returncode == 0 and json.loads(r.stdout).get("approved") is True)
+    hook("stop", "S")
     # 3) 작업을 마치며 지도를 정리하면(셸, sandbox 안) 승인이 닫히고 승인 중 변경은 알리지 않는다
     inbox("rm", "-rf", "work/discount")
     check("지도 정리 → 승인 닫힘(완료, 대기 아님)", denied("S") and rec("S")["closed_by"] == "map-removed")

@@ -366,7 +366,8 @@ def main(args):
     if asked_max != rounds_max:
         result["note"] = f"재검증 한도는 이 시도의 첫 회차에 정한 {rounds_max} 회다(--rounds {asked_max} 는 쓰지 않았다)"
     start_print = product_print(gate, root)
-    start_task = (rec.get("approved_at"), json.dumps(rec.get("targets", {}), sort_keys=True), rec.get("approved"))
+    map_fp = lambda: gate.maps(root).get(rec_file) if rec_file else None  # 지금 지도의 기준 지문(검증 중 바뀌면 판정 무효)
+    start_task = (rec.get("approved_at"), json.dumps(rec.get("targets", {}), sort_keys=True), rec.get("approved"), map_fp())
     if len(ran) >= rounds_max:
         # 한도에 이미 닿았다: 새 검증자를 띄우지 않는다. 마지막 판정이 OK 이고 그 뒤 제품 파일이 그대로면 그 OK 를 그대로 낸다.
         last = ran[-1]
@@ -458,10 +459,10 @@ def main(args):
                 result.update(state=verdict["state"], reason=verdict.get("reason", ""))
             # 검증하는 동안 작업·승인 기준·제품 파일이 바뀌었으면 고정 대상의 판정은 남기되 지금 작업의 결과로 쓰지 않는다
             fresh = (gate.approved_record(root, state_dir, rec_file) or {}) if rec_file else {}
-            end_task = (fresh.get("approved_at"), json.dumps(fresh.get("targets", {}), sort_keys=True), fresh.get("approved")) if rec_file else start_task
+            end_task = (fresh.get("approved_at"), json.dumps(fresh.get("targets", {}), sort_keys=True), fresh.get("approved"), map_fp()) if rec_file else start_task
             if rc is not None and (end_task != start_task or product_print(gate, root) != start_print):
                 result.update(target_state=result["state"], state="unverified",
-                              reason="검증하는 동안 승인·제품 파일이 바뀌었다. 고정 대상의 판정은 남겼지만 지금 버전의 결과가 아니다")
+                              reason="검증하는 동안 승인·지도 기준·제품 파일이 바뀌었다. 고정 대상의 판정은 남겼지만 지금 버전의 결과가 아니다")
             rounds.append({"uid": os.urandom(8).hex(), "round": n, "state": result["state"], "target_state": result.get("target_state"), "reason": result.get("reason", ""),
                            "target": target, "product": start_print, "verifier_exit_code": rc, "ran": rc is not None, "kept": str(keep), "at": time.time()})
         (keep / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
