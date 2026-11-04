@@ -1,15 +1,14 @@
-"""독립 검증 실행기: 구현하지 않은 별도 세션(Claude Code 또는 Codex)을 판정 대상의 고정 복사본에서 띄우고, 정해진 결과 형식으로만 판정한다.
+"""독립 검토 도구: 검토 입력을 고정해 묶고(prepare), 검토자의 답을 정해진 형식으로 판정한다(finish). 검토자는 띄우지 않는다
+(일반 작업은 하네스의 하위 에이전트, 평가는 evals 실행기가 띄운다).
 
-언제: AGENTS.md 「필요한 단계만」이 별도 검증을 요구할 때(공용 경계·큰 연결 불확실성·틀리면 영향 큼·사용자 요구) 전체 담당자가 실행한다.
-작은 수정은 이 실행기 없이 직접 확인한다.
+언제: AGENTS.md 「선택」이 독립 검토를 고를 때(사용자 요구·검사 기준 약화는 필수, 확인 공백·큰 실패 영향은 선택). 사용법은 guide.md 「독립 검토」.
 
-  python3 .agents/skills/wf-verify/verify.py --harness claude|codex --map work/<작업명>/work.md [--rounds 2]
+  python3 .agents/skills/wf-verify/verify.py prepare [--map work/<작업명>/work.md] [--session ID] [--rounds 2]
+  python3 .agents/skills/wf-verify/verify.py finish --round <prepare 가 낸 kept 폴더> < 검토자의-마지막-답
 
-독립 검증은 지도 승인을 받은 작업에만 쓴다(대화로 승인한 작은 일은 직접 확인한다). 무엇을 넘기나(구현자가 고르지 않는다):
-승인 관문이 승인 때 남긴 그 지도의 `## 기준`(사용자가 승인한 글), 승인 메시지와 승인 뒤의 사용자 메시지, 승인 때 보존한 제품 파일 상태부터
-지금까지의 변경(diff). 구현자의 답·지도의 `## 증거`(자기평가)는 넘기지 않는다. 회차마다 고정 대상 저장소·시작 상태·diff·입력·판정을
-지도 옆 verify/round-N-<고유 이름>/ 에 새로 남기고(--keep 이나 평가의 --log 옆 .round 폴더를 주면 그 안), 회차 기록은 verify/state.json 에 둔다.
-관문 기록(.git/awk-gate)은 읽기만 한다. 기존 폴더·파일은 지우거나 덮지 않는다.
+prepare 가 넘기는 것(구현자가 고르지 않는다): 관문이 승인 때 고정한 요청 원문(승인 전 사용자 메시지·승인 메시지), 승인받은 계획(승인 직전
+에이전트 답, 지도가 있으면 그 `## 기준`), 승인 뒤 사용자 메시지, 승인 때 제품 상태부터의 변경(diff), 판정 대상 고정 복사본. 구현자의 답·`## 증거` 는
+넘기지 않는다. 원문이나 계획을 확보하지 못하면 입력 부족(미확인). 회차 증거는 지도 옆 verify/ 또는 work/review/ 에 남고 지우거나 덮지 않는다.
 
 판정(state)과 종료 코드:
   ok(0)          검증자가 형식대로 모든 조건을 충족으로 냈다. 이것만 완료다.
@@ -364,6 +363,7 @@ def prepare(args):
         else:
             sid = opt(args, "--session") or next((os.environ[k] for k in ("CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID") if os.environ.get(k)), None)
             rec = gate.latest_approval(state_dir, sid) or {}
+            args = args + ["--session-resolved", str(sid or "")]
         if not rec:
             problems.append("사용자 승인 기록이 없다(승인 전이거나 관문 기록이 없음). 승인된 요청·계획이 없어 판정하지 않는다")
         reqs = rec.get("requests") or ([rec["prompt"]] if rec.get("prompt") else [])
@@ -371,8 +371,9 @@ def prepare(args):
         if rec and not reqs:
             problems.append("요청 원문을 확보하지 못했다(입력 부족)")
         plan = rec.get("plan") if rec else None
-        criteria = f"### {map_path}\n{(rec.get('criteria') or {}).get(map_path) or ''}" if rec and map_path else ""
-        if rec and not plan and not criteria.strip():
+        body = ((rec.get('criteria') or {}).get(map_path) or '').strip() if rec and map_path else ""
+        criteria = f"### {map_path}\n{body}" if body else ""
+        if rec and not plan and not body:
             problems.append("승인받은 계획을 확보하지 못했다(입력 부족): 승인 직전 답이 대화 기록에 없고 지도도 없다")
         vfile = (Path(root, map_path).parent / "verify" if map_path else Path(root, "work", "review")) / "state.json"
         vstate = json.loads(vfile.read_text()) if vfile.is_file() else {}
@@ -460,7 +461,9 @@ def prepare(args):
             pending = {"explicit": explicit, "rec_file": rec_file, "state_dir": str(state_dir) if state_dir else None,
                        "state_file": str(state_file) if explicit else str(vfile), "approved_at": rec.get("approved_at"), "required": required,
                        "rounds_max": rounds_max, "round": n, "ran_before": len(ran), "start_print": start_print, "start_task": list(start_task),
-                       "target": target, "vdir": str(vdir), "harness": harness, "baseline_changed": changed, "root": str(root)}
+                       "target": target, "vdir": str(vdir), "harness": harness, "baseline_changed": changed, "root": str(root),
+                       "session": opt(args, "--session-resolved"), "after_count": len(rec.get("after", [])), "pending_count": len(rec.get("pending", [])),
+                       "waiting_at_prepare": bool(rec) and gate.status_json(rec)["waiting"]}
             (keep / "pending.json").write_text(json.dumps(pending, ensure_ascii=False), encoding="utf-8")
             ready = {"state": "ready", "round": n, "kept": str(keep), "prompt_file": str(keep / "prompt.txt"), "target_dir": str(vdir),
                      "finish": f"python3 {Path(__file__).resolve()} finish --round {keep}"}
@@ -534,9 +537,17 @@ def finish(args):
     rec = (gate.approved_record(root, state_dir, rec_file) or {}) if rec_file and state_dir else {}
     map_fp = gate.maps(root).get(rec_file) if rec_file else None
     end_task = [rec.get("approved_at"), json.dumps(rec.get("targets", {}), sort_keys=True), rec.get("approved"), map_fp] if rec_file else pd["start_task"]
-    if rc is not None and (end_task != pd["start_task"] or product_print(gate, root) != pd["start_print"]):
+    now_rec = rec if rec_file else ((gate.latest_approval(state_dir, pd.get("session") or None) or {}) if state_dir and not pd["explicit"] else {})
+    # 검토하는 동안 승인이 바뀌거나 철회·기준 변경으로 닫혔거나 새 사용자 메시지가 들어왔으면, 고정한 입력이 지금 요구가 아니다
+    changed_approval = bool(now_rec) and (now_rec.get("approved_at") != pd["approved_at"]
+                                          or (gate.status_json(now_rec)["waiting"] and not pd.get("waiting_at_prepare"))
+                                          or len(now_rec.get("after", [])) != pd.get("after_count", 0)
+                                          or len(now_rec.get("pending", [])) != pd.get("pending_count", 0))  # 대화 승인이 끝난 뒤 들어온 새 메시지
+    if rc is not None and not pd["explicit"] and not now_rec:
+        changed_approval = True
+    if rc is not None and (changed_approval or end_task != pd["start_task"] or product_print(gate, root) != pd["start_print"]):
         result.update(target_state=result["state"], state="unverified",
-                      reason="검토하는 동안 승인·지도 기준·제품 파일이 바뀌었다. 고정 대상의 판정은 남겼지만 지금 버전의 결과가 아니다")
+                      reason="검토하는 동안 승인·사용자 메시지·지도 기준·제품 파일이 바뀌었다. 고정 대상의 판정은 남겼지만 지금 요구·버전의 결과가 아니다")
     state_path = Path(pd["state_file"]) if pd["state_file"] else None
     vstate = json.loads(state_path.read_text()) if state_path and state_path.is_file() else {}
     if not pd["explicit"] and vstate.get("approved_at") != pd["approved_at"]:

@@ -357,12 +357,18 @@ def approved_record(root, state, map_path):
     return best
 
 
-def advance(rec, event, root, now_maps, turn_maps=None, prompt="", extra=(), runner=False, snapshot=None, plan=None):
+def advance(rec, event, root, now_maps, turn_maps=None, prompt="", extra=(), runner=False, snapshot=None, plan=None, event_key=None):
     """승인 상태가 바뀌는 유일한 곳. 사건(prompt·pre·stop) 하나와 지금 관찰(지도 지문)을 받아 다음 기록을 낸다.
     파일 읽기·쓰기와 도구 거절은 main 이 맡는다. 돌려줌: (새 기록, {decision, closed(닫힌 원인 지도), reset_start(턴 끝 감지 시작점을 지금으로)})."""
     was_open = bool(rec.get("approved"))
     info = {"decision": None, "closed": [], "reset_start": False}
     if event == "prompt":
+        last = rec.get("last_prompt") or {}
+        # 같은 사건의 두 번째 훅 호출(전역·프로젝트 훅 병용): 메시지와 대화 기록 상태가 모두 같으면 기록을 바꾸지 않는다.
+        # 대화 기록 경로가 없으면 가릴 수 없으므로 거르지 않는다(사용자가 같은 말을 다시 보낸 것과 구별할 수 없다).
+        if event_key and last.get("key") == event_key and time.time() - last.get("t", 0) < 30:
+            info["decision"] = "duplicate"
+            return rec, info
         if rec.get("binding"):  # 앞 턴이 Stop 없이 끝났으면 지금 묶는다
             bind(rec, root, now_maps)
         settle(rec, now_maps)  # 턴 사이에 승인한 지도의 기준이 바뀌었으면 닫힘으로 남긴다
@@ -377,8 +383,10 @@ def advance(rec, event, root, now_maps, turn_maps=None, prompt="", extra=(), run
             if not targets:
                 targets = {m: now_maps[m] for m in rec.get("targets", {}) if now_maps.get(m)}
             # 검토 입력 고정: 승인 전 사용자 메시지(요청 원문)와 승인 직전 에이전트가 보여 준 계획을 그대로 남긴다(에이전트가 나중에 요약한 글로 대신하지 않는다)
+            # 철회·기준 변경으로 닫힌 같은 작업을 다시 승인하면 앞선 원문·추가 요구를 이어 간다(작업을 마치고 닫힌 경우는 새 작업으로 본다)
+            carried = (rec.get("requests", []) + rec.get("after", [])) if rec.get("closed_by") in ("revoke", "criteria") else []
             rec = {"approved": True, "binding": True, "kind": "map" if targets else "conversation", "targets": targets, "criteria": {},
-                   "prompt": prompt, "requests": rec.get("pending", []) + [prompt], "plan": plan() if plan else None,
+                   "prompt": prompt, "requests": carried + rec.get("pending", []) + [prompt], "plan": plan() if plan else None,
                    "after": [], "touched": [], "wrote": [], "approved_at": time.time(), "base": snapshot() if snapshot else None, "pending": []}
             info["decision"] = "open"
         elif is_revoke(prompt) or mentions_approval(prompt):
@@ -388,9 +396,11 @@ def advance(rec, event, root, now_maps, turn_maps=None, prompt="", extra=(), run
             if rec.get("approved"):
                 rec.setdefault("after", []).append(prompt)  # 승인 뒤 사용자 메시지(검증자가 범위 변경을 대조한다)
             else:
-                rec["pending"] = (rec.get("pending", []) + [prompt])[-30:]  # 다음 승인의 요청 원문(승인 전 사용자 메시지)
+                pend = rec.get("pending", []) + [prompt]  # 다음 승인의 요청 원문(승인 전 사용자 메시지). 길어지면 첫 원문은 남기고 가운데를 줄인다
+                rec["pending"] = pend if len(pend) <= 40 else [pend[0], f"(가운데 사용자 메시지 {len(pend) - 39}개 생략)"] + pend[-38:]
             info["decision"] = "keep"
         rec["seen"] = True
+        rec["last_prompt"] = {"key": event_key, "t": time.time()}
         return rec, info
     touch(rec, turn_maps, now_maps, extra)
     if event == "pre":
@@ -402,6 +412,16 @@ def advance(rec, event, root, now_maps, turn_maps=None, prompt="", extra=(), run
     done = ("turn-end", "map-removed") if event == "stop" else ("map-removed",)
     info["reset_start"] = was_open and rec.get("closed_by") in done
     return rec, info
+
+
+def prompt_event_key(data):
+    """같은 사용자 메시지 사건을 가리는 열쇠: 메시지 + 대화 기록 파일의 크기·수정 시각. 대화 기록이 없으면 None."""
+    tp = data.get("transcript_path")
+    try:
+        st = os.stat(tp) if tp else None
+    except OSError:
+        st = None
+    return hashlib.sha256(f"{data.get('prompt')}\0{tp}\0{st.st_size}\0{st.st_mtime_ns}".encode()).hexdigest() if st else None
 
 
 def latest_approval(state, sid=None):
@@ -446,7 +466,7 @@ def main(mode, data):
         state.mkdir(exist_ok=True)
         rec, info = advance(rec, "prompt", root, now_maps, prompt=str(data.get("prompt") or ""),
                             runner=os.environ.get("AWK_GATE_PROMPT_FROM") == "runner", snapshot=lambda: snapshot_files(root, state),
-                            plan=lambda: last_answer(data.get("transcript_path")))
+                            plan=lambda: last_answer(data.get("transcript_path")), event_key=prompt_event_key(data))
         decision = info["decision"]
         approval.write_text(json.dumps(rec, ensure_ascii=False))
         turnmaps.write_text(json.dumps(now_maps, ensure_ascii=False))

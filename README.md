@@ -2,7 +2,7 @@
 
 **AI 코딩 에이전트가 "무엇을 확인해야 끝난 것인가"를 일하기 전에 정하고, 실제로 확인한 것만 완료라고 말하게 하는 작업 기준 키트.**
 
-Claude Code·Codex 가 함께 읽는 작업 기준([AGENTS.md](AGENTS.md), 키트 영역 65줄) 한 장과 단계 스킬 3개, 그리고 그 기준이 실제 행동을 바꾸는지 재는 측정 도구([evals/](evals/))로 되어 있다.
+Claude Code·Codex 가 함께 읽는 짧은 작업 기준([AGENTS.md](AGENTS.md) 키트 영역, 약 2.8KB), 필요할 때만 읽는 선택 안내([guide.md](.agents/skills/guide.md))와 승인 관문·검토 도구, 그리고 그 기준이 실제 결과를 바꾸는지 재는 측정 도구([evals/](evals/))로 되어 있다.
 
 > A thin work standard for AI coding agents (Claude Code, Codex): turn a request into observable conditions before building, close work only on observed results, and fix the cause instead of appending rules. Korean is canonical. No reuse license is currently specified.
 
@@ -266,7 +266,7 @@ AGENTS.md의 네 항목에는 저장소가 관리하는 근거의 위치와 한 
 
 확인의 무게는 설치된 버전부터 새 커밋까지 바뀐 것 중 가장 무거운 단계에 맞춘다.
 
-- **설치기·설치 경로만 바뀐 업데이트**(AGENTS.md 키트 영역·CLAUDE.md·`.agents/skills/` 키트 파일 내용은 그대로): `tests/install.test.sh`가 통과한 커밋인지와, 대상의 diff가 버전 파일 갱신(설치 경로가 바뀌었다면 그 이동)뿐인지 확인한다. 새 세션에서 세 wf-\* 스킬이 발견되는지 본다.
+- **설치기·설치 경로만 바뀐 업데이트**(AGENTS.md 키트 영역·CLAUDE.md·`.agents/skills/` 키트 파일 내용은 그대로): `tests/install.test.sh`가 통과한 커밋인지와, 대상의 diff가 버전 파일 갱신(설치 경로가 바뀌었다면 그 이동)뿐인지 확인한다. 새 세션에서 AGENTS.md 와 guide.md 가 읽히고 승인 관문이 승인 전 수정 도구를 막는지 본다.
 - **처음 도입하거나 작업 판단 문장(AGENTS.md 키트 영역·CLAUDE.md·wf-\*)이 바뀐 업데이트**: 위에 더해, 이번 도입에서 사용할 실행 환경·모델 조합마다 대표 요청 하나를 격리한 worktree에서 실행해 구현하지 않은 검토자가 판정한다. ① 원문·역할 스킬·공용 코드의 근거를 조건과 [기존] 조건으로 옮겼는가 ② 변경이 실제 결과에 반영되는 경로에서 조건을 지키며 기존 공용을 쓰고 불필요한 책임·계층 없이 이해할 수 있는가(기존 검사와 위반 반례 포함) ③ 실패가 생긴 원인과 그것을 놓친 검사·판단의 원인을 구별했는가. 진행 중인 프로젝트에 연결한 병합도 이 확인 뒤 반영한다.
 - **특정 실패의 교정으로 판단 문장을 일반화해 바꾼 업데이트**(커밋·교정 기록에 막으려는 실패가 적힌 경우): 위에 더해 ④ `evals/`의 그 실패 사례와 다른 도메인 유사 사례로 변경 전후 커밋을 `evals/run.sh` 실행해 재발 여부, 작은 요청(`weight-disposable`) 부담, AGENTS.md 바이트를 본다.
 

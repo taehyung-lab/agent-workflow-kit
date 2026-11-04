@@ -164,6 +164,23 @@ exit 0
     pq = Path(rq.get("prompt_file", "/x")).read_text() if rq.get("state") == "ready" else ""
     check("지도 없는 승인도 고정된 요청 원문·승인 직전 계획으로 검토 입력을 만든다", "CONV-REQ" in pq and "CONV-PLAN" in pq)
     hook("stop", "Q")
+    # 릴리스 검토 P1: 지도 없는 검토 중 승인 철회·새 요구가 들어오면 미확인
+    for sid_, msg in (("Q2", "취소합니다. 진행하지 마세요"), ("Q3", "영어 문구는 그대로 유지하세요 NEW-REQ")):
+        hook("prompt", sid_, prompt="로그인 버튼 글자를 '로그인하기'로 바꿔 주세요"); hook("prompt", sid_, prompt="진행해 주세요", transcript_path=str(trp))
+        rq2 = json.loads(sh(sys.executable, "-I", str(verifier), "prepare", "--session", sid_, cwd=proj, env=base_env).stdout.strip().splitlines()[-1])
+        hook("prompt", sid_, prompt=msg)
+        o2 = json.loads(sh(sys.executable, "-I", str(verifier), "finish", "--round", rq2["kept"], cwd=proj, env=base_env, input=json.dumps(OK, ensure_ascii=False)).stdout.strip().splitlines()[-1])
+        check(f"검토 중 사용자 메시지({msg[:6]})가 들어오면 고정 입력이 지금 요구가 아니므로 unverified", o2.get("state") == "unverified" and o2.get("completion") != "verified")
+        hook("stop", sid_)
+    # 릴리스 검토 P2: 지도의 기준 본문이 비었고 계획도 없으면 입력 부족
+    hook("prompt", "E2", prompt="작업해 주세요")
+    mpe = proj / "work" / "empty" / "work.md"
+    hook("pre", "E2", tool_name="Write", tool_input={"file_path": str(mpe)})
+    mpe.parent.mkdir(parents=True, exist_ok=True); mpe.write_text("# 작업\n## 기준\n\n## 설계\n나중에\n")
+    hook("stop", "E2"); hook("prompt", "E2", prompt="승인합니다"); hook("stop", "E2")
+    re_ = json.loads(sh(sys.executable, "-I", str(verifier), "prepare", "--map", "work/empty/work.md", cwd=proj, env=base_env).stdout.strip().splitlines()[-1])
+    check("빈 기준 본문 + 계획 없음은 입력 부족으로 unverified", re_.get("state") == "unverified" and "입력 부족" in re_.get("reason", ""))
+    shutil.rmtree(mpe.parent)
     hook("prompt", "R", prompt="버튼 바꿔 주세요"); hook("prompt", "R", prompt="진행해 주세요")
     rr = json.loads(sh(sys.executable, "-I", str(verifier), "prepare", "--session", "R", cwd=proj, env=base_env).stdout.strip().splitlines()[-1])
     check("승인받은 계획을 확보하지 못하면 입력 부족으로 미확인(검토자를 띄우지 않음)", rr.get("state") == "unverified" and "입력 부족" in rr.get("reason", ""))

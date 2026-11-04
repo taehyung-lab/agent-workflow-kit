@@ -209,6 +209,19 @@ with tempfile.TemporaryDirectory() as t:
     check("승인 기록에 승인 전 사용자 메시지 전부와 승인 메시지가 요청 원문으로 남는다",
           r_["requests"] == ["회원 탈퇴 기능을 만들어 주세요. REQ-MARKER", "사실 비활성화하라는 뜻이었어요", "진행해 주세요"])
     check("승인 기록에 승인 직전 에이전트가 보여 준 계획이 그대로 남는다", "PLAN-MARKER" in (r_.get("plan") or ""))
+    call("prompt", {"prompt": "진행해 주세요", "session_id": "q1", "transcript_path": str(tr)})
+    check("릴리스 검토 P1: 같은 사건의 두 번째 훅 호출은 요청 원문을 지우지 않는다", rec("q1")["requests"][0] == "회원 탈퇴 기능을 만들어 주세요. REQ-MARKER")
+    stop_of("q1"); tp("q1", "고객 정보도 지워 주세요 AFTER-REQ"); tp("q1", "취소합니다"); tp("q1", "진행해 주세요")
+    check("릴리스 검토 P1: 철회 뒤 같은 작업을 다시 승인하면 앞선 원문·추가 요구를 이어 간다",
+          rec("q1")["requests"][0].endswith("REQ-MARKER") and "고객 정보도 지워 주세요 AFTER-REQ" in rec("q1")["requests"])
+    stop_of("q1")
+    tp("q3", "FIRST-REQ 원래 요청")
+    for i in range(45):
+        tp("q3", f"질문 답변 {i}")
+    tp("q3", "진행해 주세요")
+    check("릴리스 검토 P1: 승인 전 메시지가 길어져도 첫 원문은 남고 줄인 사실이 표시된다",
+          rec("q3")["requests"][0] == "FIRST-REQ 원래 요청" and any("생략" in x for x in rec("q3")["requests"]))
+    stop_of("q3")
     tp("q2", "버튼 바꿔 주세요"); tp("q2", "진행해 주세요")
     check("대화 기록이 없으면 계획은 비어 있다(검토기가 입력 부족으로 다룬다)", rec("q2").get("plan") is None and rec("q2")["requests"] == ["버튼 바꿔 주세요", "진행해 주세요"])
 
