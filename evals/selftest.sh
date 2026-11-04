@@ -6,6 +6,14 @@ here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 pass=0; failed=0
 ok() { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 ng() { failed=$((failed+1)); printf 'FAIL %s\n' "$1"; }
+# 실행기(run.sh)를 거치는 시험이 설치할 키트: 커밋하지 않은 변경까지 담은 작업 트리 스냅숏 커밋(브랜치·HEAD 는 바꾸지 않는다).
+# HEAD 를 그대로 쓰면 작업 트리에서 고친 것이 시험에 들어가지 않아, 고치기 전 코드로 통과한 결과를 보게 된다.
+kitdir=$(cd -- "$here/.." && pwd -P); tmpidx=$(mktemp -u)
+tree=$(GIT_INDEX_FILE=$tmpidx git -C "$kitdir" add -A >/dev/null 2>&1 && GIT_INDEX_FILE=$tmpidx git -C "$kitdir" write-tree); rm -f "$tmpidx"
+[ -n "$tree" ] || { printf 'FAIL 작업 트리 스냅숏을 만들지 못했다\n'; exit 1; }
+if [ "$tree" = "$(git -C "$kitdir" rev-parse 'HEAD^{tree}')" ]; then REF=HEAD; else
+  REF=$(git -C "$kitdir" -c user.name=selftest -c user.email=selftest@invalid commit-tree "$tree" -p HEAD -m selftest-worktree); fi
+printf '시험 대상 키트: %s\n' "$( [ "$REF" = HEAD ] && echo "HEAD $(git -C "$kitdir" rev-parse --short HEAD)" || echo "작업 트리 스냅숏 ${REF:0:7}(미커밋 변경 포함)")"
 for dir in "$here"/cases/*/; do
   name=$(basename "$dir")
   for f in prompt.txt check.py samples/pass/transcript.jsonl samples/fail/transcript.jsonl; do
@@ -40,14 +48,14 @@ done
 printf 'size cases=%s samples=%s bytes=%s\n' "$(ls -d "$here"/cases/*/ | wc -l | tr -d ' ')" "$(ls -d "$here"/cases/*/samples/*/ | wc -l | tr -d ' ')" "$(du -sk "$here/cases" | cut -f1)KiB"
 # 실행기: 문법과, 잘못된 인자에서 모델을 부르지 않고 실패하는지
 bash -n "$here/run.sh" && ok "run.sh 문법" || ng "run.sh 문법"
-bash "$here/run.sh" no-such-case HEAD claude >/dev/null 2>&1; rc=$?
+bash "$here/run.sh" no-such-case "$REF" claude >/dev/null 2>&1; rc=$?
 [ $rc -eq 2 ] && ok "없는 사례는 실행 전에 거절(rc=2)" || ng "없는 사례 처리(rc=$rc)"
 bash "$here/run.sh" weight-disposable no-such-ref claude >/dev/null 2>&1; rc=$?
 [ $rc -eq 2 ] && ok "없는 키트 커밋은 실행 전에 거절(rc=2)" || ng "없는 커밋 처리(rc=$rc)"
 # 실행기 계약: 가짜 하네스(종료 코드 7, 파일 하나를 만듦)로 종료 코드를 그대로 돌려주는지와 끝난 프로젝트 파일·메타데이터를 남기는지 본다.
 fake=$(mktemp -d); results=$(mktemp -d)
 printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho "$*" >> "$FAKE_LOG"\necho \x27{"session_id": "fake-sid"}\x27\necho made > made-by-fake.txt\nexit "${FAKE_RC:-7}"\n' > "$fake/claude"; chmod +x "$fake/claude"
-FAKE_LOG=$fake/log EVALS_RESULTS=$results PATH="$fake:$PATH" bash "$here/run.sh" weight-disposable HEAD claude >/dev/null 2>&1; rc=$?
+FAKE_LOG=$fake/log EVALS_RESULTS=$results PATH="$fake:$PATH" bash "$here/run.sh" weight-disposable "$REF" claude >/dev/null 2>&1; rc=$?
 [ $rc -eq 7 ] && ok "하네스 종료 코드 7을 그대로 반환" || ng "하네스 종료 코드 반환(rc=$rc)"
 snap=$(ls -d "$results"/weight-disposable-*-claude-1.files 2>/dev/null | tail -1)
 [ -f "$snap/made-by-fake.txt" ] && ok "끝난 프로젝트 파일 보존" || ng "끝난 프로젝트 파일이 남지 않음"
@@ -56,32 +64,32 @@ grep -q '"exit_code": 7' "${snap%.files}.meta.json" 2>/dev/null && ok "메타데
 cap=$(mktemp -d)
 printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho \x27{"type": "error", "message": "Selected model is at capacity."}\x27\nexit 1\n' > "$fake/claude-cap"
 mkdir "$cap/bin"; cp "$fake/claude-cap" "$cap/bin/claude"; chmod +x "$cap/bin/claude"
-EVALS_RESULTS=$cap PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposable HEAD claude > "$cap/out" 2>&1
+EVALS_RESULTS=$cap PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposable "$REF" claude > "$cap/out" 2>&1
 grep -q 'check=UNVERIFIED' "$cap/out" && grep -q '"check_unverified": true' "$cap"/weight-disposable-*-claude-1.meta.json \
   && python3 -I "$here/report.py" "$cap" | grep -q ' 0/0 ' && ok "외부 장애는 미확인으로 남고 통과 분모에서 빠짐" || ng "외부 장애 분류: $(cat "$cap/out")"
 # 장애 전에 제품 파일을 바꿨으면 지우지 않고 검토 필요로 남긴다
 printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho changed > made-by-fake.txt\necho \x27{"type": "error", "message": "Selected model is at capacity."}\x27\nexit 1\n' > "$cap/bin/claude"
-EVALS_RESULTS=$cap/r2 PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposable HEAD claude > "$cap/out2" 2>&1
+EVALS_RESULTS=$cap/r2 PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposable "$REF" claude > "$cap/out2" 2>&1
 grep -q 'check=REVIEW REVIEW 외부 장애' "$cap/out2" && grep -q '"check_needs_review": true' "$cap"/r2/weight-disposable-*-claude-1.meta.json \
   && ok "장애 전 제품 변경은 검토 필요로 남김" || ng "장애 전 변경 처리: $(cat "$cap/out2")"
 # 바꿨다가 되돌린 뒤 장애가 나도(최종 파일은 같아도) 편집 기록이 있으면 검토 필요로 남긴다
 printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho \x27{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Write", "input": {"file_path": "accounts.py"}}]}}\x27\necho \x27{"type": "error", "message": "Selected model is at capacity."}\x27\nexit 1\n' > "$cap/bin/claude"
-EVALS_RESULTS=$cap/r4 PATH="$cap/bin:$PATH" bash "$here/run.sh" account-after-correction HEAD claude > "$cap/out4" 2>&1
+EVALS_RESULTS=$cap/r4 PATH="$cap/bin:$PATH" bash "$here/run.sh" account-after-correction "$REF" claude > "$cap/out4" 2>&1
 grep -q 'REVIEW 외부 장애.*편집 기록: accounts.py' "$cap/out4" && ok "되돌린 편집 뒤 장애도 검토 필요로 남김" || ng "되돌린 편집 뒤 장애: $(cat "$cap/out4")"
 # 승인 대기 수는 승인이 아닌 사용자 턴(prompt)만 센다(도구 검사 줄은 세지 않고, 0회도 기록된다)
 printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\nprintf \x27{"event": "prompt", "approved": false}\\n{"event": "pre", "approved": false, "denied": true}\\n{"event": "pre", "approved": false, "denied": false}\\n{"event": "prompt", "approved": false}\\n\x27 >> "$AWK_GATE_LOG"\necho \x27{"session_id": "fake-sid"}\x27\nexit 0\n' > "$cap/bin/claude"
-EVALS_RESULTS=$cap/r5 PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposable HEAD claude > /dev/null 2>&1
+EVALS_RESULTS=$cap/r5 PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposable "$REF" claude > /dev/null 2>&1
 grep -q '"unapproved_turns": 1,' "$cap"/r5/weight-disposable-*-claude-1.meta.json && ok "승인 대기는 사용자 턴만 셈(뒤따르는 실행기 반환 턴의 prompt 기록은 세지 않음)" || ng "승인 대기 집계: $(grep unapproved "$cap"/r5/*.meta.json)"
 printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\nprintf \x27{"event": "prompt", "approved": true}\\n\x27 >> "$AWK_GATE_LOG"\necho \x27{"session_id": "fake-sid"}\x27\nexit 0\n' > "$cap/bin/claude"
-EVALS_RESULTS=$cap/r6 PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposable HEAD claude > /dev/null 2>&1
+EVALS_RESULTS=$cap/r6 PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposable "$REF" claude > /dev/null 2>&1
 grep -q '"unapproved_turns": 0,' "$cap"/r6/weight-disposable-*-claude-1.meta.json && ok "승인 대기 0회도 meta 에 남음" || ng "승인 대기 0회 meta 없음"
 # 일반 답 속 낱말(at capacity)은 외부 장애로 보지 않는다
 printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho \x27{"type": "result", "result": "서버가 at capacity 일 때를 처리했습니다"}\x27\nexit 1\n' > "$cap/bin/claude"
-EVALS_RESULTS=$cap/r3 PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposable HEAD claude > "$cap/out3" 2>&1
+EVALS_RESULTS=$cap/r3 PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposable "$REF" claude > "$cap/out3" 2>&1
 grep -q 'check=FAIL FAIL 하네스가 종료 코드 1' "$cap/out3" && ok "답 속 낱말은 외부 장애로 세지 않음" || ng "답 속 낱말 처리: $(cat "$cap/out3")"
 rm -rf "${cap:?}"
 # 여러 턴: 두 번째 턴이 첫 턴의 세션 id 로 이어 가는지(가짜 하네스가 받은 인자로 확인)
-: > "$fake/log"; FAKE_RC=0 FAKE_LOG=$fake/log EVALS_RESULTS=$results PATH="$fake:$PATH" bash "$here/run.sh" archive-after-correction HEAD claude >/dev/null 2>&1; rc=$?
+: > "$fake/log"; FAKE_RC=0 FAKE_LOG=$fake/log EVALS_RESULTS=$results PATH="$fake:$PATH" bash "$here/run.sh" archive-after-correction "$REF" claude >/dev/null 2>&1; rc=$?
 [ $rc -eq 0 ] && [ "$(grep -c '' "$fake/log")" -eq 2 ] && sed -n 2p "$fake/log" | grep -q -- '--resume fake-sid' && ok "여러 턴: 두 번째 턴이 같은 세션을 이어 감" || ng "여러 턴 이어 가기(rc=$rc, 호출 $(grep -c '' "$fake/log")회)"
 rm -rf "${fake:?}" "${results:?}"
 # 독립 검증 루프(가짜 하네스): 검증자 입력의 독립성, 정해진 결과 형식만 통과, 반환 → 교정 → 새 버전 재검증, 한도 = 미완료, 수정 = 무효
@@ -116,7 +124,7 @@ OKV='"설명.\n{\"verdict\": \"OK\", \"conditions\": [{\"id\": \"C1\", \"result\
 RETV='"{\"verdict\": \"RETURN\", \"conditions\": [{\"id\": \"C1\", \"result\": \"미충족\", \"evidence\": \"출력 없음\"}], \"return_reason\": \"C1 미충족\"}"'
 vrun() {  # vrun <이름> <판정 줄...>: 가짜 검증자가 차례로 낼 답을 받아 weight-disposable 을 승인 턴 포함·EVALS_VERIFY=1 로 돈다
   d="$vf/$1"; shift; mkdir -p "$d"; : > "$d/verdicts"; for v in "$@"; do printf '%s\n' "$v" >> "$d/verdicts"; done
-  FAKE_DIR=$d EVALS_VERIFY=1 EVALS_APPROVE=1 EVALS_RESULTS=$d/r PATH="$vf/bin:$PATH" bash "$here/run.sh" weight-disposable HEAD claude > "$d/out" 2>&1; echo $? > "$d/rc"
+  FAKE_DIR=$d EVALS_VERIFY=1 EVALS_APPROVE=1 EVALS_RESULTS=$d/r PATH="$vf/bin:$PATH" bash "$here/run.sh" weight-disposable "$REF" claude > "$d/out" 2>&1; echo $? > "$d/rc"
   meta=$(ls "$d"/r/*.meta.json 2>/dev/null | head -1)
 }
 mget() { python3 -I -c 'import json,sys; m=json.load(open(sys.argv[1])); print(m.get(sys.argv[2]))' "$meta" "$1" 2>/dev/null; }
@@ -191,13 +199,13 @@ grep -q 'C9 | 기존 보장' "$vf/remap/vprompt.2" && grep -q '승인 뒤 작업
 # 필수 조건 누락: 사례가 필수 조건을 정하면 그 ID 가 모두 있어야 한다
 cp -R "$here/cases/weight-disposable" "$here/cases/zz-selftest-required"; printf 'C1 결과 출력\nC2 기존 보장\n' > "$here/cases/zz-selftest-required/verify-conditions.txt"
 d="$vf/required"; mkdir -p "$d"; printf '%s\n' "$OKV" > "$d/verdicts"
-FAKE_DIR=$d EVALS_VERIFY=1 EVALS_RESULTS=$d/r PATH="$vf/bin:$PATH" bash "$here/run.sh" zz-selftest-required HEAD claude > "$d/out" 2>&1; meta=$(ls "$d"/r/*.meta.json | head -1)
+FAKE_DIR=$d EVALS_VERIFY=1 EVALS_RESULTS=$d/r PATH="$vf/bin:$PATH" bash "$here/run.sh" zz-selftest-required "$REF" claude > "$d/out" 2>&1; meta=$(ls "$d"/r/*.meta.json | head -1)
 rm -rf "$here/cases/zz-selftest-required"
 [ "$(mget verifier)" = unverified ] && grep -q 'C2' "$meta" && grep -q 'C2 기존 보장' "$d/vprompt.1" && ok "검증: 필수 조건(C2) 결과가 빠지면 미확인" || ng "검증 필수 조건: $(mget verifier) $(mget verify_reason)"
 # 판정 검사 자체의 오류(예외)는 실패가 아니라 미확인이다
 cp -R "$here/cases/weight-disposable" "$here/cases/zz-selftest-crash"; printf 'raise RuntimeError("판정기 고장")\n' > "$here/cases/zz-selftest-crash/check.py"
 d="$vf/crashcheck"; mkdir -p "$d"; : > "$d/verdicts"
-FAKE_DIR=$d EVALS_RESULTS=$d/r PATH="$vf/bin:$PATH" bash "$here/run.sh" zz-selftest-crash HEAD claude > "$d/out" 2>&1; meta=$(ls "$d"/r/*.meta.json | head -1)
+FAKE_DIR=$d EVALS_RESULTS=$d/r PATH="$vf/bin:$PATH" bash "$here/run.sh" zz-selftest-crash "$REF" claude > "$d/out" 2>&1; meta=$(ls "$d"/r/*.meta.json | head -1)
 rm -rf "$here/cases/zz-selftest-crash"
 grep -q 'check=UNVERIFIED' "$d/out" && [ "$(mget check_unverified)" = True ] && ok "판정 검사 오류는 실패가 아니라 미확인" || ng "판정 검사 오류: $(cat "$d/out")"
 # Codex 검증 분기: 임시 홈을 지운 뒤에도 검증자의 실패 종료 코드가 남는다
@@ -208,7 +216,7 @@ for a in "$@"; do case "$a" in *"당신은 별도 검증자다"*) echo '{"type":
 echo '{"type": "thread.started", "thread_id": "fake-thread"}'; echo '{"type": "item.completed", "item": {"type": "agent_message", "text": "IMPL"}}'; exit 0
 FAKE
 chmod +x "$vf/bin/codex"; d="$vf/codex"; mkdir -p "$d"
-EVALS_VERIFY=1 EVALS_RESULTS=$d/r PATH="$vf/bin:$PATH" bash "$here/run.sh" weight-disposable HEAD codex > "$d/out" 2>&1; meta=$(ls "$d"/r/*.meta.json | head -1)
+EVALS_VERIFY=1 EVALS_RESULTS=$d/r PATH="$vf/bin:$PATH" bash "$here/run.sh" weight-disposable "$REF" codex > "$d/out" 2>&1; meta=$(ls "$d"/r/*.meta.json | head -1)
 [ "$(mget verifier)" = unverified ] && [ "$(mget verifier_exit_code)" = 9 ] && ok "검증(Codex): 검증자 종료 코드 9 가 정리 뒤에도 보존" || ng "Codex 검증 종료 코드: $(mget verifier) vrc=$(mget verifier_exit_code)"
 grep -q '"judge_version": "[0-9a-f]\{12\}"' "$meta" && grep -q '"stage": "original-input"' "$meta" && ok "meta 에 판정기 지문·단계가 남음" || ng "meta 판정기 지문·단계"
 rm -rf "${vf:?}"
