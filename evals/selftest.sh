@@ -209,6 +209,18 @@ with tempfile.TemporaryDirectory() as d:
                 bad.append(f"{harness}/{name}: {state}/{completion}")
 print("\n".join(bad)); sys.exit(1 if bad else 0)
 PY
+# 편집 흔적 관찰: 2>/dev/null·2>&1 은 쓰기가 아니고, > 파일 은 쓰기다(실제 회귀 측정의 오판 표본)
+python3 -I - "$here" <<'PY' && ok "편집 흔적: 출력 버리기(2>/dev/null)를 쓰기로 세지 않음" || ng "편집 흔적 리다이렉트"
+import json, sys, tempfile
+from pathlib import Path
+sys.path.insert(0, sys.argv[1]); from observe import edits
+def log(cmd):
+    f = Path(tempfile.mkdtemp()) / "t.jsonl"
+    f.write_text(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": cmd}}]}}))
+    return edits(f, [".gitignore", "todo.py"])
+assert log("cat .gitignore; ls work 2>/dev/null") == [] and log("cat todo.py 2>&1 | head") == []
+assert log("echo x > todo.py") == ["todo.py"] and log("ls 2>/dev/null; echo y >> .gitignore") == [".gitignore"]
+PY
 # 비교 보고(report.py --compare): 회귀 후보·재발·비교 불가를 표시하고, 검토 필요는 실패로 세지 않는다
 python3 -I - "$here" <<'PY' && ok "비교 보고: 회귀 후보·재발·비교 불가 표시, 검토 필요는 재발로 세지 않음" || ng "비교 보고"
 import json, subprocess, sys, tempfile

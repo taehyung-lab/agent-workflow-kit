@@ -38,6 +38,7 @@ CLAIM = (r"((독립|별도)\s*(검증|판정|검토)(자|자가|자의)?[^.\n?]{
 # 독립 검증 실행기의 경로. 실행했는지는 셸 문법이 아니라 그 명령의 결과(실행기 결과 JSON·종료 코드)로 가른다.
 EXECUTOR = r"wf-verify/verify\.(py|sh)\b"
 WRITES = r"(>\s*\S|sed\s+-i|write_text|open\([^)]*['\"]w|apply_patch|tee\s)"
+NOT_WRITE_REDIRECT = r"\d*>>?\s*/dev/null\b|\d*>&\d"  # 출력 버리기(2>/dev/null)·합치기(2>&1)는 파일 쓰기가 아니다
 
 
 def last_turn_log(log):
@@ -59,7 +60,7 @@ def edits(path, names):
                     continue
                 inp = part.get("input") or {}
                 target = str(inp.get("file_path") or "")
-                cmd = str(inp.get("command") or "")
+                cmd = re.sub(NOT_WRITE_REDIRECT, "", str(inp.get("command") or ""))
                 for n in names:
                     if part.get("name") in ("Write", "Edit", "MultiEdit", "NotebookEdit") and target.endswith(n):
                         found.add(n)
@@ -72,7 +73,7 @@ def edits(path, names):
                     if str(c.get("path", "")).endswith(n) or f"/{n}/" in str(c.get("path", "")):
                         found.add(n)
         if e.get("type") == "item.completed" and item.get("type") == "command_execution":
-            cmd = item.get("command", "")
+            cmd = re.sub(NOT_WRITE_REDIRECT, "", item.get("command", ""))
             for n in names:
                 if n in cmd and re.search(WRITES, cmd):
                     found.add(n)
