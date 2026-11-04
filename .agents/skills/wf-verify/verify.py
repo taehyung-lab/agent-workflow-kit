@@ -365,13 +365,13 @@ def main(args):
     result = {"round": n, "max_rounds": rounds_max, "harness": harness, "required": required}
     if asked_max != rounds_max:
         result["note"] = f"재검증 한도는 이 시도의 첫 회차에 정한 {rounds_max} 회다(--rounds {asked_max} 는 쓰지 않았다)"
-    start_print = product_print(gate, root)
     map_fp = lambda: gate.maps(root).get(rec_file) if rec_file else None  # 지금 지도의 기준 지문(검증 중 바뀌면 판정 무효)
+    start_print = product_print(gate, root)
     start_task = (rec.get("approved_at"), json.dumps(rec.get("targets", {}), sort_keys=True), rec.get("approved"), map_fp())
     if len(ran) >= rounds_max:
         # 한도에 이미 닿았다: 새 검증자를 띄우지 않는다. 마지막 판정이 OK 이고 그 뒤 제품 파일이 그대로면 그 OK 를 그대로 낸다.
         last = ran[-1]
-        if last.get("state") == "ok" and last.get("product") == start_print:
+        if last.get("state") == "ok" and last.get("product") == start_print and last.get("map") == map_fp():
             result.update(state="ok", reason="", target=last.get("target"), reused_round=last.get("round"))
         else:
             result.update(state="incomplete", reason=f"재검증 한도({rounds_max})에 이미 닿았다. 새 검증자를 띄우지 않는다(사용자의 새 승인 뒤에만 새로 시작)")
@@ -464,7 +464,7 @@ def main(args):
                 result.update(target_state=result["state"], state="unverified",
                               reason="검증하는 동안 승인·지도 기준·제품 파일이 바뀌었다. 고정 대상의 판정은 남겼지만 지금 버전의 결과가 아니다")
             rounds.append({"uid": os.urandom(8).hex(), "round": n, "state": result["state"], "target_state": result.get("target_state"), "reason": result.get("reason", ""),
-                           "target": target, "product": start_print, "verifier_exit_code": rc, "ran": rc is not None, "kept": str(keep), "at": time.time()})
+                           "target": target, "product": start_print, "map": start_task[3], "verifier_exit_code": rc, "ran": rc is not None, "kept": str(keep), "at": time.time()})
         (keep / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
     vstate = {"rounds": rounds, "state": result["state"], "reason": result.get("reason", ""), "max_rounds": rounds_max}
     if explicit:

@@ -235,6 +235,18 @@ with tempfile.TemporaryDirectory() as t:
           ed("x4", str(repo / "work/y/verify/state.json")) and call("pre", {"tool_name": "apply_patch", "tool_input": {"command": "*** Begin Patch\n*** Update File: work/y/verify/state.json\n@@\n-a\n+b\n*** End Patch"}, "session_id": "x4"}))
     shutil_rm(repo / "work")
 
+    # 재검토 반례: 다른 세션이 쓴 지도·셸로 만든 지도는 내 승인 대상으로 묶지 않는다(대화 승인으로 닫힘, 다시 묻는 쪽)
+    tp("c3", "기능"); tp("c3", "진행해주세요")
+    write_map("work/other-session/work.md", "| O1 | 다른 세션 |", "b9")
+    call("pre", {"tool_name": "Read", "tool_input": {"file_path": "x"}, "session_id": "c3"}); stop_of("c3")
+    check("재검토3: 다른 세션이 쓴 지도는 내 승인 대상이 되지 않는다", rec("c3")["kind"] == "conversation" and ed("c3"))
+    shutil_rm(repo / "work")
+    tp("c4", "기능"); tp("c4", "진행해주세요")
+    (repo / "work/sh").mkdir(parents=True); (repo / "work/sh/work.md").write_text("## 기준\n| S1 | 셸로 쓴 지도 |\n")
+    tp("c4", "어디까지 됐어요?")
+    check("재검토2: 셸로 만든 지도는 묶지 않는다(Stop 이 빠져도 일관되게 대화 승인으로 닫힘)", rec("c4")["kind"] == "conversation" and ed("c4"))
+    shutil_rm(repo / "work")
+
     # 지도 승인 때 보존한 제품 파일 상태(검증기 기준)
     (repo / "pre.txt").write_text("사용자 기존 변경\n")
     tp("d3", "새 기능 만들어 주세요.")

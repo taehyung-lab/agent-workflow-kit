@@ -12,7 +12,8 @@
   그 턴이 끝날 때 대상이 정해진다.
 - 대화 승인: 승인 턴이 끝날 때 대상 지도(아래)가 없으면 그 턴에만 유효하다. 턴 끝에 닫힌다.
   작은 일(한 곳, 결과가 요청에 다 나온 일)은 지도 없이 대화로 계획을 보여 주고 이 승인으로 한 턴에 끝낸다.
-- 지도 승인: 승인 메시지가 경로로 가리킨 지도, 승인 전이나 승인 턴에 이 세션이 쓴 지도 가운데 `## 기준`이 있는 것이 있으면, 승인 턴이 끝날 때의
+- 지도 승인: 승인 메시지가 경로로 가리킨 지도, 승인 전이나 승인 턴에 이 세션이 수정 도구로 쓴 지도 가운데 `## 기준`이 있는 것이 있으면
+  (셸로 만든 지도는 다른 세션이 쓴 것과 구별할 수 없어 묶지 않는다), 승인 턴이 끝날 때의
   그 `## 기준` 절에 묶인다.
   둘 다 없고 지난 승인의 지도가 남아 있으면(철회 뒤 같은 계획을 다시 승인) 그 지도에 다시 묶는다.
   상태 질문 같은 다음 메시지에도 유지되고, 다음 중 하나면 닫힌다(사용자가 다시 승인할 때까지 닫힌 채다).
@@ -58,7 +59,7 @@ STATE_DIR = "awk-gate"  # .git/awk-gate: 훅만 쓴다
 MAX_STOP_BLOCKS = 2
 SHOWN_FILES = 20
 REASON = (f"{TAG} 사용자 승인이 없어 제품 파일을 바꾸는 수정 도구를 막았습니다. "
-          "정해지지 않은 결정이 있으면 그 질문만 하세요. 결정이 다 정해졌으면 바꿀 내용과 확인 방법을 짧게 보여 주고 승인을 물으세요"
+          "정해지지 않은 결정이 있으면 질문과 추천을 쓰세요. 결정이 다 정해졌으면 바꿀 내용과 확인 방법을 짧게 보여 주고 승인을 물으세요"
           "(여러 턴이 걸리는 일은 먼저 work/<작업명>/work.md 에 지도를 쓰고 그 지도로 승인을 받습니다). "
           "답에는 이 관문 설명을 쓰지 마세요. 셸 등 다른 경로로 같은 쓰기를 하지 마세요(턴 끝에 바뀐 파일이 드러납니다). "
           "배포·삭제·외부 서비스 쓰기 같은 외부 효과는 승인과 별개로 요청이 허용한 범위에서만 합니다.")
@@ -280,10 +281,10 @@ def bind(rec, root, now_maps):
     """승인 턴 끝에 승인 대상을 정한다. 승인 턴 안에서 지도를 쓰거나 고친 것은 승인 내용을 옮겨 적은 것으로 본다.
     대상 지도(승인 메시지가 가리킨 것·승인 전에 이 세션이 쓴 것·이번 턴에 쓴 것 가운데 `## 기준`이 있는 것)가 있으면 지도 승인으로
     그때의 기준에 묶고, 없으면 대화 승인이므로 닫는다."""
-    cand = set(rec.get("targets", {})) | set(rec.get("touched", []))
+    cand = set(rec.get("targets", {})) | set(rec.get("wrote", []))  # 셸로 만든 지도·다른 세션의 지도는 묶지 않는다(구별할 수 없다)
     targets = {m: now_maps[m] for m in sorted(cand) if now_maps.get(m) and now_maps[m] != "unreadable"}
     rec.pop("binding", None)
-    rec["touched"] = []
+    rec["touched"], rec["wrote"] = [], []
     if targets:
         rec.update(kind="map", targets=targets,
                    criteria={m: criteria_text(Path(root, m).read_text(encoding="utf-8", errors="replace")) for m in targets})
@@ -329,7 +330,7 @@ def approved_record(root, state, map_path):
             continue
         if rec.get("binding") and rec.get("approved"):
             now_maps = maps(root)
-            if map_path in set(rec.get("targets", {})) | set(rec.get("touched", [])) and now_maps.get(map_path):
+            if map_path in set(rec.get("targets", {})) | set(rec.get("wrote", [])) and now_maps.get(map_path):
                 rec = {**rec, "targets": {**rec.get("targets", {}), map_path: now_maps[map_path]},
                        "criteria": {**rec.get("criteria", {}), map_path: criteria_text(Path(root, map_path).read_text(encoding="utf-8", errors="replace"))}}
         if map_path in rec.get("targets", {}) and (best is None or rec.get("approved_at", 0) > best.get("approved_at", 0)):
@@ -372,13 +373,13 @@ def main(mode, data):
         elif is_approval(prompt):
             # 후보: 승인 메시지가 가리킨 지도, 승인 전에 이 세션이 쓴 지도, 둘 다 없으면 지난 승인의 지도. 턴 끝(bind)에 확정한다.
             targets = {m: now_maps[m] for m in named_maps(root, prompt) if now_maps.get(m)}
-            for m in rec.get("touched", []):
+            for m in rec.get("wrote", []):  # 승인 전에 이 세션이 수정 도구로 쓴 지도
                 if now_maps.get(m):
                     targets.setdefault(m, now_maps[m])
             if not targets:
                 targets = {m: now_maps[m] for m in rec.get("targets", {}) if now_maps.get(m)}
             rec = {"seen": True, "approved": True, "binding": True, "kind": "map" if targets else "conversation", "targets": targets,
-                   "criteria": {}, "prompt": prompt, "after": [], "touched": [], "approved_at": time.time(), "base": snapshot_files(root, state)}
+                   "criteria": {}, "prompt": prompt, "after": [], "touched": [], "wrote": [], "approved_at": time.time(), "base": snapshot_files(root, state)}
             decision = "open"
         elif is_revoke(prompt) or mentions_approval(prompt):
             rec.update(approved=False, closed_by="revoke")
@@ -400,6 +401,7 @@ def main(mode, data):
         tool, inp = str(data.get("tool_name") or ""), data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
         extra = [m for m in (rel_map(root, t) for t in write_targets(inp)) if m] if tool in WRITE_TOOLS else []
         touch(rec, turn_maps, now_maps, extra)
+        rec["wrote"] = sorted(set(rec.get("wrote", [])) | set(extra))
         closed = settle(rec, now_maps)
         if state.is_dir():
             if was_open and rec.get("closed_by") == "map-removed":  # 작업 완료: 승인 중 변경은 알리지 않고 지금부터 본다
