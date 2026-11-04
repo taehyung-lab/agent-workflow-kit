@@ -183,7 +183,7 @@ print("true" if d.get("waiting") else "false")' 2>/dev/null)
   # 판정 검사는 0=통과, 1=실패, 2=검토 필요(원문을 사람이 판정)를 돌려준다. 3=미확인은 실행기가 정한다:
   # 하네스가 모델 용량·요청 한도 같은 외부 장애로 끝났으면 판정하지 않고 통과율 분모에서 뺀다(시도·사유는 남긴다).
   # 외부 장애는 오류 사건(Codex error·turn.failed, Claude 오류 결과)과 표준 오류에서만 찾는다(일반 답 속 낱말은 보지 않는다).
-  pat='at capacity|rate.?limit|too many requests|overloaded|HTTP 429|stream disconnected|service unavailable'
+  pat='at capacity|rate.?limit|usage.?limit|hit your [0-9a-z -]*limit|api_error_status"?: ?429|too many requests|overloaded|HTTP 429|stream disconnected|service unavailable'
   external=$( { LC_ALL=C grep -a -E '"type": ?"(error|turn\.failed)"|"is_error": ?true' "$out.jsonl"; cat "$out.err"; } 2>/dev/null | LC_ALL=C grep -a -o -m1 -iE "$pat" | head -1)
   if [ "$rc" -ne 0 ] && [ -n "$external" ]; then
     # 장애 전에 제품 파일을 바꿨으면(최종 파일 차이, 또는 바꿨다가 되돌린 편집 기록) 위반일 수 있으므로
