@@ -15,6 +15,7 @@ bash evals/run.sh archive-after-correction HEAD codex 3
 
 ```text
 python3 -I evals/report.py evals/results   # 사례·하네스·키트 커밋·입력별 통과 수와 시간 표
+bash evals/run.sh question-order 7c39b22..HEAD codex 10   # 두 커밋 비교: 전후 표와 회귀 후보·재발·비교 불가 표시(후보일 뿐, 판정은 사람)
 ```
 
 ## 사례 (cases/)

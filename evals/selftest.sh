@@ -209,6 +209,25 @@ with tempfile.TemporaryDirectory() as d:
                 bad.append(f"{harness}/{name}: {state}/{completion}")
 print("\n".join(bad)); sys.exit(1 if bad else 0)
 PY
+# 비교 보고(report.py --compare): 회귀 후보·재발·비교 불가를 표시하고, 검토 필요는 실패로 세지 않는다
+python3 -I - "$here" <<'PY' && ok "비교 보고: 회귀 후보·재발·비교 불가 표시, 검토 필요는 재발로 세지 않음" || ng "비교 보고"
+import json, subprocess, sys, tempfile
+from pathlib import Path
+here = Path(sys.argv[1])
+def meta(d, case, commit, passed, review=False, gi="a"):
+    m = {"case": case, "harness": "claude", "kit_commit": commit * 5, "input": "original", "check_passed": passed, "check_needs_review": review,
+         "check_unverified": False, "global_instructions": {"g": gi}, "approval_gate": True, "harness_version": "1", "judge_version": "j",
+         "observed": {"first_reply_chars": 100}, "completion": "not-verified"}
+    Path(d, f"{case}-{commit}-{passed}-{review}-{gi}.meta.json").write_text(json.dumps(m))
+with tempfile.TemporaryDirectory() as d:
+    meta(d, "reg", "aaaaaaaa", True); meta(d, "reg", "bbbbbbbb", False)
+    meta(d, "rec", "aaaaaaaa", False); meta(d, "rec", "bbbbbbbb", False)
+    meta(d, "rev", "aaaaaaaa", False); meta(d, "rev", "bbbbbbbb", False, review=True)
+    meta(d, "cmp", "aaaaaaaa", True); meta(d, "cmp", "bbbbbbbb", True, gi="b")
+    out = subprocess.run([sys.executable, "-I", str(here / "report.py"), "--compare", "aaaaaaa", "bbbbbbb", d], capture_output=True, text=True).stdout
+    row = lambda c: next(l for l in out.splitlines() if l.startswith(c + " "))
+    assert "회귀 후보" in row("reg") and "재발" in row("rec") and "재발" not in row("rev") and "비교 불가: 전역 지침" in row("cmp"), out
+PY
 python3 -I - "$here" <<'PY' && ok "완료 분류: verified 만 완료, 사용자 답 대기·구현 실패·검증 실패·미확인을 서로 구별" || ng "완료 분류"
 import sys; sys.path.insert(0, sys.argv[1]); from verdict import completion as c
 assert c("ok", "PASS") == "verified" and c("ok", "REVIEW", True) == "waiting-user" and c("ok", "FAIL", True) == "waiting-user"

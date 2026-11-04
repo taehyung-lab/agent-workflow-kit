@@ -19,10 +19,68 @@
 승인 대기 단계의 통과는 구현 완료가 아니므로 검증 완료와 합치지 않는다.
 
 사용: python3 -I evals/report.py evals/results [evals/results/20261102 ...]
+     python3 -I evals/report.py --compare <기준 커밋> <대상 커밋> <결과 폴더 ...>   (run.sh <사례> 기준..대상 이 끝에 부른다)
+
+--compare 는 같은 사례·언어·하네스·입력의 두 커밋 실행을 한 줄로 나란히 보인다(통과/판정, 검토 필요, 외부 장애, 답 대기, 첫 답 중앙값).
+비교 조건(하네스 버전·관문 등록·전역 지침 지문·판정기 버전)이 다르면 "비교 불가"와 그 항목을 적는다.
+표시는 후보일 뿐이다: "회귀 후보"(대상 통과율이 기준보다 낮음), "재발"(양쪽 모두 판정된 실행이 전부 실패, 검토 필요는 실패로 세지 않음). 모델은 비결정적이라
+한 번의 통과→실패는 확정이 아니며, 같은 원인인지·무엇을 고칠지·채택·되돌리기는 원시 기록을 본 사람이 정한다(자동 수정·자동 되돌리기 없음).
 """
-import json, sys
+import json, subprocess, sys
 from collections import defaultdict
 from pathlib import Path
+
+
+def median_first(ms):
+    chars = sorted(m["observed"]["first_reply_chars"] for m in ms if isinstance(m.get("observed", {}).get("first_reply_chars"), int))
+    return chars[len(chars) // 2] if chars else None
+
+
+def compare(base, target, roots):
+    kit = Path(__file__).resolve().parents[1]
+    full = lambda r: subprocess.run(["git", "-C", str(kit), "rev-parse", "--verify", "-q", f"{r}^{{commit}}"], capture_output=True, text=True).stdout.strip() or r
+    sides = {"base": full(base), "target": full(target)}
+    groups = defaultdict(lambda: {"base": [], "target": []})
+    for root in roots:
+        for meta in Path(root).rglob("*.meta.json"):
+            m = json.loads(meta.read_text(encoding="utf-8"))
+            for side, sha in sides.items():
+                if m["kit_commit"].startswith(sha[:7]) or sha.startswith(m["kit_commit"][:7]):
+                    groups[(m["case"], m.get("lang") or "-", m["harness"], m.get("input", "original"))][side].append(m)
+    print(f"기준 {sides['base'][:7]} → 대상 {sides['target'][:7]}")
+    print(f"{'사례':<26} {'언어':<4} {'하네스':<7} {'입력':<13} {'통과(기준→대상)':>16} {'검토 필요':>9} {'답 대기':>7} {'첫 답':>11}  표시")
+    cell = lambda ms, f: str(sum(f(m) for m in ms))
+    for (case, lang, harness, inp), g in sorted(groups.items()):
+        b, t = g["base"], g["target"]
+        judged = lambda ms: [m for m in ms if not m.get("check_unverified", False)]
+        rate = lambda ms: (sum(m["check_passed"] for m in judged(ms)) / len(judged(ms))) if judged(ms) else None
+        passed = f"{sum(m['check_passed'] for m in judged(b))}/{len(judged(b))}→{sum(m['check_passed'] for m in judged(t))}/{len(judged(t))}"
+        review = f"{cell(b, lambda m: m.get('check_needs_review', False))}→{cell(t, lambda m: m.get('check_needs_review', False))}"
+        waiting = f"{cell(b, lambda m: m.get('completion') == 'waiting-user')}→{cell(t, lambda m: m.get('completion') == 'waiting-user')}"
+        first = f"{median_first(b) or '-'}→{median_first(t) or '-'}"
+        marks = []
+        if not b or not t:
+            marks.append("한쪽 실행 없음")
+        else:
+            diff = [k for k, f in (("하네스 버전", lambda m: m.get("harness_version")), ("관문", lambda m: bool(m.get("approval_gate"))),
+                                   ("전역 지침", lambda m: json.dumps(m.get("global_instructions"), sort_keys=True)), ("판정기", lambda m: m.get("judge_version")))
+                    if {f(m) for m in b} != {f(m) for m in t}]
+            if diff:
+                marks.append("비교 불가: " + "·".join(diff))
+            rb, rt = rate(b), rate(t)
+            if rb is not None and rt is not None and rt < rb:
+                marks.append("회귀 후보")
+            failed_all = lambda ms: judged(ms) and all(not m["check_passed"] and not m.get("check_needs_review") for m in judged(ms))
+            if failed_all(b) and failed_all(t):
+                marks.append("재발")
+        if any(m.get("check_unverified") for m in b + t):
+            marks.append(f"외부 장애 {sum(m.get('check_unverified', False) for m in b + t)}")
+        print(f"{case:<26} {lang:<4} {harness:<7} {inp:<13} {passed:>16} {review:>9} {waiting:>7} {first:>11}  {', '.join(marks)}")
+
+
+if len(sys.argv) > 3 and sys.argv[1] == "--compare":
+    compare(sys.argv[2], sys.argv[3], sys.argv[4:] or ["evals/results"])
+    sys.exit(0)
 
 rows = defaultdict(list)
 for root in sys.argv[1:] or ["evals/results"]:

@@ -5,6 +5,7 @@
 #
 # 사용: bash evals/run.sh <사례> <키트 커밋·태그> <claude|codex> [반복 수]
 #   예: bash evals/run.sh weight-accounting v1.0.0 claude 2
+#       bash evals/run.sh question-order 7c39b22..HEAD codex 10   (두 커밋 비교, 끝에 report.py --compare)
 #       bash evals/run.sh weight-accounting HEAD codex
 # 여러 턴 사례는 prompt2.txt … 를 두면 같은 세션을 이어 가며 차례로 보낸다.
 # 결과 요약: python3 -I evals/report.py evals/results
@@ -19,8 +20,14 @@ set -uo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 kit=$(cd -- "$here/.." && pwd -P)
 fail() { printf 'evals: %s\n' "$*" >&2; exit 2; }
-[ "$#" -ge 3 ] || fail '사용: bash evals/run.sh <사례> <키트 커밋·태그> <claude|codex> [반복 수]'
+[ "$#" -ge 3 ] || fail '사용: bash evals/run.sh <사례> <키트 커밋·태그 | 기준..대상> <claude|codex> [반복 수]'
 case_name=$1 ref=$2 harness=$3 times=${4:-1}
+# 비교 실행: <기준>..<대상> 이면 같은 사례·하네스·횟수로 두 커밋을 차례로 돌리고 report.py --compare 로 전후를 보여 준다.
+if [[ "$ref" == *..* ]]; then
+  out=${EVALS_RESULTS:-"$here/results/$(date +%Y%m%d)"}; rc=0
+  for side in "${ref%%..*}" "${ref##*..}"; do EVALS_RESULTS=$out bash "$0" "$case_name" "$side" "$harness" "$times" || rc=$?; done
+  python3 -I "$here/report.py" --compare "${ref%%..*}" "${ref##*..}" "$out"; exit "$rc"
+fi
 case_dir="$here/cases/$case_name"
 [ -f "$case_dir/prompt.txt" ] && [ -f "$case_dir/check.py" ] || fail "사례가 없거나 prompt.txt·check.py 가 빠졌다: $case_dir"
 commit=$(git -C "$kit" rev-parse --verify -q "$ref^{commit}") || fail "키트에 없는 커밋·태그: $ref"
