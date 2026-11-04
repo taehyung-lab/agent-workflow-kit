@@ -158,11 +158,11 @@ flowchart LR
 ## 5분 시작
 
 ```bash
-git clone --branch v2.0.2 https://github.com/taehyung-lab/agent-workflow-kit
+git clone --branch v3.0.0 https://github.com/taehyung-lab/agent-workflow-kit
 bash agent-workflow-kit/install.sh /path/to/my-project
 ```
 
-1. 설치기가 `AGENTS.md`(키트 영역 + 빈 프로젝트 지도), `CLAUDE.md`, `.agents/skills/wf-*`, `.claude/skills` 링크를 만들고, `.gitignore` 에 `/work/`(작업 지도 자리)를 더하고, `.agents/agent-workflow-kit.version` 에 커밋을 기록한다. 승인 관문 훅(사용자가 승인한 뒤에만 수정 도구로 제품 파일을 쓰게 하는 훅)을 `.claude/settings.json`·`.codex/hooks.json` 에 더한다(기존 항목은 그대로 둔다). Codex 는 처음 실행할 때 훅을 신뢰할지 묻는다. 신뢰해야 훅이 돈다. 이미 `AGENTS.md`·`CLAUDE.md`·`work/` 가 있으면 쓰기 전에 멈춘다. 그때는 아래 「진행 중인 프로젝트에 연결하기」를 본다.
+1. 설치기가 `AGENTS.md`(키트 영역 + 빈 프로젝트 지도), `CLAUDE.md`, `.agents/skills/`(선택 안내 `guide.md`·승인 관문·검토 도구), `.claude/skills` 링크를 만들고, `.gitignore` 에 `/work/`(작업 지도 자리)를 더하고, `.agents/agent-workflow-kit.version` 에 커밋을 기록한다. 승인 관문 훅(사용자가 승인한 뒤에만 수정 도구로 제품 파일을 쓰게 하는 훅)을 `.claude/settings.json`·`.codex/hooks.json` 에 더한다(기존 항목은 그대로 둔다). Codex 는 처음 실행할 때 훅을 신뢰할지 묻는다. 신뢰해야 훅이 돈다. 이미 `AGENTS.md`·`CLAUDE.md`·`work/` 가 있으면 쓰기 전에 멈춘다. 그때는 아래 「진행 중인 프로젝트에 연결하기」를 본다.
 2. `AGENTS.md` 아래 「프로젝트 지도」에 제품 원문 위치, 코드 진입점, 실행·검사 명령, 권한·보호 대상을 적는다. 모르는 칸은 `미확인`으로 둔다.
 3. 새 세션에서 작은 요청 하나를 주고, 계획을 보여 주며 승인을 묻는지 본다. Codex 는 처음 실행할 때 나오는 "훅 신뢰" 화면에서 신뢰를 고르거나, 나중에 Codex 안에서 `/hooks` 를 열어 신뢰한다. worktree 를 자주 만들면 사용자 전역에 한 번 등록하는 편이 낫다([.agents/skills/README.md](.agents/skills/README.md)). 팀에 도입한다면 아래 「도입 확인」을 거친다.
 
@@ -205,7 +205,7 @@ bash evals/selftest.sh                             # 모델 없이: 판정 검�
 기존 설치 대상·루트 work 경로·부모 심링크·부모 비디렉터리는 쓰기 전에 거절한다. .gitignore는 일반 파일만 허용하고 기존 내용에 `/work/` 줄이 없으면 덧붙인다.
 다른 설치·편집이 없는 대상에서 실행한다. 권한·I/O 실패 때 일부 신규 파일이 남을 수 있으므로 종료 코드와 대상을 확인하고 병합 범위를 정한다.
 CLAUDE.md는 `@AGENTS.md`, `.claude/skills`는 `.agents/skills`를 가리킨다. 승인 관문 훅은 `.claude/settings.json`·`.codex/hooks.json`의 `hooks`에 명령에 `approval-gate.py`가 든 항목으로 더하고, 업데이트 때 그 항목만 교체한다. 설정 파일이 올바른 JSON 이 아니면 쓰기 전에 멈춘다.
-키트가 관리하는 부분은 AGENTS.md의 `agent-workflow-kit:begin`~`end` 표시 영역, CLAUDE.md, 키트가 설치한 `.agents/skills/wf-*` 파일이다. 프로젝트는 이 부분을 고치지 않고, 지도·저장소별 절·역할 스킬은 표시 영역 밖에 둔다. 설치한 키트 커밋은 `.agents/agent-workflow-kit.version`에 남고, 프로젝트는 이 고정 버전을 따른다. 이 키트는 세션을 자동 생성하지 않는다.
+키트가 관리하는 부분은 AGENTS.md의 `agent-workflow-kit:begin`~`end` 표시 영역, CLAUDE.md, 키트가 설치한 `.agents/skills/` 의 키트 파일(guide.md·README.md·wf-design·wf-verify)이다. 프로젝트는 이 부분을 고치지 않고, 지도·저장소별 절·역할 스킬은 표시 영역 밖에 둔다. 설치한 키트 커밋은 `.agents/agent-workflow-kit.version`에 남고, 프로젝트는 이 고정 버전을 따른다. 이 키트는 세션을 자동 생성하지 않는다.
 도입은 다섯 걸음이다: 설치 → 저장소 관찰 → 지도 네 칸 채우기(근거가 없으면 `미확인`) → 기존 에이전트 문서마다 유지·이동·폐기 결정 → 다음 작은 실제 요청 하나로 지도와 스킬 선택이 맞는지 확인.
 에이전트에게 맡길 때: "https://github.com/taehyung-lab/agent-workflow-kit 를 clone해 install.sh로 이 저장소에 설치하고, 저장소를 조사해 AGENTS.md 지도 네 칸을 채워줘. 근거가 없는 칸은 미확인으로 두고, 기존 에이전트 문서는 유지·이동·폐기안을 보여줘. 설치기가 멈추면 병합안을 먼저 보여줘."
 
@@ -243,6 +243,8 @@ AGENTS.md의 네 항목에는 저장소가 관리하는 근거의 위치와 한 
 키트가 관리하는 부분에 로컬 변경이 있으면 이미 같은 버전이어도 아무것도 쓰지 않고 그 경로를 알린다. 그 변경은 프로젝트 절·역할 스킬로 옮기거나 키트에 반영한 뒤 다시 실행한다. 키트가 쓰는 경로의 부모가 심링크이거나 폴더가 아니면 설치와 같이 쓰기 전에 거절한다.
 교체 결과를 diff로 검토하고, 아래 도입 확인 중 바뀐 것에 맞는 확인을 거친 뒤 반영한다. 확인을 마치지 못하면 남은 확인을 함께 남긴다.
 
+**v2 → v3.** 단계 스킬(`wf-design`·`wf-implement`·`wf-verify` 의 `SKILL.md`)과 지도 양식(`work-template.md`)이 없어지고 `.agents/skills/guide.md` 하나로 바뀐다. 업데이트가 키트 파일은 지우지만, 프로젝트 절·역할 스킬·문서가 `wf-*` 스킬을 가리키면 그 설명은 프로젝트가 직접 고친다. 승인 관문 경로(`.agents/skills/wf-design/approval-gate.py`)는 그대로라 사용자 전역 훅 등록은 바꿀 필요가 없다. 검토 도구 사용법은 `verify.py prepare`·`finish` 로 바뀌었다(guide.md 「독립 검토」).
+
 ### 부분 실패 복구와 제거
 
 설치기가 중간에 실패하면(종료 코드가 0이 아니고 `Install failed; partial files may remain.`가 뜨면) 대상의 실제 파일을 확인한다. `git status`는 ignore된 경로를 숨기므로 `git status --ignored`와 `ls -la`로 키트 경로를 직접 본다.
@@ -264,7 +266,7 @@ AGENTS.md의 네 항목에는 저장소가 관리하는 근거의 위치와 한 
 
 확인의 무게는 설치된 버전부터 새 커밋까지 바뀐 것 중 가장 무거운 단계에 맞춘다.
 
-- **설치기·설치 경로만 바뀐 업데이트**(AGENTS.md 키트 영역·CLAUDE.md·`.agents/skills/wf-*` 파일 내용은 그대로): `tests/install.test.sh`가 통과한 커밋인지와, 대상의 diff가 버전 파일 갱신(설치 경로가 바뀌었다면 그 이동)뿐인지 확인한다. 새 세션에서 세 wf-\* 스킬이 발견되는지 본다.
+- **설치기·설치 경로만 바뀐 업데이트**(AGENTS.md 키트 영역·CLAUDE.md·`.agents/skills/` 키트 파일 내용은 그대로): `tests/install.test.sh`가 통과한 커밋인지와, 대상의 diff가 버전 파일 갱신(설치 경로가 바뀌었다면 그 이동)뿐인지 확인한다. 새 세션에서 세 wf-\* 스킬이 발견되는지 본다.
 - **처음 도입하거나 작업 판단 문장(AGENTS.md 키트 영역·CLAUDE.md·wf-\*)이 바뀐 업데이트**: 위에 더해, 이번 도입에서 사용할 실행 환경·모델 조합마다 대표 요청 하나를 격리한 worktree에서 실행해 구현하지 않은 검토자가 판정한다. ① 원문·역할 스킬·공용 코드의 근거를 조건과 [기존] 조건으로 옮겼는가 ② 변경이 실제 결과에 반영되는 경로에서 조건을 지키며 기존 공용을 쓰고 불필요한 책임·계층 없이 이해할 수 있는가(기존 검사와 위반 반례 포함) ③ 실패가 생긴 원인과 그것을 놓친 검사·판단의 원인을 구별했는가. 진행 중인 프로젝트에 연결한 병합도 이 확인 뒤 반영한다.
 - **특정 실패의 교정으로 판단 문장을 일반화해 바꾼 업데이트**(커밋·교정 기록에 막으려는 실패가 적힌 경우): 위에 더해 ④ `evals/`의 그 실패 사례와 다른 도메인 유사 사례로 변경 전후 커밋을 `evals/run.sh` 실행해 재발 여부, 작은 요청(`weight-disposable`) 부담, AGENTS.md 바이트를 본다.
 
