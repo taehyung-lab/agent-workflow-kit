@@ -211,16 +211,26 @@ with tempfile.TemporaryDirectory() as t:
     check("승인 기록에 승인 직전 에이전트가 보여 준 계획이 그대로 남는다", "PLAN-MARKER" in (r_.get("plan") or ""))
     call("prompt", {"prompt": "진행해 주세요", "session_id": "q1", "transcript_path": str(tr)})
     check("릴리스 검토 P1: 같은 사건의 두 번째 훅 호출은 요청 원문을 지우지 않는다", rec("q1")["requests"][0] == "회원 탈퇴 기능을 만들어 주세요. REQ-MARKER")
-    stop_of("q1"); tp("q1", "고객 정보도 지워 주세요 AFTER-REQ"); tp("q1", "취소합니다"); tp("q1", "진행해 주세요")
-    check("릴리스 검토 P1: 철회 뒤 같은 작업을 다시 승인하면 앞선 원문·추가 요구를 이어 간다",
-          rec("q1")["requests"][0].endswith("REQ-MARKER") and "고객 정보도 지워 주세요 AFTER-REQ" in rec("q1")["requests"])
     stop_of("q1")
-    tp("q3", "FIRST-REQ 원래 요청")
+    # 지도 승인이 열린 채 추가 요구 → 계속 진행 승인 / 기준 변경 뒤 재승인: 이번 작업의 첫 원문부터 모두 남는다
+    tp("q4", "회원 탈퇴 ORIGINAL-REQ"); write_map("work/q4/work.md", "| Q1 | 탈퇴 |", "q4"); stop_of("q4")
+    tp("q4", "진행해 주세요"); stop_of("q4")
+    tp("q4", "고객 정보도 지워 주세요 AFTER-REQ"); tp("q4", "계속 진행해주세요")
+    check("릴리스 검토 P1: 열린 지도에서 추가 요구 뒤 계속 진행 승인해도 첫 원문·추가 요구가 남는다",
+          rec("q4")["requests"][0] == "회원 탈퇴 ORIGINAL-REQ" and "고객 정보도 지워 주세요 AFTER-REQ" in rec("q4")["requests"])
+    stop_of("q4"); write_map("work/q4/work.md", "| Q1 | 탈퇴 |\n| Q2 | 고객 정보 삭제 |", "q4"); tp("q4", "승인합니다")
+    check("릴리스 검토 P1: 기준 변경 뒤 재승인에도 첫 원문이 남는다", rec("q4")["requests"][0] == "회원 탈퇴 ORIGINAL-REQ")
+    stop_of("q4"); shutil_rm(repo / "work")
+    call("prompt", {"prompt": "DUP-REQ 요청", "session_id": "q5"}); call("prompt", {"prompt": "승인합니다", "session_id": "q5"})
+    call("prompt", {"prompt": "승인합니다", "session_id": "q5"})
+    check("릴리스 검토 P1: 대화 기록 없이 같은 승인이 바로 두 번 와도 원문이 남는다", rec("q5")["requests"] == ["DUP-REQ 요청", "승인합니다"])
+    stop_of("q5")
+    tp("q3", "FIRST-REQ 원래 요청"); tp("q3", "IMPORTANT-REQ 개인정보 영구 삭제")
     for i in range(45):
         tp("q3", f"질문 답변 {i}")
     tp("q3", "진행해 주세요")
-    check("릴리스 검토 P1: 승인 전 메시지가 길어져도 첫 원문은 남고 줄인 사실이 표시된다",
-          rec("q3")["requests"][0] == "FIRST-REQ 원래 요청" and any("생략" in x for x in rec("q3")["requests"]))
+    check("릴리스 검토 P1: 승인 전 메시지가 길어도 줄이지 않는다(첫 원문·가운데 중요한 요구 모두 남음)",
+          rec("q3")["requests"][0] == "FIRST-REQ 원래 요청" and "IMPORTANT-REQ 개인정보 영구 삭제" in rec("q3")["requests"] and len(rec("q3")["requests"]) == 48)
     stop_of("q3")
     tp("q2", "버튼 바꿔 주세요"); tp("q2", "진행해 주세요")
     check("대화 기록이 없으면 계획은 비어 있다(검토기가 입력 부족으로 다룬다)", rec("q2").get("plan") is None and rec("q2")["requests"] == ["버튼 바꿔 주세요", "진행해 주세요"])

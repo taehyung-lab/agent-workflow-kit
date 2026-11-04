@@ -51,6 +51,8 @@ with tempfile.TemporaryDirectory() as t:
     verifier = proj / ".agents/skills/wf-verify/verify.py"
 
     def hook(mode, sid, **kw):
+        if mode == "prompt":  # 실제 하네스처럼 사용자 메시지 앞에는 앞 턴의 끝(Stop)이 온다
+            sh(sys.executable, "-I", str(gate), "stop", input=json.dumps({"cwd": str(proj), "session_id": sid}))
         r = sh(sys.executable, "-I", str(gate), mode, input=json.dumps({"cwd": str(proj), "session_id": sid, **kw}))
         return ((json.loads(r.stdout).get("hookSpecificOutput") or {}).get("permissionDecision") == "deny") if r.stdout.strip() else False
 

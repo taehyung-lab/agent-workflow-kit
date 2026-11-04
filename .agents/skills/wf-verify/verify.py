@@ -462,7 +462,8 @@ def prepare(args):
                        "state_file": str(state_file) if explicit else str(vfile), "approved_at": rec.get("approved_at"), "required": required,
                        "rounds_max": rounds_max, "round": n, "ran_before": len(ran), "start_print": start_print, "start_task": list(start_task),
                        "target": target, "vdir": str(vdir), "harness": harness, "baseline_changed": changed, "root": str(root),
-                       "session": opt(args, "--session-resolved"), "after_count": len(rec.get("after", [])), "pending_count": len(rec.get("pending", [])),
+                       "session": opt(args, "--session-resolved"), "after_count": len(rec.get("after", [])),
+                       "log_len": len(gate.read_prompts(state_dir / rec["log_file"])) if rec.get("log_file") and state_dir else None,
                        "waiting_at_prepare": bool(rec) and gate.status_json(rec)["waiting"]}
             (keep / "pending.json").write_text(json.dumps(pending, ensure_ascii=False), encoding="utf-8")
             ready = {"state": "ready", "round": n, "kept": str(keep), "prompt_file": str(keep / "prompt.txt"), "target_dir": str(vdir),
@@ -542,7 +543,8 @@ def finish(args):
     changed_approval = bool(now_rec) and (now_rec.get("approved_at") != pd["approved_at"]
                                           or (gate.status_json(now_rec)["waiting"] and not pd.get("waiting_at_prepare"))
                                           or len(now_rec.get("after", [])) != pd.get("after_count", 0)
-                                          or len(now_rec.get("pending", [])) != pd.get("pending_count", 0))  # 대화 승인이 끝난 뒤 들어온 새 메시지
+                                          or (pd.get("log_len") is not None and now_rec.get("log_file")
+                                              and len(gate.read_prompts(state_dir / now_rec["log_file"])) != pd["log_len"]))  # 검토 중 들어온 사용자 메시지
     if rc is not None and not pd["explicit"] and not now_rec:
         changed_approval = True
     if rc is not None and (changed_approval or end_task != pd["start_task"] or product_print(gate, root) != pd["start_print"]):
