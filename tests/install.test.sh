@@ -28,8 +28,8 @@ begin='<!-- agent-workflow-kit:begin -->'
 t="$tmp/fresh"; mkdir "$t"
 if install "$t" \
   && cmp -s "$kit/AGENTS.md" "$t/AGENTS.md" && cmp -s "$kit/CLAUDE.md" "$t/CLAUDE.md" \
-  && cmp -s "$kit/.agents/skills/wf-verify/SKILL.md" "$t/.agents/skills/wf-verify/SKILL.md" \
-  && cmp -s "$kit/.agents/skills/wf-design/work-template.md" "$t/.agents/skills/wf-design/work-template.md" \
+  && cmp -s "$kit/.agents/skills/guide.md" "$t/.agents/skills/guide.md" \
+  && cmp -s "$kit/.agents/skills/wf-verify/verify.py" "$t/.agents/skills/wf-verify/verify.py" \
   && [ "$(readlink "$t/.claude/skills")" = "../.agents/skills" ] \
   && grep -qxF '/work/' "$t/.gitignore" && [ "$(cat "$t/.agents/agent-workflow-kit.version")" = "$v1" ] \
   && grep -qxF "$begin" "$t/AGENTS.md"; then ok "fresh install"; else ng "fresh install"; fi
@@ -81,14 +81,14 @@ for n in keep plain region skill exists; do
   printf '\n## 프로젝트 약속\n\n- 이 저장소만의 약속\n' >> "$t/AGENTS.md"
   mkdir -p "$t/.agents/skills/my-role"; echo role > "$t/.agents/skills/my-role/SKILL.md"
 done
-echo 'local' >> "$tmp/up-skill/.agents/skills/wf-verify/SKILL.md"
+echo 'local' >> "$tmp/up-skill/.agents/skills/guide.md"
 mkdir -p "$tmp/up-exists/.agents/skills/wf-new"; echo mine > "$tmp/up-exists/.agents/skills/wf-new/SKILL.md"
 { printf '# 프로젝트 머리말\n\n'; cat "$tmp/up-keep/AGENTS.md"; printf 'tail & \\1 without newline'; } > "$tmp/a" && cat "$tmp/a" > "$tmp/up-keep/AGENTS.md"; chmod 640 "$tmp/up-keep/AGENTS.md"
 awk -v b="$begin" '{print} $0==b{print "LOCAL EDIT"}' "$tmp/up-region/AGENTS.md" > "$tmp/a" && mv "$tmp/a" "$tmp/up-region/AGENTS.md"
 awk -v b="$begin" '{print} $0==b{print "v2 kit line"}' "$kit/AGENTS.md" > "$tmp/a" && mv "$tmp/a" "$kit/AGENTS.md"
-echo 'v2' >> "$kit/.agents/skills/wf-verify/SKILL.md"
+echo 'v2' >> "$kit/.agents/skills/guide.md"
 mkdir "$kit/.agents/skills/wf-new"; echo new > "$kit/.agents/skills/wf-new/SKILL.md"
-git -C "$kit" rm -q .agents/skills/wf-design/work-template.md
+git -C "$kit" rm -q .agents/skills/README.md
 mkdir "$kit/.agents/skills/wf-old"; echo old > "$kit/.agents/skills/wf-old/SKILL.md"
 g add -A; g commit -qm v2
 v2=$(git -C "$kit" rev-parse HEAD)
@@ -100,9 +100,9 @@ if install --update "$t" && [ ! -s "$tmp/err" ] \
   && grep -qxF 'v2 kit line' "$t/AGENTS.md" \
   && grep -qxF -- '- 제품 원문·사용자 결정·결정권자: docs/product.md' "$t/AGENTS.md" \
   && grep -qxF -- '- 이 저장소만의 약속' "$t/AGENTS.md" \
-  && cmp -s "$kit/.agents/skills/wf-verify/SKILL.md" "$t/.agents/skills/wf-verify/SKILL.md" \
-  && [ -f "$t/.agents/skills/wf-new/SKILL.md" ] && [ ! -e "$t/.agents/skills/wf-design/work-template.md" ] \
-  && [ -f "$t/.agents/skills/wf-design/SKILL.md" ] && [ "$(cat "$t/.agents/skills/my-role/SKILL.md")" = role ] \
+  && cmp -s "$kit/.agents/skills/guide.md" "$t/.agents/skills/guide.md" \
+  && [ -f "$t/.agents/skills/wf-new/SKILL.md" ] && [ ! -e "$t/.agents/skills/README.md" ] \
+  && [ -f "$t/.agents/skills/wf-design/approval-gate.py" ] && [ "$(cat "$t/.agents/skills/my-role/SKILL.md")" = role ] \
   && [ "$(cat "$t/.agents/agent-workflow-kit.version")" = "$v2" ] \
   && [ "$(grep -cxF "$begin" "$t/AGENTS.md")" = 1 ] \
   && [ "$(tail -c 25 "$t/AGENTS.md")" = 'tail & \1 without newline' ] \
@@ -161,7 +161,7 @@ for case in "0000000000000000000000000000000000000000|not found in kit" "HEAD~1|
 done
 
 # 같은 버전이어도 키트 소유 부분의 로컬 변경은 "이미 최신"으로 넘기지 않고 멈춘다
-t="$tmp/up-same-drift"; mkdir "$t"; install "$t"; echo tampered >> "$t/.agents/skills/wf-verify/SKILL.md"; before=$(snap "$t")
+t="$tmp/up-same-drift"; mkdir "$t"; install "$t"; echo tampered >> "$t/.agents/skills/guide.md"; before=$(snap "$t")
 if ! install --update "$t" && grep -q 'Local change in kit-owned path' "$tmp/err" && ! grep -q 'Already at' "$tmp/out" \
   && [ "$(snap "$t")" = "$before" ]; then ok "same-version update refuses local change"; else ng "same-version update refuses local change"; fi
 

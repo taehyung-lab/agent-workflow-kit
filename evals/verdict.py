@@ -1,7 +1,7 @@
 """평가 실행기가 쓰는 판정 함수. 실제 내용은 설치되는 독립 검증 실행기(.agents/skills/wf-verify/verify.py)에 있고,
 이 파일은 그 함수를 그대로 내보낸다(일반 설치와 평가가 같은 판정 규칙을 쓰게 하려는 것이다).
 
-검증자는 답 끝에 JSON 하나를 쓴다(.agents/skills/wf-verify/verifier-prompt.txt 의 형식):
+검증자는 답 끝에 JSON 하나를 쓴다(.agents/skills/wf-verify/verify.py 의 VERIFIER_PROMPT 형식):
   {"verdict": "OK" 또는 "RETURN", "conditions": [{"id": "C1", "result": "충족|미충족|미확인", "evidence": "..."}],
    "return_reason": "...", "out_of_scope": ["..."]}
 판정(state): ok / returned / unverified(그 밖 전부, 완료 아님). out_of_scope 는 판정을 막지 않고 따로 남긴다.

@@ -115,8 +115,8 @@ exit 0
     (proj / "ui.txt").write_text("button=로그인 버튼\nbutton_en=Login\n")  # 첫 구현(틀림)
     rc, out, prompt = verify(mp, [RET])
     check("1회차: 검증자가 돌려보내면 returned(종료 3), 완료가 아님", rc == 3 and out.get("state") == "returned" and out.get("completion") == "returned" and out.get("round") == 1)
-    check("검증자 입력: 승인한 기준(B1·E1)·승인 메시지·승인 뒤 사용자 메시지",
-          "| B1 |" in prompt and "(승인 메시지) 승인합니다." in prompt and "AFTER-MARKER" in prompt and "B1" in out.get("required", []))
+    check("검증자 입력: 승인 전 요청 원문·승인 메시지·승인한 기준(B1·E1)·승인 뒤 사용자 메시지",
+          "| B1 |" in prompt and "(승인 전·승인 메시지) 승인합니다." in prompt and "로그인 버튼 글자를" in prompt and "AFTER-MARKER" in prompt and "B1" in out.get("required", []))
     check("검증자 입력: 지도의 증거(자기평가)는 넣지 않는다", "SELF-ASSESS-MARKER" not in prompt)
     check("검증자 입력의 diff: 승인 뒤 변경만(작업 전 사용자 미커밋 변경 제외)", "로그인 버튼" in prompt and "사용자 메모" not in prompt)
     check("검증자의 반환 글('승인합니다'·'취소합니다')은 승인 상태를 바꾸지 않는다", status("A")["approved"] and not edit_denied("A"))
@@ -155,8 +155,19 @@ exit 0
     hook("stop", "M"); hook("prompt", "M", prompt="승인합니다."); hook("stop", "M")
     rc, out, _ = verify(mpm, [OK], FAKE_TOUCH_ORIG=str(proj / mpm))
     check("검증 중 원본 지도의 기준이 바뀌면 unverified(반례6)", out.get("state") == "unverified" and "지도 기준" in out.get("reason", ""))
-    r = sh(sys.executable, "-I", str(KIT / "evals/verdict.py"), "session", "--tool", str(verifier), "--harness", "claude", cwd=proj, env=base_env)
-    check("--map 없이 부르면 사용법과 종료 2", r.returncode == 2 and "--map" in r.stderr)
+    # 지도 없이 대화로 승인한 일: 관문이 고정한 요청 원문과 승인 직전 계획으로 검토 입력을 만든다. 계획이 없으면 입력 부족.
+    trp = t / "conv.jsonl"
+    trp.write_text(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "계획: 버튼 글자를 바꿉니다. CONV-PLAN"}]}}, ensure_ascii=False) + "\n")
+    hook("prompt", "Q", prompt="로그인 버튼 글자를 '로그인하기'로 바꿔 주세요 CONV-REQ")
+    hook("prompt", "Q", prompt="진행해 주세요", transcript_path=str(trp))
+    rq = json.loads(sh(sys.executable, "-I", str(verifier), "prepare", "--session", "Q", cwd=proj, env=base_env).stdout.strip().splitlines()[-1])
+    pq = Path(rq.get("prompt_file", "/x")).read_text() if rq.get("state") == "ready" else ""
+    check("지도 없는 승인도 고정된 요청 원문·승인 직전 계획으로 검토 입력을 만든다", "CONV-REQ" in pq and "CONV-PLAN" in pq)
+    hook("stop", "Q")
+    hook("prompt", "R", prompt="버튼 바꿔 주세요"); hook("prompt", "R", prompt="진행해 주세요")
+    rr = json.loads(sh(sys.executable, "-I", str(verifier), "prepare", "--session", "R", cwd=proj, env=base_env).stdout.strip().splitlines()[-1])
+    check("승인받은 계획을 확보하지 못하면 입력 부족으로 미확인(검토자를 띄우지 않음)", rr.get("state") == "unverified" and "입력 부족" in rr.get("reason", ""))
+    hook("stop", "R")
     hook("prompt", "C", prompt="저장 버튼 색 바꿔 주세요"); hook("prompt", "C", prompt="진행해주세요"); hook("stop", "C")
     hook("prompt", "C", prompt="이것도 해 주세요")
     mpc = write_map("C", "after-convo", "| C1 | 대화 승인 턴이 끝난 뒤 쓴 지도 |")

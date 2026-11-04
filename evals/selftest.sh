@@ -223,14 +223,14 @@ assert log("echo x > todo.py") == ["todo.py"] and log("ls 2>/dev/null; echo y >>
 PY
 # 문서 예산: 매 세션 읽는 키트 영역과 설치되는 키트 문서가 정해 둔 크기를 넘으면 실패한다(늘리려면 다른 문장을 교체·삭제한다).
 # 예산은 증가를 막는 장치일 뿐 원인 교정의 증거가 아니다(교정은 실패 표본으로 확인). 상한을 올리는 것은 기준 변경이라 별도 검토를 받는다.
-python3 -I - "$here/.." <<'PY' && ok "문서 예산: 키트 영역 ≤6000B, 단계 스킬 각 ≤4500B, 설치 문서 전체 ≤32000B" || ng "문서 예산 초과"
+python3 -I - "$here/.." <<'PY' && ok "문서 예산: 키트 영역 ≤6000B, 안내·스킬 각 ≤4500B, 설치 문서 전체 ≤32000B" || ng "문서 예산 초과"
 import sys
 from pathlib import Path
 kit = Path(sys.argv[1]); bad = []
 agents = (kit / "AGENTS.md").read_text(encoding="utf-8")
 region = agents[agents.index("<!-- agent-workflow-kit:begin -->"):agents.index("<!-- agent-workflow-kit:end -->")].encode()
 if len(region) > 6000: bad.append(f"AGENTS.md 키트 영역 {len(region)}B > 6000B")
-skills = sorted((kit / ".agents/skills").glob("wf-*/SKILL.md"))
+skills = sorted((kit / ".agents/skills").glob("*/SKILL.md")) + [kit / ".agents/skills/guide.md"]
 for f in skills:
     n = len(f.read_bytes())
     if n > 4500: bad.append(f"{f.relative_to(kit)} {n}B > 4500B")

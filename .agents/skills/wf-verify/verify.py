@@ -36,6 +36,21 @@ DIFF_LIMIT = 60000  # 검증자 입력에 넣는 diff 최대 바이트(넘으면
 KIT_PATHS = (".agents", ".claude", ".codex", "CLAUDE.md", "AGENTS.md")  # 비교하지 않는 키트·하네스 설정(저장소 맨 위만)
 
 
+VERIFIER_PROMPT = """당신은 별도 검증자다. 판정 대상은 아래 「대상 버전」의 폴더(판정 대상 버전의 고정 복사본)다. 그 폴더의 AGENTS.md 와 .agents/skills/guide.md 「독립 검토」를 읽고 그 기준으로 판정한다.
+제품 파일·검사·기준을 고치지 않는다(고치면 이 판정은 무효로 처리된다). 저장소의 실행·검사 명령을 실행해 실제 결과로 판정하며, 그때 생기는 임시 산출물은 괜찮다.
+요구의 근거는 아래 사용자 원문(승인 메시지 포함)과 저장소의 외부 계약뿐이다. 구현자가 정한 내용은 근거가 아니다. 구현자의 자기평가는 받지 않는다.
+판정 범위는 이 변경이 바꾼 동작과, 연결 근거(같은 함수·같은 출력·같은 계약을 쓴다)가 있는 기존 보장뿐이다. 연결 없는 기능은 보지 않는다.
+- 합의 조건이나 연결된 기존 보장을 깨는 반례를 찾으면 그 조건은 미충족이다.
+- 새 요구가 있어야 성립하는 반례(원문이 정하지 않은 동작)는 판정을 막지 않고 out_of_scope 에 적는다.
+- 승인 뒤 사용자 원문이 결과·범위를 바꿨는데 작업 지도 기준에 없으면, 그 변경을 원문 조건(새 ID)으로 세워 판정한다. 승인한 계획·원문에 없는 동작(새 명령 등)이 추가됐으면 근거 없이 범위를 넓힌 것이므로 RETURN 이다.
+- 원문·계약으로 고를 수 없는데 사용자가 받는 결과(동작·데이터·범위·권한)를 구현자가 정해 버렸으면 RETURN 이다.
+- 확인하지 못한 조건은 미확인으로 적는다. 미확인이나 미충족이 하나라도 있으면 verdict 는 OK 가 아니다.
+
+답의 맨 끝에 아래 형식의 JSON 하나를 쓴다. 이 JSON 만 판정으로 읽힌다(없거나 형식이 틀리면 미확인으로 처리된다).
+아래 "필수 조건" 이 있으면 그 ID 를 모두 conditions 에 넣는다. 필수 조건 밖에서 원문이 요구한 조건이 보이면 새 ID(예: V1)로 더한다.
+{"verdict": "OK 또는 RETURN", "conditions": [{"id": "조건 ID", "result": "충족 또는 미충족 또는 미확인", "evidence": "실행한 명령과 실제 결과"}], "return_reason": "RETURN 일 때 사유", "out_of_scope": ["범위 밖 반례"]}"""
+
+
 def gate_module():
     """같은 키트의 승인 관문(작업 기록을 관리하는 곳)을 불러온다."""
     spec = importlib.util.spec_from_file_location("approval_gate", HERE.parent / "wf-design" / "approval-gate.py")
@@ -271,7 +286,7 @@ def diff(base, target):
 
 
 def prompt_text(requests, plan, conditions, criteria, note, target, change, vdir="."):
-    parts = [(HERE / "verifier-prompt.txt").read_text(encoding="utf-8")]
+    parts = [VERIFIER_PROMPT]
     for n, req in enumerate(requests, 1):
         parts.append(f"\n\n## 사용자 원문 {n}\n{req}")
     if plan is not None:
@@ -311,7 +326,7 @@ def copy_kit_paths(vdir, base):
             shutil.copy2(src, dst)
 
 
-USAGE = ("사용: verify.py prepare --map work/<작업명>/work.md [--rounds N]   → 검토 입력(prompt_file)과 판정 대상 폴더를 만든다\n"
+USAGE = ("사용: verify.py prepare [--map work/<작업명>/work.md] [--rounds N]   → 검토 입력(prompt_file)과 판정 대상 폴더를 만든다(지도 없으면 이 세션의 최근 승인)\n"
          "      verify.py finish --round <prepare 가 낸 kept 폴더> [--answer <파일>]   → 검토자의 마지막 답(표준 입력)을 판정한다")
 
 
@@ -339,21 +354,27 @@ def prepare(args):
         criteria = Path(opt(args, "--criteria")).read_text(encoding="utf-8") if opt(args, "--criteria") else ""
         state_file = Path(opt(args, "--state") or tempfile.mktemp(suffix=".json"))
         vstate = json.loads(state_file.read_text()) if state_file.is_file() else {}
-    else:  # 일반 작업: 관문이 승인 때 남긴 이 지도의 기준과 사용자 메시지를 쓴다
+    else:  # 일반 작업: 관문이 승인 때 고정한 요청 원문·승인받은 계획(지도가 있으면 그 기준)과 승인 뒤 메시지를 쓴다
         map_path = opt(args, "--map")
         state_dir = gate.locate(root)[1]
-        if not map_path:
-            print(USAGE, file=sys.stderr)
-            return 2
-        map_path = str(Path(os.path.realpath(Path(root, map_path))).relative_to(os.path.realpath(root)))
-        rec = gate.approved_record(root, state_dir, map_path) or {}
-        rec_file = map_path
+        if map_path:
+            map_path = str(Path(os.path.realpath(Path(root, map_path))).relative_to(os.path.realpath(root)))
+            rec = gate.approved_record(root, state_dir, map_path) or {}
+            rec_file = map_path
+        else:
+            sid = opt(args, "--session") or next((os.environ[k] for k in ("CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID") if os.environ.get(k)), None)
+            rec = gate.latest_approval(state_dir, sid) or {}
         if not rec:
-            problems.append(f"{map_path} 에 대한 사용자 승인 기록이 없다(승인 전이거나 대화로만 승인한 일). 승인된 기준이 없어 판정하지 않는다")
-        requests = ([f"(승인 메시지) {rec['prompt']}"] + [f"(승인 뒤 메시지) {m}" for m in rec.get("after", [])]) if rec else []
-        plan = None
-        criteria = f"### {map_path}\n{(rec.get('criteria') or {}).get(map_path) or ''}" if rec else ""
-        vfile = Path(root, map_path).parent / "verify" / "state.json"
+            problems.append("사용자 승인 기록이 없다(승인 전이거나 관문 기록이 없음). 승인된 요청·계획이 없어 판정하지 않는다")
+        reqs = rec.get("requests") or ([rec["prompt"]] if rec.get("prompt") else [])
+        requests = [f"(승인 전·승인 메시지) {m}" for m in reqs] + [f"(승인 뒤 메시지) {m}" for m in rec.get("after", [])]
+        if rec and not reqs:
+            problems.append("요청 원문을 확보하지 못했다(입력 부족)")
+        plan = rec.get("plan") if rec else None
+        criteria = f"### {map_path}\n{(rec.get('criteria') or {}).get(map_path) or ''}" if rec and map_path else ""
+        if rec and not plan and not criteria.strip():
+            problems.append("승인받은 계획을 확보하지 못했다(입력 부족): 승인 직전 답이 대화 기록에 없고 지도도 없다")
+        vfile = (Path(root, map_path).parent / "verify" if map_path else Path(root, "work", "review")) / "state.json"
         vstate = json.loads(vfile.read_text()) if vfile.is_file() else {}
         if vstate.get("approved_at") != rec.get("approved_at"):
             vstate = {}  # 새 승인: 회차를 1부터 센다(앞선 증거 폴더는 그대로 남는다)
@@ -382,7 +403,7 @@ def prepare(args):
         # 증거 폴더: 정해진 상위 폴더(--keep, 평가는 --log 옆 .round, 기본은 관문 기록의 verify/task-<id>) 안에 이 회차만의 새 하위 폴더를
         # 만든다. 이미 있는 폴더·파일(앞선 승인 시도의 증거, --keep 에 있던 사용자 파일)은 지우거나 덮지 않는다.
         parent = Path(opt(args, "--keep") or (Path(opt(args, "--log")).with_suffix(".round") if opt(args, "--log") else
-                                               (Path(root, rec_file).parent / "verify" if rec_file else tempfile.gettempdir())))
+                                               (Path(root, rec_file).parent / "verify" if rec_file else (Path(root, "work", "review") if not explicit else Path(tempfile.gettempdir())))))
         parent.mkdir(parents=True, exist_ok=True)
         keep = Path(tempfile.mkdtemp(prefix=f"round-{n}-", dir=parent))
         result["kept"] = str(keep)  # 이 회차의 고정 대상(git 저장소)·시작 상태·diff·입력·판정을 지우지 않고 남긴다
@@ -391,6 +412,8 @@ def prepare(args):
         if explicit:
             current = baseline(root)
             changed = current.strip() != criteria.strip()
+        elif not rec_file:  # 지도 없는 승인: 승인받은 계획은 관문이 고정했으므로 바뀔 기준이 없다
+            changed, current = False, ""
         else:
             now = gate.maps(root)
             changed = bool(rec) and now.get(rec_file) != rec.get("targets", {}).get(rec_file)
@@ -446,7 +469,7 @@ def prepare(args):
             print(json.dumps(ready, ensure_ascii=False))
             return 0
         (keep / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
-    return finalize(result, rounds, rounds_max, explicit, state_file if explicit else (vfile if rec_file else None), rec, rec_file, state_dir, root, gate)
+    return finalize(result, rounds, rounds_max, explicit, state_file if explicit else vfile, rec, rec_file, state_dir, root, gate)
 
 
 def finalize(result, rounds, rounds_max, explicit, state_path, rec, rec_file, state_dir, root, gate):

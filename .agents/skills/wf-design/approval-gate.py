@@ -152,6 +152,45 @@ def inside(root, path, top):
     return p == top or p.startswith(top + os.sep)
 
 
+def last_answer(path):
+    """하네스가 넘긴 대화 기록(transcript_path)에서 에이전트의 마지막 답 글. 읽지 못하면 None.
+    Claude Code 기록({"type": "assistant", "message": ...})과 Codex 기록({"type": "response_item", "payload": ...})을 읽는다.
+    사용자 메시지가 나오면 새 답이 시작된다(도구 결과만 든 줄은 사용자 메시지로 보지 않는다). 기록 끝 2MB 만 읽는다."""
+    if not path:
+        return None
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 2_000_000))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return None
+    answers, cur = [], []
+    for line in lines:
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(e, dict):
+            continue
+        msg = e.get("message") if e.get("type") in ("user", "assistant") else (e.get("payload") if e.get("type") == "response_item" else None)
+        if not isinstance(msg, dict) or msg.get("role") not in ("user", "assistant"):
+            continue
+        content = msg.get("content")
+        parts = [{"type": "text", "text": content}] if isinstance(content, str) else content if isinstance(content, list) else []
+        texts = [str(x.get("text") or "") for x in parts if isinstance(x, dict) and x.get("type") in ("text", "output_text", "input_text")]
+        if msg["role"] == "user":
+            if texts:  # 사용자 메시지(도구 결과만 든 줄은 아님): 앞 답을 닫는다
+                if cur:
+                    answers.append("\n".join(cur))
+                cur = []
+        else:
+            cur += [t for t in texts if t.strip()]
+    if cur:
+        answers.append("\n".join(cur))
+    return answers[-1] if answers else ""
+
+
 def rel_map(root, path):
     """수정 도구 대상이 지도면 저장소 기준 상대 경로, 아니면 None."""
     if not inside(root, path, Path(root, ALLOWED_WRITE_DIR)) or Path(path).name != MAP_NAME:
@@ -199,11 +238,11 @@ def write_targets(inp):
 
 
 def verify_record(root, path):
-    """경로가 검증 실행기의 기록(work/<작업명>/verify/ 아래)인가."""
+    """경로가 검토기의 기록(work/<작업명>/verify/ 또는 지도 없는 검토의 work/review/)인가."""
     if not inside(root, path, Path(root, ALLOWED_WRITE_DIR)):
         return False
     rel = Path(os.path.realpath(Path(path) if Path(path).is_absolute() else root / path)).relative_to(os.path.realpath(root)).parts
-    return len(rel) >= 3 and rel[2] == "verify"
+    return (len(rel) >= 3 and rel[2] == "verify") or (len(rel) >= 2 and rel[1] == "review")  # work/<작업명>/verify/, work/review/
 
 
 def decide(data, root, state, approved, reason=REASON):
@@ -318,7 +357,7 @@ def approved_record(root, state, map_path):
     return best
 
 
-def advance(rec, event, root, now_maps, turn_maps=None, prompt="", extra=(), runner=False, snapshot=None):
+def advance(rec, event, root, now_maps, turn_maps=None, prompt="", extra=(), runner=False, snapshot=None, plan=None):
     """승인 상태가 바뀌는 유일한 곳. 사건(prompt·pre·stop) 하나와 지금 관찰(지도 지문)을 받아 다음 기록을 낸다.
     파일 읽기·쓰기와 도구 거절은 main 이 맡는다. 돌려줌: (새 기록, {decision, closed(닫힌 원인 지도), reset_start(턴 끝 감지 시작점을 지금으로)})."""
     was_open = bool(rec.get("approved"))
@@ -337,8 +376,10 @@ def advance(rec, event, root, now_maps, turn_maps=None, prompt="", extra=(), run
                     targets.setdefault(m, now_maps[m])
             if not targets:
                 targets = {m: now_maps[m] for m in rec.get("targets", {}) if now_maps.get(m)}
+            # 검토 입력 고정: 승인 전 사용자 메시지(요청 원문)와 승인 직전 에이전트가 보여 준 계획을 그대로 남긴다(에이전트가 나중에 요약한 글로 대신하지 않는다)
             rec = {"approved": True, "binding": True, "kind": "map" if targets else "conversation", "targets": targets, "criteria": {},
-                   "prompt": prompt, "after": [], "touched": [], "wrote": [], "approved_at": time.time(), "base": snapshot() if snapshot else None}
+                   "prompt": prompt, "requests": rec.get("pending", []) + [prompt], "plan": plan() if plan else None,
+                   "after": [], "touched": [], "wrote": [], "approved_at": time.time(), "base": snapshot() if snapshot else None, "pending": []}
             info["decision"] = "open"
         elif is_revoke(prompt) or mentions_approval(prompt):
             rec.update(approved=False, closed_by="revoke")
@@ -346,6 +387,8 @@ def advance(rec, event, root, now_maps, turn_maps=None, prompt="", extra=(), run
         else:
             if rec.get("approved"):
                 rec.setdefault("after", []).append(prompt)  # 승인 뒤 사용자 메시지(검증자가 범위 변경을 대조한다)
+            else:
+                rec["pending"] = (rec.get("pending", []) + [prompt])[-30:]  # 다음 승인의 요청 원문(승인 전 사용자 메시지)
             info["decision"] = "keep"
         rec["seen"] = True
         return rec, info
@@ -359,6 +402,20 @@ def advance(rec, event, root, now_maps, turn_maps=None, prompt="", extra=(), run
     done = ("turn-end", "map-removed") if event == "stop" else ("map-removed",)
     info["reset_start"] = was_open and rec.get("closed_by") in done
     return rec, info
+
+
+def latest_approval(state, sid=None):
+    """검토기가 쓴다(읽기만): 지도 없이 승인한 일의 승인 기록. 세션 id 가 있으면 그 세션의 것, 없으면 가장 최근 승인. 없으면 None."""
+    files = [state / f"{hashlib.sha256(str(sid).encode()).hexdigest()[:24]}.approval"] if sid else (sorted(state.glob("*.approval")) if state.is_dir() else [])
+    recs = []
+    for f in files:
+        try:
+            r = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(r, dict) and r.get("approved_at"):
+            recs.append(r)
+    return max(recs, key=lambda r: r["approved_at"]) if recs else None
 
 
 def main(mode, data):
@@ -388,7 +445,8 @@ def main(mode, data):
     if mode == "prompt":
         state.mkdir(exist_ok=True)
         rec, info = advance(rec, "prompt", root, now_maps, prompt=str(data.get("prompt") or ""),
-                            runner=os.environ.get("AWK_GATE_PROMPT_FROM") == "runner", snapshot=lambda: snapshot_files(root, state))
+                            runner=os.environ.get("AWK_GATE_PROMPT_FROM") == "runner", snapshot=lambda: snapshot_files(root, state),
+                            plan=lambda: last_answer(data.get("transcript_path")))
         decision = info["decision"]
         approval.write_text(json.dumps(rec, ensure_ascii=False))
         turnmaps.write_text(json.dumps(now_maps, ensure_ascii=False))

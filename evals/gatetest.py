@@ -195,8 +195,22 @@ with tempfile.TemporaryDirectory() as t:
           call("pre", {"tool_name": "Write", "tool_input": {"file_path": str(repo / ".git/awk-gate/x.approval")}, "session_id": "f1"}))
     shutil_rm(repo / "work")
     src = GATE.read_text(encoding="utf-8")
-    check("관문에 작업 선언 명령·대화 기록 읽기·에이전트 기록 저장소가 없다",
-          not _re.search(r"task begin|transcript_path|decl\.jsonl|\.awk-gate", src))
+    check("관문에 작업 선언 명령·에이전트 기록 저장소가 없다(대화 기록은 승인 직전 계획을 남기려고 읽기만 한다)",
+          not _re.search(r"task begin|decl\.jsonl|\.awk-gate", src))
+    # 검토 입력 고정: 승인 전 사용자 메시지(요청 원문)와 승인 직전 에이전트 답(계획)을 그대로 남긴다
+    tr = Path(t) / "tr.jsonl"
+    tr.write_text("\n".join(json.dumps(e, ensure_ascii=False) for e in [
+        {"type": "user", "message": {"role": "user", "content": "회원 탈퇴 기능을 만들어 주세요. REQ-MARKER"}},
+        {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "계획: 비활성화로 바꿉니다. PLAN-MARKER 진행할까요?"}]}}]) + "\n")
+    tp("q1", "회원 탈퇴 기능을 만들어 주세요. REQ-MARKER")
+    tp("q1", "사실 비활성화하라는 뜻이었어요")
+    call("prompt", {"prompt": "진행해 주세요", "session_id": "q1", "transcript_path": str(tr)})
+    r_ = rec("q1")
+    check("승인 기록에 승인 전 사용자 메시지 전부와 승인 메시지가 요청 원문으로 남는다",
+          r_["requests"] == ["회원 탈퇴 기능을 만들어 주세요. REQ-MARKER", "사실 비활성화하라는 뜻이었어요", "진행해 주세요"])
+    check("승인 기록에 승인 직전 에이전트가 보여 준 계획이 그대로 남는다", "PLAN-MARKER" in (r_.get("plan") or ""))
+    tp("q2", "버튼 바꿔 주세요"); tp("q2", "진행해 주세요")
+    check("대화 기록이 없으면 계획은 비어 있다(검토기가 입력 부족으로 다룬다)", rec("q2").get("plan") is None and rec("q2")["requests"] == ["버튼 바꿔 주세요", "진행해 주세요"])
 
     # 승인 턴 안의 옮겨 적기: "추천안대로 진행"으로 정한 결정을 지도에 옮겨도 닫히지 않고, 턴 끝의 기준에 묶인다
     tp("b1", "할 일 숨기기")
