@@ -164,7 +164,7 @@ print("" if v is None else str(v).lower() if isinstance(v, bool) else v)' "$1" 2
     | python3 -I -c 'import json,sys
 try: d = json.load(sys.stdin)
 except ValueError: d = {}
-print("true" if d.get("task") and d.get("waiting") else "false")' 2>/dev/null)
+print("true" if d.get("waiting") else "false")' 2>/dev/null)
     # Codex 의 exec 기록(--json)에는 하위 에이전트 생성(spawn_agent)이 남지 않는다. 관찰용으로 이 세션의 원본 기록(rollout)을 남긴다.
   [ "$harness" != codex ] || { [ -z "$sid" ] || find "$ch/sessions" -name "rollout-*$sid.jsonl" -exec cat {} + > "$out.rollout.jsonl" 2>/dev/null; rm -rf "${ch:?}"; }
   seconds=$(( $(date +%s) - start ))

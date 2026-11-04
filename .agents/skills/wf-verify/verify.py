@@ -3,16 +3,13 @@
 언제: AGENTS.md 「필요한 단계만」이 별도 검증을 요구할 때(공용 경계·큰 연결 불확실성·틀리면 영향 큼·사용자 요구) 전체 담당자가 실행한다.
 작은 수정은 이 실행기 없이 직접 확인한다.
 
-  python3 .agents/skills/wf-verify/verify.py --harness claude|codex [--rounds 2] [--session <세션 id>]
+  python3 .agents/skills/wf-verify/verify.py --harness claude|codex --map work/<작업명>/work.md [--rounds 2]
 
-무엇을 넘기나(구현자가 고르지 않는다): 승인 관문이 기록한 이 작업의 사용자 원문 전부(승인 메시지 포함), 사용자가 승인한 때의
-기준(지도 `## 기준` 절이나 승인을 물은 답의 기준), 승인을 물은 답(계획), 첫 승인 때 보존한 제품 파일 상태부터 지금까지의 변경(diff).
-구현자의 답·지도의 `## 증거`(자기평가)는 넘기지 않는다. 회차마다 고정 대상 저장소·시작 상태·전체 diff·입력·판정을
-work/.awk-gate/<세션 키>/verify/task-<id>/round-N-<고유 이름>/(--keep 이나 평가의 --log 옆 .round 폴더를 주면 그 안)에 새로 만들어 남긴다.
-이 실행기는 에이전트 셸(Codex 의 표준 쓰기 경계 workspace-write 처럼 `.git` 이 읽기 전용인 곳 포함)에서 돌므로 관문 기록(.git/awk-gate)은
-읽기만 한다. 판정 회차는 에이전트 기록(work/.awk-gate/<세션 키>/decl.jsonl)에 덧붙이고, 다음 훅이 관문의 작업 기록으로 흡수한다.
-기존 폴더·파일은 지우거나 덮지 않는다(같은 작업을 다시 승인해 회차 번호가 1부터 다시 시작해도 앞선 증거는 그대로다). 작업은 하네스가 셸에 주는 세션 id(CLAUDE_CODE_SESSION_ID·CODEX_THREAD_ID)나
---session 으로 고르고, 둘 다 없으면 작업 기록이 하나일 때만 고른다(여럿이면 추측하지 않고 미확인).
+독립 검증은 지도 승인을 받은 작업에만 쓴다(대화로 승인한 작은 일은 직접 확인한다). 무엇을 넘기나(구현자가 고르지 않는다):
+승인 관문이 승인 때 남긴 그 지도의 `## 기준`(사용자가 승인한 글), 승인 메시지와 승인 뒤의 사용자 메시지, 승인 때 보존한 제품 파일 상태부터
+지금까지의 변경(diff). 구현자의 답·지도의 `## 증거`(자기평가)는 넘기지 않는다. 회차마다 고정 대상 저장소·시작 상태·diff·입력·판정을
+지도 옆 verify/round-N-<고유 이름>/ 에 새로 남기고(--keep 이나 평가의 --log 옆 .round 폴더를 주면 그 안), 회차 기록은 verify/state.json 에 둔다.
+관문 기록(.git/awk-gate)은 읽기만 한다. 기존 폴더·파일은 지우거나 덮지 않는다.
 
 판정(state)과 종료 코드:
   ok(0)          검증자가 형식대로 모든 조건을 충족으로 냈다. 이것만 완료다.
@@ -20,9 +17,9 @@ work/.awk-gate/<세션 키>/verify/task-<id>/round-N-<고유 이름>/(--keep 이
   incomplete(4)  재검증 한도에 닿았는데 마지막 판정도 RETURN 이다. 미완료로 보고한다. 한도(--rounds, 기본 2)는 그 승인의 첫 회차에
                  정해지고, 닿은 뒤에는 새 검증자를 띄우지 않는다. 사용자의 새 승인(관문이 검증 기록을 비움)만 새 시도를 연다.
   unverified(5)  판정하지 못했다(빈 답·형식 오류·조건 누락·검증자 하네스 없음·오류·검증자가 대상 파일을 바꿈·사용자 원문이나
-                 승인 기록이 없음, 근거 불완전: 시작 내용 미보존·diff 실패·잘림, 검증하는 동안 작업·승인 기준·제품 파일이 바뀜).
+                 승인 기록이 없음, 근거 불완전: 시작 내용 미보존·diff 실패·잘림, 검증하는 동안 승인·제품 파일이 바뀜).
                  미확인은 완료가 아니다. 성공처럼 넘어가지 않고 사유와 재개 조건을 보고한다.
-판정 결과는 작업 기록(verify)에 남는다(위 에이전트 기록을 거쳐 흡수. 회차는 작업 id 와 승인 시각이 지금 승인 시도와 같을 때만 합친다). 검증자의 글은 이 명령의 출력으로만 돌아오고 사용자 메시지가 아니므로,
+회차 기록은 승인 시각이 같을 때만 이어 센다(새 승인이면 1회차부터). 검증자의 글은 이 명령의 출력으로만 돌아오고 사용자 메시지가 아니므로,
 그 안의 "승인합니다"·"취소합니다" 는 승인 상태를 바꾸지 않는다.
 
 평가 실행기(evals/run.sh)는 같은 실행기를 쓰되, 사용자 원문·계획·기준·작업 시작 상태를 파일로 직접 넘긴다
@@ -326,13 +323,13 @@ def copy_kit_paths(vdir, base):
 def main(args):
     harness = opt(args, "--harness")
     if harness not in ("claude", "codex"):
-        print("사용: verify.py --harness claude|codex [--rounds N] [--session ID]", file=sys.stderr)
+        print("사용: verify.py --harness claude|codex --map work/<작업명>/work.md [--rounds N]", file=sys.stderr)
         return 2
     asked_max = int(opt(args, "--rounds") or 2)
     root = Path(run(["git", "rev-parse", "--show-toplevel"], cwd=os.getcwd()).stdout.decode().strip() or os.getcwd())
     gate = gate_module()
     explicit = opt(args, "--request") is not None
-    rec, rec_file, rec_key, state_dir = {}, None, None, None
+    rec, rec_file, state_dir = {}, None, None
     problems = []
     if explicit:  # 평가 실행기: 입력을 파일로 받는다
         requests = [Path(f).read_text(encoding="utf-8") for f in opt(args, "--request", True)]
@@ -340,24 +337,24 @@ def main(args):
         criteria = Path(opt(args, "--criteria")).read_text(encoding="utf-8") if opt(args, "--criteria") else ""
         state_file = Path(opt(args, "--state") or tempfile.mktemp(suffix=".json"))
         vstate = json.loads(state_file.read_text()) if state_file.is_file() else {}
-    else:  # 일반 작업: 관문이 기록한 이 작업의 원문·승인 기준을 쓴다
+    else:  # 일반 작업: 관문이 승인 때 남긴 이 지도의 기준과 사용자 메시지를 쓴다
+        map_path = opt(args, "--map")
         state_dir = gate.locate(root)[1]
-        rec, rec_key, why = gate.current(root, state_dir, args)  # 관문 기록 + 아직 흡수되지 않은 에이전트 선언(읽기만)
-        rec_file = rec_key  # 작업을 골랐는가(세션 키)
-        rec = rec or {}
-        if not rec_file:
-            problems.append(why)
-        elif not rec.get("approved_at"):
-            problems.append("이 작업에는 사용자 승인 기록이 없다(사용자 답 대기). 승인된 기준이 없어 판정하지 않는다")
-        requests = gate.read_messages(state_dir, rec) if rec_file else []
-        if rec_file and requests is None:
-            problems.append("관문의 사용자 원문 기록이 작업 기록과 맞지 않는다(지워지거나 깨짐)")
-            requests = []
-        plan = rec.get("plan")
-        if rec_file and plan is None:
-            plan = "(추출 실패: 승인을 물은 답을 대화 기록에서 읽지 못했다. 승인 원문이 가리키는 계획에 기대는 조건은 미확인으로 둔다)"
-        criteria = "\n\n".join(f"### {k}\n{v}" for k, v in (rec.get("criteria") or {}).items() if v)
-        vstate = rec.get("verify") or {}
+        if not map_path:
+            print("사용: verify.py --harness claude|codex --map work/<작업명>/work.md [--rounds N]", file=sys.stderr)
+            return 2
+        map_path = str(Path(os.path.realpath(Path(root, map_path))).relative_to(os.path.realpath(root)))
+        rec = gate.approved_record(root, state_dir, map_path) or {}
+        rec_file = map_path
+        if not rec:
+            problems.append(f"{map_path} 에 대한 사용자 승인 기록이 없다(승인 전이거나 대화로만 승인한 일). 승인된 기준이 없어 판정하지 않는다")
+        requests = ([f"(승인 메시지) {rec['prompt']}"] + [f"(승인 뒤 메시지) {m}" for m in rec.get("after", [])]) if rec else []
+        plan = None
+        criteria = f"### {map_path}\n{(rec.get('criteria') or {}).get(map_path) or ''}" if rec else ""
+        vfile = Path(root, map_path).parent / "verify" / "state.json"
+        vstate = json.loads(vfile.read_text()) if vfile.is_file() else {}
+        if vstate.get("approved_at") != rec.get("approved_at"):
+            vstate = {}  # 새 승인: 회차를 1부터 센다(앞선 증거 폴더는 그대로 남는다)
     conditions = Path(opt(args, "--conditions")).read_text(encoding="utf-8") if opt(args, "--conditions") else ""
     required = ids(conditions + "\n" + criteria)
     rounds = list(vstate.get("rounds", []))
@@ -369,7 +366,7 @@ def main(args):
     if asked_max != rounds_max:
         result["note"] = f"재검증 한도는 이 시도의 첫 회차에 정한 {rounds_max} 회다(--rounds {asked_max} 는 쓰지 않았다)"
     start_print = product_print(gate, root)
-    start_task = (rec.get("id"), tuple(rec.get("hashes", [])), rec.get("approved_at"))
+    start_task = (rec.get("approved_at"), json.dumps(rec.get("targets", {}), sort_keys=True), rec.get("approved"))
     if len(ran) >= rounds_max:
         # 한도에 이미 닿았다: 새 검증자를 띄우지 않는다. 마지막 판정이 OK 이고 그 뒤 제품 파일이 그대로면 그 OK 를 그대로 낸다.
         last = ran[-1]
@@ -382,7 +379,7 @@ def main(args):
         # 증거 폴더: 정해진 상위 폴더(--keep, 평가는 --log 옆 .round, 기본은 관문 기록의 verify/task-<id>) 안에 이 회차만의 새 하위 폴더를
         # 만든다. 이미 있는 폴더·파일(앞선 승인 시도의 증거, --keep 에 있던 사용자 파일)은 지우거나 덮지 않는다.
         parent = Path(opt(args, "--keep") or (Path(opt(args, "--log")).with_suffix(".round") if opt(args, "--log") else
-                                               (gate.ensure_records(root, rec_key) / "verify" / f"task-{rec.get('id')}" if rec_file else tempfile.gettempdir())))
+                                               (Path(root, rec_file).parent / "verify" if rec_file else tempfile.gettempdir())))
         parent.mkdir(parents=True, exist_ok=True)
         keep = Path(tempfile.mkdtemp(prefix=f"round-{n}-", dir=parent))
         result["kept"] = str(keep)  # 이 회차의 고정 대상(git 저장소)·시작 상태·diff·입력·판정을 지우지 않고 남긴다
@@ -393,10 +390,8 @@ def main(args):
             changed = current.strip() != criteria.strip()
         else:
             now = gate.maps(root)
-            moved = [m for m in rec.get("targets", {}) if now.get(m) not in set(rec.get("hashes", []))]
-            changed = bool(moved)
-            current = "\n\n".join(f"### {m}\n{section(Path(root, m).read_text(encoding='utf-8', errors='replace')) or '(기준 절 없음)'}"
-                                  for m in moved if Path(root, m).is_file()) or "(지도 없음)"
+            changed = bool(rec) and now.get(rec_file) != rec.get("targets", {}).get(rec_file)
+            current = (section(Path(root, rec_file).read_text(encoding='utf-8', errors='replace')) if Path(root, rec_file).is_file() else None) or "(기준 절 없음)"
         if changed:
             note = f"\n주의: 구현자가 승인 뒤 작업 지도의 기준을 바꿨다. 바뀐 기준은 사용자가 승인한 것이 아니므로 판정 기준으로 쓰지 않는다. 지금 지도의 기준:\n{current or '(없음)'}\n"
         result["baseline_changed_after_approval"] = changed
@@ -413,8 +408,8 @@ def main(args):
         unsaved = []
         if opt(args, "--base-dir"):
             shutil.copytree(opt(args, "--base-dir"), base, symlinks=True)
-        elif rec.get("base_files") and (state_dir / rec["base_files"]).is_file():
-            unsaved = materialize_base(root, state_dir / rec["base_files"], base)
+        elif rec.get("base") and (state_dir / rec["base"]).is_file():
+            unsaved = materialize_base(root, state_dir / rec["base"], base)
         else:
             problems.append("작업 시작 파일 상태가 없어 이번 변경만 가려낼 수 없다")
             base.mkdir()
@@ -462,29 +457,23 @@ def main(args):
             else:
                 result.update(state=verdict["state"], reason=verdict.get("reason", ""))
             # 검증하는 동안 작업·승인 기준·제품 파일이 바뀌었으면 고정 대상의 판정은 남기되 지금 작업의 결과로 쓰지 않는다
-            fresh = (gate.current(root, state_dir, args)[0] or {}) if rec_file else {}
-            end_task = (fresh.get("id"), tuple(fresh.get("hashes", [])), fresh.get("approved_at")) if rec_file else start_task
+            fresh = (gate.approved_record(root, state_dir, rec_file) or {}) if rec_file else {}
+            end_task = (fresh.get("approved_at"), json.dumps(fresh.get("targets", {}), sort_keys=True), fresh.get("approved")) if rec_file else start_task
             if rc is not None and (end_task != start_task or product_print(gate, root) != start_print):
                 result.update(target_state=result["state"], state="unverified",
-                              reason="검증하는 동안 작업·승인 기준·제품 파일이 바뀌었다. 고정 대상의 판정은 남겼지만 지금 버전의 결과가 아니다")
+                              reason="검증하는 동안 승인·제품 파일이 바뀌었다. 고정 대상의 판정은 남겼지만 지금 버전의 결과가 아니다")
             rounds.append({"uid": os.urandom(8).hex(), "round": n, "state": result["state"], "target_state": result.get("target_state"), "reason": result.get("reason", ""),
                            "target": target, "product": start_print, "verifier_exit_code": rc, "ran": rc is not None, "kept": str(keep), "at": time.time()})
         (keep / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
     vstate = {"rounds": rounds, "state": result["state"], "reason": result.get("reason", ""), "max_rounds": rounds_max}
-    attached = True
     if explicit:
         state_file.write_text(json.dumps(vstate, ensure_ascii=False))
-    elif rec_file:  # 이 회차 판정을 에이전트 기록에 덧붙인다(관문 기록은 쓰지 않고, 승인 상태는 바꾸지 않는다). 그 사이 작업이 바뀌었으면 붙이지 않는다.
-        fresh = gate.current(root, state_dir, args)[0] or {}
-        attached = (fresh.get("id"), tuple(fresh.get("hashes", [])), fresh.get("approved_at")) == start_task
-        if attached:
-            gate.append_decl(root, rec_key, {"uid": os.urandom(8).hex(), "kind": "verify", "task": fresh.get("id"),
-                                             "approved_at": fresh.get("approved_at"), "round": rounds[-1], "state": result["state"],
-                                             "reason": result.get("reason", ""), "max_rounds": rounds_max, "at": time.time()})
-    result["attached_to_task"] = attached
-    # 사용자 답 대기(승인 전이거나 사용자 철회·기준 변경·새 기준으로 닫힘)면 검증이 OK 여도 완료가 아니다. 관문과 평가 실행기가 같은 규칙을 쓴다.
-    now_rec = (gate.current(root, state_dir, args)[0] or {}) if rec_file else {}
-    waiting = bool(rec_file) and gate.waiting(now_rec, gate.status(now_rec, gate.maps(root))[0])
+    elif rec:  # 회차 기록은 지도 옆에 둔다(승인 시각으로 어느 승인의 회차인지 가린다)
+        vfile.parent.mkdir(parents=True, exist_ok=True)
+        vfile.write_text(json.dumps({**vstate, "approved_at": rec.get("approved_at")}, ensure_ascii=False))
+    # 사용자 답 대기(승인이 철회·기준 변경으로 닫힘)면 검증이 OK 여도 완료가 아니다.
+    now_rec = (gate.approved_record(root, state_dir, rec_file) or {}) if rec_file else {}
+    waiting = bool(rec_file) and gate.status_json(now_rec)["waiting"]
     result["completion"] = completion(result["state"], waiting=waiting)
     msg = {"ok": "완료: 독립 검증이 모든 조건 충족을 냈다.",
            "returned": "돌려보냄: 아래 사유의 원인이 있는 곳(구현·검사·기준)을 고친 뒤 이 명령을 다시 실행해 새 버전을 판정받는다. 원문·계약으로 정할 수 없는 결과가 원인이면 고치지 않고 사용자에게 묻는다.",

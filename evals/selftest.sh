@@ -26,10 +26,11 @@ for dir in "$here"/cases/*/; do
       *) [ $rc -eq 1 ] && ok "$name: 실패 표본($(basename "$sample"))을 실패로" || ng "$name: 실패 표본($(basename "$sample"))을 rc=$rc 로 판정" ;;
     esac
     # observe.json 이 있는 표본은 관찰 사실(편집 흔적·독립 검증 주장·검증자 흔적)도 기대값과 맞는지 본다.
+    # 기대값에 적힌 항목은 모두 같아야 한다. 측정값(first_reply_chars 등)처럼 기대값에 없는 항목은 비교하지 않는다.
     if [ -f "$sample/observe.json" ]; then
       names=$( [ ! -f "$dir/observe.txt" ] || cat "$dir/observe.txt")
       got=$(python3 -I "$here/observe.py" "$sample/transcript.jsonl" $names 2>&1)
-      python3 -I -c 'import json,sys; sys.exit(json.loads(sys.argv[1]) != json.load(open(sys.argv[2])))' "$got" "$sample/observe.json" 2>/dev/null \
+      python3 -I -c 'import json,sys; g=json.loads(sys.argv[1]); w=json.load(open(sys.argv[2])); sys.exit(any(g.get(k, KeyError) != v for k, v in w.items()))' "$got" "$sample/observe.json" 2>/dev/null \
         && ok "$name: 관찰($(basename "$sample")) 기대값과 같음" || ng "$name: 관찰($(basename "$sample")) 다름: $got"
     fi
     rm -rf "${project:?}"

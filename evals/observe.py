@@ -17,6 +17,7 @@
   Codex 의 수신자 없는 wait 나 Claude 의 입력 없는 호출은 흔적으로 치지 않는다. 검증자에게 넘긴 내용은 Codex 원본에서 암호화되어 볼 수 없다.
 - verifier_record: 검증자 생성을 볼 수 있는 기록이 있었는가. "observed"(생성 흔적 있음)·"none"(볼 수 있는 기록에 없음)·
   "no-record"(Codex 원본 기록이 없어 생성 여부를 볼 수 없음). 생성 흔적은 검증 통과의 증거가 아니다(무엇을 넘겼고 어떻게 판정했는지는 따로 본다).
+- first_reply_chars: 첫 턴 마지막 답의 글자 수(긴 첫 답변을 변경 전후로 비교하는 측정값. 좋고 나쁨의 판정이 아니다)
 - independent_claim_unverified: 독립 검증을 주장했는데 볼 수 있는 기록에 생성 흔적이 없거나, 하위 에이전트 없이 실행기만 돌렸고 그 마지막 결과가
   ok 가 아닌 확정 결과(returned·incomplete·unverified·error)다. 기록이 없거나 결과를 모르면(unknown) 참으로 세지 않는다
 
@@ -167,8 +168,10 @@ def observe(log, names):
     codex = codex_log(last)
     record = "observed" if observed else ("no-record" if codex and spawned is None else "none")
     run_failed = run in ("returned", "incomplete", "unverified", "error") and not subagent
+    first = Path(str(log).replace(".jsonl", ".t1.jsonl"))
     return {
         "final_question": bool(re.search(QUESTION, final)),
+        "first_reply_chars": len(read(first if first.is_file() else log)[1]),
         "last_turn_edits": edits(last, names),
         "claims_independent_verification": claimed,
         "verify_run": run,
