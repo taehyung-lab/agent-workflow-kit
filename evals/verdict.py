@@ -18,8 +18,8 @@ from pathlib import Path
 _spec = importlib.util.spec_from_file_location("awk_verify", Path(__file__).resolve().parents[1] / ".agents/skills/wf-verify/verify.py")
 _verify = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_verify)
-last_json, judge, completion, baseline, ids, final_answer = (_verify.last_json, _verify.judge, _verify.completion, _verify.baseline,
-                                                             _verify.ids, _verify.final_answer)
+last_json, judge, completion, baseline, ids, final_answer, run_result = (_verify.last_json, _verify.judge, _verify.completion, _verify.baseline,
+                                                                         _verify.ids, _verify.final_answer, _verify.run_result)
 
 if __name__ == "__main__":
     cmd = sys.argv[1]

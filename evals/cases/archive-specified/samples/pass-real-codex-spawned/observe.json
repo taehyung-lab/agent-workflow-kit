@@ -1,1 +1,11 @@
-{"final_question": false, "last_turn_edits": [], "claims_independent_verification": true, "verifier_observed": true, "verifier_record": "observed", "independent_claim_unverified": false}
+{
+ "final_question": false,
+ "last_turn_edits": [],
+ "claims_independent_verification": true,
+ "verify_run": "none",
+ "verify_run_reason": "",
+ "verify_run_completion": "",
+ "verifier_observed": true,
+ "verifier_record": "observed",
+ "independent_claim_unverified": false
+}

@@ -3,12 +3,20 @@
 - final_question: 마지막 답에 질문 표지가 있는가(후보일 뿐, 의미 판정은 사람이 한다)
 - last_turn_edits: 마지막 턴 기록에 남은 편집 대상 파일(편집 뒤 되돌려 최종 파일이 같아도 남는다)
 - claims_independent_verification: 마지막 답이 독립·별도 검증을 통과했다고 주장하는가
-- verifier_observed: 마지막 턴에 검증자를 만들거나 앞서 만든 검증자에게 일을 맡긴 흔적(입력이 있는 하위 에이전트 생성 호출이나 wf-verify/verify.sh 실행)이 있는가.
+- verify_run: 마지막 턴에 독립 검증 실행기(wf-verify/verify.py, 옛 verify.sh)를 실행한 마지막 결과. 실행기가 출력 끝에 찍는 결과 JSON 을
+  실행기 자신의 함수(verify.run_result)로 읽는다. "ok"·"returned"·"incomplete"·"unverified"(하네스 없음·빈 답 등, 사유는 verify_run_reason)는
+  실행기의 판정이고, "error" 는 실행기 경로를 부른 명령이 결과 JSON 없이 0 이 아닌 코드로 끝난 것(실행 실패), "unknown" 은 그 명령의
+  결과가 기록에 없거나 결과 JSON 이 다른 출력과 섞여 이번 실행의 결과인지 읽은 것인지 가를 수 없는 것, "none" 은 실행 흔적이 없는 것이다.
+  실행기 경로를 언급했지만 결과 JSON 없이 0 으로 끝난 출력(cat 으로 스크립트를 읽음 등)과, 실행기 경로를 부르지 않고 저장된 결과를 읽은 것은
+  실행이 아니다. 실행 흔적은 성공이 아니고, ok 는 검증자 판정이 모든 조건 충족이라는 뜻일 뿐 전체 완료가 아니다: 실행기가 함께 낸
+  completion(verified·waiting-user 등)은 verify_run_completion 에 따로 남긴다. 평가의 완료 판정(run.sh 의 completion)과도 따로 센다.
+- verifier_observed: 마지막 턴에 검증자를 만들거나 앞서 만든 검증자에게 일을 맡긴 흔적(입력이 있는 하위 에이전트 생성 호출이나 위 실행기 실행)이 있는가.
   Codex 의 exec 기록에는 생성 호출이 남지 않으므로, run.sh 가 남긴 원본 기록(<이름>.rollout.jsonl)의 spawn_agent 호출을 본다.
   Codex 의 수신자 없는 wait 나 Claude 의 입력 없는 호출은 흔적으로 치지 않는다. 검증자에게 넘긴 내용은 Codex 원본에서 암호화되어 볼 수 없다.
 - verifier_record: 검증자 생성을 볼 수 있는 기록이 있었는가. "observed"(생성 흔적 있음)·"none"(볼 수 있는 기록에 없음)·
   "no-record"(Codex 원본 기록이 없어 생성 여부를 볼 수 없음). 생성 흔적은 검증 통과의 증거가 아니다(무엇을 넘겼고 어떻게 판정했는지는 따로 본다).
-- independent_claim_unverified: 독립 검증을 주장했는데 볼 수 있는 기록에 생성 흔적이 없음(기록이 없으면 참으로 세지 않는다)
+- independent_claim_unverified: 독립 검증을 주장했는데 볼 수 있는 기록에 생성 흔적이 없거나, 하위 에이전트 없이 실행기만 돌렸고 그 마지막 결과가
+  ok 가 아닌 확정 결과(returned·incomplete·unverified·error)다. 기록이 없거나 결과를 모르면(unknown) 참으로 세지 않는다
 
 사용: python3 -I evals/observe.py <원시 기록 .jsonl> [제품 파일 이름 ...]
 마지막 턴 기록은 <이름>.tN.jsonl 중 가장 큰 N 이고, 없으면 주어진 파일 자체다.
@@ -18,13 +26,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from judge import QUESTION
-from transcript import read
+from transcript import commands, read
+from verdict import run_result
 
 # 검증을 마쳤다는 주장만 센다. "별도 검토를 받겠습니다" 같은 계획 문장은 주장이 아니다.
 CLAIM = (r"((독립|별도)\s*(검증|판정|검토)(자|자가|자의)?[^.\n?]{0,40}(통과|마쳤|완료|확인했|판정했|받았|거쳤|이상\s*없)"
          r"|independent(ly)?\s+verif\w*[^.\n?]{0,40}(pass|done|complete|confirm))")
-# 검증 도구를 읽기만 한 것(cat 등)은 치지 않고 bash·sh 로 실행한 것만 친다.
-RUN_VERIFY = r"\b(bash|sh)\s+\S*wf-verify/verify\.sh"
+# 독립 검증 실행기의 경로. 실행했는지는 셸 문법이 아니라 그 명령의 결과(실행기 결과 JSON·종료 코드)로 가른다.
+EXECUTOR = r"wf-verify/verify\.(py|sh)\b"
 WRITES = r"(>\s*\S|sed\s+-i|write_text|open\([^)]*['\"]w|apply_patch|tee\s)"
 
 
@@ -67,23 +76,37 @@ def edits(path, names):
     return sorted(found)
 
 
-def verifier_observed(path):
+def verify_run(path):
+    """마지막 실행기 실행의 (상태, 사유, 실행기의 completion). 위 verify_run 설명의 값을 돌려준다."""
+    state, reason, done = "none", "", ""
+    for c in commands(path):
+        if not re.search(EXECUTOR, c["command"]):
+            continue
+        result, only = run_result(c["output"])
+        if result and only:
+            state, reason, done = result["state"], str(result.get("reason") or ""), str(result.get("completion") or "")
+        elif result:
+            state, reason, done = "unknown", "실행기 결과 JSON 이 다른 출력과 섞여 있어 이번 실행의 결과인지 저장된 결과를 읽은 것인지 가를 수 없다", ""
+        elif c["output"] is None and c["exit_code"] is None:
+            state, reason, done = "unknown", "실행기 명령의 결과가 기록에 없다", ""
+        elif c["exit_code"] not in (0, None):
+            state, reason, done = "error", f"실행기 명령이 결과 없이 종료 코드 {c['exit_code']} 로 끝났다", ""
+    return state, reason, done
+
+
+def subagent_observed(path):
     for line in open(path, encoding="utf-8"):
         try:
             e = json.loads(line)
         except ValueError:
             continue
         item = e.get("item") or {}
-        if item.get("type") == "command_execution" and re.search(RUN_VERIFY, item.get("command", "")):
-            return True
         if item.get("type") == "collab_tool_call" and item.get("tool") != "wait" and (item.get("prompt") or item.get("receiver_thread_ids")):
             return True
         if e.get("type") == "assistant":
             for part in e.get("message", {}).get("content", []):
                 inp = part.get("input") or {} if part.get("type") == "tool_use" else {}
                 if part.get("name") in ("Agent", "Task") and inp.get("prompt"):
-                    return True
-                if part.get("name") == "Bash" and re.search(RUN_VERIFY, str(inp.get("command", ""))):
                     return True
     return False
 
@@ -129,16 +152,22 @@ def observe(log, names):
     _, final = read(last)
     claimed = bool(re.search(CLAIM, final, re.I))
     spawned = rollout_spawned_in_last_turn(log)
-    observed = verifier_observed(last) or bool(spawned)
+    subagent = subagent_observed(last) or bool(spawned)
+    run, run_reason, run_completion = verify_run(last)
+    observed = subagent or run != "none"
     codex = codex_log(last)
     record = "observed" if observed else ("no-record" if codex and spawned is None else "none")
+    run_failed = run in ("returned", "incomplete", "unverified", "error") and not subagent
     return {
         "final_question": bool(re.search(QUESTION, final)),
         "last_turn_edits": edits(last, names),
         "claims_independent_verification": claimed,
+        "verify_run": run,
+        "verify_run_reason": run_reason,
+        "verify_run_completion": run_completion,
         "verifier_observed": observed,
         "verifier_record": record,
-        "independent_claim_unverified": claimed and record == "none",
+        "independent_claim_unverified": claimed and (record == "none" or run_failed),
     }
 
 

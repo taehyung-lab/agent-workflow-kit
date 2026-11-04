@@ -175,6 +175,22 @@ def final_answer(path):
     return final
 
 
+def run_result(output):
+    """명령 출력에서 이 실행기가 찍는 결과를 찾는다. 실행기의 출력은 표준 오류의 `[verify] ` 줄과, 맨 끝 한 줄의 결과 JSON
+    (state 가 판정 상태이고 completion 이 있음, main·cli 의 마지막 print)뿐이다. 저장된 result.json 은 completion 이 없어 결과가 아니다.
+    돌려줌: (결과 객체 또는 None, 출력이 실행기 출력뿐인가). 다른 글이 섞였으면(예: 스크립트와 저장해 둔 출력을 함께 cat) 그 결과가
+    이번 실행의 것인지 읽은 것인지 출력만으로는 가를 수 없다. 평가 관찰(evals/observe.py)이 이 함수로 검증 실행과 그 판정을 읽는다."""
+    lines = [l for l in str(output or "").splitlines() if l.strip()]
+    for i in range(len(lines) - 1, -1, -1):
+        try:
+            obj = json.loads(lines[i])
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and obj.get("state") in EXIT and "completion" in obj:
+            return obj, i == len(lines) - 1 and all(l.startswith("[verify] ") for l in lines[:i])
+    return None, False
+
+
 # ---- 판정 대상 고정과 입력 ----
 
 def run(cmd, cwd=None, **kw):
@@ -466,7 +482,7 @@ def main(args):
     waiting = bool(rec_file) and gate.waiting(now_rec, gate.status(now_rec, gate.maps(root))[0])
     result["completion"] = completion(result["state"], waiting=waiting)
     msg = {"ok": "완료: 독립 검증이 모든 조건 충족을 냈다.",
-           "returned": "돌려보냄: 아래 사유의 원인을 고친 뒤 이 명령을 다시 실행해 새 버전을 판정받는다.",
+           "returned": "돌려보냄: 아래 사유의 원인이 있는 곳(구현·검사·기준)을 고친 뒤 이 명령을 다시 실행해 새 버전을 판정받는다. 원문·계약으로 정할 수 없는 결과가 원인이면 고치지 않고 사용자에게 묻는다.",
            "incomplete": "미완료: 재검증 한도에 닿았다. 남은 조건과 사유를 사용자에게 보고한다.",
            "unverified": "미확인: 판정하지 못했다. 완료로 보고하지 않고 사유와 재개 조건을 보고한다."}[result["state"]]
     if result["completion"] == "waiting-user":

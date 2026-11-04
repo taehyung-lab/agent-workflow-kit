@@ -3,7 +3,9 @@
 같은 사례·하네스를 비교하는 실행끼리 전역 지침 지문이 다르면 경고한다(그 비교는 키트 문장만의 효과가 아니다).
 상시 읽는 AGENTS.md 바이트도 커밋별로 보여 줘, 교체가 문서를 무겁게 했는지 함께 본다.
 "검토 필요"는 판정 검사가 자동으로 가르지 못해 원시 기록을 사람이 판정해야 하는 실행 수다.
-"검증주장 미확인"은 마지막 답이 독립·별도 검증 통과를 주장했지만 기록에 검증자 생성 흔적이 없는 실행 수다(기록이 부족해 볼 수 없으면 세지 않는다).
+"검증주장 미확인"은 마지막 답이 독립·별도 검증 통과를 주장했지만 기록에 검증자 흔적이 없거나, 검증 실행기만 돌렸고 그 결과가 ok 가 아닌 실행 수다(기록이 부족하거나 결과를 모르면 세지 않는다).
+"실행기 OK(완료)/실행"은 마지막 턴에 구현자가 검증 실행기를 실행한 흔적이 있는 실행 수(결과를 모르는 것 포함)와, 그중 실행기 판정이 ok 인 수,
+괄호 안은 실행기가 전체 완료(verified)까지 낸 수다(ok 여도 사용자 답 대기면 waiting-user). 실행 흔적은 성공이 아니며, 이 열은 완료 판정에 쓰지 않는다.
 "외부 장애"는 모델 용량·요청 한도 같은 하네스 밖 원인으로 판정하지 못한 실행 수다. 통과 수의 분모에서 뺀다.
 "입력"은 사례의 원래 턴만 보냈는지(original), 사용자 승인 턴(approve.txt)을 더했는지(with-approval)다. 둘은 따로 센다.
 "사용자 턴"은 실제로 보낸 사용자 턴 수, "승인 대기"는 그중 승인이 아니어서 쓰기가 막혀 있던 턴 수다(관문 훅 기록 기준).
@@ -27,7 +29,7 @@ for root in sys.argv[1:] or ["evals/results"]:
         m = json.loads(meta.read_text(encoding="utf-8"))
         rows[(m["case"], m.get("lang") or "-", m["harness"], m["kit_commit"][:7], m.get("input", "original"))].append(m)
 
-print(f"{'사례':<22} {'언어':<6} {'하네스':<7} {'키트':<8} {'입력':<13} {'사용자 턴':>5} {'승인 대기':>5} {'통과':>5} {'검토 필요':>6} {'검증주장 미확인':>9} {'하네스 실패':>8} {'외부 장애':>6} {'관문':>4} {'검증 완료':>6} {'답 대기':>5} {'미완료':>4} {'검증 미확인':>6} {'평균 초':>7} {'AGENTS.md 바이트':>16}")
+print(f"{'사례':<22} {'언어':<6} {'하네스':<7} {'키트':<8} {'입력':<13} {'사용자 턴':>5} {'승인 대기':>5} {'통과':>5} {'검토 필요':>6} {'검증주장 미확인':>9} {'실행기 OK(완료)/실행':>14} {'하네스 실패':>8} {'외부 장애':>6} {'관문':>4} {'검증 완료':>6} {'답 대기':>5} {'미완료':>4} {'검증 미확인':>6} {'평균 초':>7} {'AGENTS.md 바이트':>16}")
 fingerprints = defaultdict(set)
 for (case, lang, harness, commit, inp), ms in sorted(rows.items()):
     skipped = sum(m.get("check_unverified", False) for m in ms)
@@ -37,6 +39,9 @@ for (case, lang, harness, commit, inp), ms in sorted(rows.items()):
     gate = "/".join(sorted({"on" if m.get("approval_gate") else "off" for m in ms}))
     review = sum(m.get("check_needs_review", False) for m in ms)
     unverified = sum(m.get("observed", {}).get("independent_claim_unverified", False) for m in ms)
+    runs = [m.get("observed", {}) for m in ms]
+    executor = (f"{sum(o.get('verify_run') == 'ok' for o in runs)}({sum(o.get('verify_run_completion') == 'verified' for o in runs)})"
+                f"/{sum(o.get('verify_run', 'none') != 'none' for o in runs)}")
     seconds = sum(m["seconds"] for m in ms) // len(ms)
     verified = sum(m.get("completion") == "verified" for m in ms)
     incomplete = sum(m.get("completion") in ("incomplete", "check-failed") for m in ms)
@@ -44,7 +49,7 @@ for (case, lang, harness, commit, inp), ms in sorted(rows.items()):
     waiting = sum(m.get("completion") == "waiting-user" for m in ms)
     turns = "/".join(sorted({str(m.get("user_turns", "?")) for m in ms}))
     waits = "/".join(sorted({str(m.get("unapproved_turns", "?")) for m in ms}))
-    print(f"{case:<22} {lang:<6} {harness:<7} {commit:<8} {inp:<13} {turns:>5} {waits:>5} {passed:>2}/{judged:<2} {review:>6} {unverified:>9} {crashed:>8} {skipped:>6} {gate:>4} {verified:>6} {waiting:>5} {incomplete:>4} {vunverified:>6} {seconds:>7} {ms[0]['agents_md_bytes']:>16}")
+    print(f"{case:<22} {lang:<6} {harness:<7} {commit:<8} {inp:<13} {turns:>5} {waits:>5} {passed:>2}/{judged:<2} {review:>6} {unverified:>9} {executor:>14} {crashed:>8} {skipped:>6} {gate:>4} {verified:>6} {waiting:>5} {incomplete:>4} {vunverified:>6} {seconds:>7} {ms[0]['agents_md_bytes']:>16}")
     for m in ms:
         fingerprints[(case, harness)].add(json.dumps(m["global_instructions"], sort_keys=True))
 
