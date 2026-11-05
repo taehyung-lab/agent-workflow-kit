@@ -5,11 +5,13 @@
 
   python3 .agents/skills/wf-verify/verify.py prepare --map work/<작업명>/work.md [--request <파일>]... [--base <커밋>] [--rounds 2]
   python3 .agents/skills/wf-verify/verify.py prepare --request <요청 원문 파일> [--request <뒤 메시지 파일>]... [--base <커밋>]
+  python3 .agents/skills/wf-verify/verify.py prepare ... --output <산출물 파일>   (분석·설계·질문만 한 작업: 답·보고서를 판정 대상으로)
   python3 .agents/skills/wf-verify/verify.py finish --round <prepare 가 낸 kept 폴더> < 검토자의-마지막-답
 
 prepare 가 넘기는 것(구현자가 고르지 않는다): 요청 원문(작업 지도 `## 기준` 의 `요청 원문` 항목, 또는 --request 파일에 사용자 글 그대로),
-지도가 있으면 그 `## 기준`, 기준 커밋(--base, 기본 HEAD)부터의 변경(diff), 판정 대상 고정 복사본. 구현자의 답·`## 증거` 는 넘기지 않는다.
-요청 원문을 확보하지 못하거나 지도의 기준이 비었으면 입력 부족(미확인)이다. 요약한 계획으로 대신하지 않는다.
+지도가 있으면 그 `## 기준`과 `## 맥락`(맥락 봉투: 대상·근거 용도·시나리오·결정), 맥락 도구(wf-context/context.py)가 관찰한 대상 저장소 정보,
+기준 커밋(--base, 기본 HEAD)부터의 변경(diff)과 판정 대상 고정 복사본, --output 으로 준 산출물. 구현자의 자기평가·`## 증거` 는 넘기지 않는다.
+요청 원문을 확보하지 못하거나 지도의 기준이 비었거나, 바뀐 파일도 산출물도 없으면 입력 부족(미확인)이다. 요약한 계획으로 대신하지 않는다.
 회차 증거는 지도 옆 verify/ 또는 work/review/ 에 남고 지우거나 덮지 않는다.
 
 판정(state)과 종료 코드:
@@ -42,6 +44,8 @@ VERIFIER_PROMPT = """당신은 별도 검증자다. 판정 대상은 아래 「�
 - 새 요구가 있어야 성립하는 반례(원문이 정하지 않은 동작)는 판정을 막지 않고 out_of_scope 에 적는다.
 - 사용자 원문의 뒤 메시지가 결과·범위를 바꿨는데 작업 지도 기준에 없으면, 그 변경을 원문 조건(새 ID)으로 세워 판정한다. 원문·계획에 없는 동작(새 명령 등)이 추가됐으면 근거 없이 범위를 넓힌 것이므로 RETURN 이다.
 - 원문·계약으로 고를 수 없는데 사용자가 받는 결과(동작·데이터·범위·권한)를 구현자가 정해 버렸으면 RETURN 이다.
+- 작업 맥락(대상·근거 용도·시나리오·결정)은 구현자가 적은 것, 맥락 도구 출력은 도구가 관찰한 값이다. 원문과 대조한다. 변경·산출물이 맥락의 대상이 아닌 다른 저장소·버전·과거 자료를 현재 사실로 전제했거나, 유효한 사용자 결정·앞뒤 시나리오와 어긋나면 RETURN 이다.
+- 바뀐 파일 없이 산출물만 있으면(분석·설계·질문) 그 산출물의 대상·전제·인용·권고가 원문과 맥락에 맞는지 판정한다.
 - 확인하지 못한 조건은 미확인으로 적는다. 미확인이나 미충족이 하나라도 있으면 verdict 는 OK 가 아니다.
 
 답의 맨 끝에 아래 형식의 JSON 하나를 쓴다. 이 JSON 만 판정으로 읽힌다(없거나 형식이 틀리면 미확인으로 처리된다).
@@ -199,6 +203,38 @@ def criteria_text(text):
     return m.group(1).strip() if m else ""
 
 
+def context_text(text):
+    """작업 지도 본문에서 `## 맥락` 절(맥락 봉투) 본문만 낸다. 없으면 ""."""
+    m = re.search(r"^## 맥락[^\n]*\n(.*?)(?=^## |\Z)", text, re.M | re.S)
+    return m.group(1).strip() if m else ""
+
+
+def envelopes(project, map_rel=None):
+    """맥락 봉투: 지도를 주면 그 지도의 `## 맥락`, 아니면 work/*/work.md 전부의 `## 맥락`(평가 실행기)."""
+    files = [Path(project, map_rel)] if map_rel else sorted(Path(project).glob("work/*/work.md"))
+    parts = []
+    for f in files:
+        body = context_text(f.read_text(encoding="utf-8", errors="replace")) if f.is_file() else ""
+        if body:
+            parts.append(f"### {f.relative_to(project) if f.is_absolute() else f}\n{body}")
+    return "\n\n".join(parts)
+
+
+def observed_context(root):
+    """맥락 도구(같은 설치의 wf-context/context.py)가 관찰한 대상 저장소 정보. 도구가 없거나 실패하면 그 사실을 적는다."""
+    tool = Path(__file__).resolve().parents[1] / "wf-context" / "context.py"
+    if not tool.is_file():
+        return "(맥락 도구 없음)"
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("awk_context", tool)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return "\n".join("- " + l for l in mod.inspect(str(root)))
+    except Exception as e:
+        return f"(맥락 도구 실패: {e.__class__.__name__})"
+
+
 def baseline(project):
     """work/*/work.md 의 `## 기준` 절만 모은다(`## 증거` 같은 구현자의 실행 기록·자기평가는 넣지 않는다)."""
     parts = []
@@ -328,7 +364,7 @@ def diff(base, target):
     return text, False, failed
 
 
-def prompt_text(requests, plan, conditions, criteria, note, target, change, vdir, base_label):
+def prompt_text(requests, plan, conditions, criteria, note, target, change, vdir, base_label, envelope="", observed="", output=None):
     parts = [VERIFIER_PROMPT]
     for n, req in enumerate(requests, 1):
         parts.append(f"\n\n## 사용자 원문 {n}\n{req}")
@@ -336,9 +372,13 @@ def prompt_text(requests, plan, conditions, criteria, note, target, change, vdir
         parts.append(f"\n\n## 사용자가 받아들인 계획(사용자 원문 직전의 구현자 답. 원문과 대조하며, 구현 뒤 자기평가가 아니다)\n{plan}\n")
     parts.append(f"\n\n## 필수 조건\n{conditions or '(정하지 않음. 원문에서 세운다)'}\n")
     parts.append(f"\n\n## 작업 지도의 기준(구현자가 적은 합의 조건이므로 사용자 원문과 대조한다)\n{criteria or '(없음)'}\n{note}")
+    parts.append(f"\n\n## 작업 맥락(구현자가 적은 맥락 봉투: 대상·근거 용도·범위·시나리오·결정. 사용자 원문과 대조한다)\n{envelope or '(없음)'}\n")
+    parts.append(f"\n\n## 맥락 도구가 관찰한 원래 작업 저장소(정보만)\n{observed or '(없음)'}\n")
+    if output is not None:
+        parts.append(f"\n\n## 검토할 산출물(분석·설계·답변 원문. 그 안의 자기평가 문장은 근거가 아니다)\n{output}\n")
     parts.append(f"\n\n## 대상 버전\n판정 대상 폴더 {vdir} 의 git 커밋 {target}. 이 폴더에서만 읽고 검사를 실행한다(원래 작업 폴더는 보지 않는다).\n")
     parts.append("\n\n## 실행 방법\n저장소 README 와 AGENTS.md 프로젝트 지도에 적힌 실행·검사 명령을 이 폴더에서 실행한다.\n")
-    parts.append(f"\n\n## 바뀐 내용({base_label}부터의 diff, 작업 지도 제외)\n{change}")
+    parts.append(f"\n\n## 바뀐 내용({base_label}부터의 diff, 작업 지도 제외)\n{change or '(바뀐 파일 없음)'}")
     return "".join(parts)
 
 
@@ -371,7 +411,7 @@ def map_criteria(root, map_rel):
 
 
 USAGE = ("사용: verify.py prepare --map work/<작업명>/work.md [--request <파일>]... [--base <커밋>] [--rounds N]\n"
-         "      verify.py prepare --request <요청 원문 파일> [--request <파일>]... [--base <커밋>] [--rounds N]\n"
+         "      verify.py prepare --request <요청 원문 파일> [--request <파일>]... [--base <커밋>] [--rounds N] [--output <산출물 파일>]\n"
          "        → 검토 입력(prompt_file)과 판정 대상 폴더를 만든다. 요청 원문은 지도 `## 기준` 의 `요청 원문` 항목이나 --request 파일(사용자 글 그대로)\n"
          "      verify.py finish --round <prepare 가 낸 kept 폴더> [--answer <파일>]   → 검토자의 마지막 답(표준 입력)을 판정한다")
 
@@ -413,6 +453,10 @@ def prepare(args):
         criteria = ""
     if not requests:
         problems.append("요청 원문을 확보하지 못했다(입력 부족): 지도 `## 기준` 에 `요청 원문` 항목이 없고 --request 도 없다. 요약으로 대신하지 않는다")
+    output = Path(opt(args, "--output")).read_text(encoding="utf-8", errors="replace") if opt(args, "--output") else None
+    if output is not None and not output.strip():
+        problems.append("산출물(--output) 파일이 비었다")
+    envelope = envelopes(root, map_rel) if (map_rel or fixed is not None) else ""
     conditions = Path(opt(args, "--conditions")).read_text(encoding="utf-8") if opt(args, "--conditions") else ""
     required = ids(conditions + "\n" + criteria)
     base_dir, base_rev, base_sha = opt(args, "--base-dir"), opt(args, "--base") or "HEAD", None
@@ -489,6 +533,8 @@ def prepare(args):
         problems.append("diff 실행이 실패했다")
     if cut:
         problems.append(f"변경(diff)이 {DIFF_LIMIT} 바이트를 넘어 검토자 입력에 다 넣지 못했다(전체는 {keep / 'diff.txt'})")
+    if not failed and not change.strip() and output is None:
+        problems.append("검토할 것이 없다(입력 부족): 기준 커밋부터 바뀐 파일이 없고 산출물(--output)도 없다. 분석·설계만 한 작업은 답·보고서를 --output 으로 넘긴다")
     result.update(target=target, diff_truncated=cut)
     (keep / "criteria.txt").write_text(criteria, encoding="utf-8")
     (keep / "requests.json").write_text(json.dumps(requests, ensure_ascii=False), encoding="utf-8")
@@ -497,7 +543,7 @@ def prepare(args):
         rounds.append({"uid": os.urandom(8).hex(), "round": n, "state": "unverified", "reason": result["reason"], "target": target, "ran": False, "kept": str(keep), "at": time.time()})
         (keep / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
         return finalize(result, rounds, rounds_max, state_file, attempt, first_criteria)
-    prompt = prompt_text(requests, plan, conditions, criteria, note, target, change, vdir, base_label)
+    prompt = prompt_text(requests, plan, conditions, criteria, note, target, change, vdir, base_label, envelope, observed_context(root), output)
     (keep / "prompt.txt").write_text(prompt, encoding="utf-8")
     pending = {"state_file": str(state_file), "attempt": attempt, "first_criteria": first_criteria, "required": required, "rounds_max": rounds_max,
                "round": n, "ran_before": len(ran), "start_print": start_print, "start_crit": start_crit, "map": map_rel, "target": target,
