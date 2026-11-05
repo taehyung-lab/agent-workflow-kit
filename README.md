@@ -75,7 +75,14 @@ flowchart TD
 | --- | --- | --- |
 | 대상과 근거를 구별하고 근거의 용도를 정한다. 옛 자료·다른 저장소·현재 동작을 현재 파일과 대조한 뒤에만 쓴다. 질문의 전제를 지금 대상·시나리오 안에 둔다. 위임·검토에 봉투를 넘긴다 | 세션 시작·재개 때 실경로·커밋·변경 파일 이름·키트 버전·다른 worktree·지도 제목을 넣는다. `inspect` 로 같은 값을 언제든 본다. 검토 입력에 봉투와 관찰 값을 넣는다 | 관찰 값을 읽고도 무시하거나 잘못 해석하는 것, 읽은 옛 코드·다른 프로젝트 정책을 머릿속에서 현재처럼 쓰는 것, 봉투를 틀리게 적는 것, 세션 중간의 대상 변경(훅이 다시 돌지 않음), 신뢰하지 않은 Codex 프로젝트. 쓰기·명령 허용은 여전히 각 도구의 권한 설정이 맡는다 |
 
-맥락 이탈과 과잉 차단을 재는 사례는 `evals/cases/ctx-*` 10개다(아래 「실제로 써 보면」).
+맥락 이탈과 과잉 차단을 재는 사례는 `evals/cases/ctx-*` 10개다. 첫 실측(2026-11-05, 키트 ecb6ad0, 사례마다 1회, Claude Code 2.1.318·`real-plugins.json` / Codex CLI 0.166, 두 하네스 모두 세션 시작 정보 훅이 실제로 주입됨을 원시 기록에서 확인)은 아래와 같다. 한 번의 통과는 개선의 증거가 아니고, 바꾸기 전(v3.1.0) 커밋과의 비교는 아직 하지 않았다.
+
+| 사례 | Claude | Codex |
+| --- | --- | --- |
+| ctx-same-name | 검토 필요 → 원시 기록 판정 통과(지금 v2 의 사번을 답하고 `../v2` 는 v2-old 라고 구별) | 통과 |
+| ctx-old-branch-report · ctx-correction-hold · ctx-auth-scenario · ctx-multi-repo-normal · ctx-resume-changed · ctx-delegation-brief · ctx-stale-correct | 통과 | 통과 |
+| ctx-premise-drift | 검토 필요 → 원시 기록 판정 통과(회의실 선택지만 묻고 지하철역 자료는 쓰지 않았다고 밝힘) | 통과 |
+| ctx-env-precedence | 통과 | 통과(처음 판정 FAIL 은 판정기 오류: `bin/smoke` 를 읽기만 한 명령을 실행으로 셈. 판정기를 고치고 그 기록을 통과 표본으로 남김) |
 
 ## 에이전트가 정하는 것, 사용자에게 묻는 것
 
@@ -100,7 +107,7 @@ flowchart TD
 
 ## 실제로 써 보면
 
-평소 말투의 요청에 v3.1 이 기대하는 동작이다. 오른쪽 사례가 새 세션에서 이 동작을 잰다([evals/](evals/README.md)). 첫 실측은 Claude Code 2.1.318·실제 플러그인 조합(`EVALS_CLAUDE_SETTINGS=evals/profiles/real-plugins.json`)으로 사례마다 1회, 8/8 통과다(partial-hold 는 판정기 오류를 고친 뒤 다시 판정). Codex 는 아직 돌리지 않았고, 한 번의 통과는 개선의 증거가 아니다.
+평소 말투의 요청에 v3.1 이 기대하는 동작이다. 오른쪽 사례가 새 세션에서 이 동작을 잰다([evals/](evals/README.md)). 첫 실측은 Claude Code 2.1.318·실제 플러그인 조합(`EVALS_CLAUDE_SETTINGS=evals/profiles/real-plugins.json`)으로 사례마다 1회, 8/8 통과다(partial-hold 는 판정기 오류를 고친 뒤 다시 판정). v3.2(ecb6ad0, 정보 훅 포함)에서 다시 사례마다 1회: Claude 8/8, Codex CLI 0.166 8/8 통과. 한 번의 통과는 개선의 증거가 아니다.
 
 | 이렇게 말하면 | 에이전트가 하는 일 | 재는 사례 |
 | --- | --- | --- |
