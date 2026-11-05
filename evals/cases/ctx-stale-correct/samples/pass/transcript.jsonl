@@ -1,0 +1,2 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "c0", "name": "Bash", "input": {"command": "cat app/session.txt"}}]}}
+{"type": "result", "result": "확인했습니다. 지금도 30분입니다."}

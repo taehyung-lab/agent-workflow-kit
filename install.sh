@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 키트를 대상 저장소에 처음 설치하거나(--update 없이), 설치된 저장소의 키트 소유 부분만 키트의 현재 커밋으로 교체한다.
 # 키트 소유 부분: AGENTS.md의 표시 영역, CLAUDE.md, 키트 .agents/skills 아래 파일. 그 밖은 프로젝트가 관리한다.
-# 훅은 설치하지 않는다. v3.0 이하가 프로젝트 설정에 남긴 승인 관문 훅 항목은 업데이트 때 그 항목만 지운다(gate_hooks).
+# 훅: 세션 시작 정보 훅(정보만, 차단 없음) 하나를 프로젝트 설정에 두고, v3.0 이하의 승인 관문 훅 항목은 지운다(kit_hooks). 다른 훅·설정은 그대로 둔다.
 # macOS 기본 bash 3.2에서 돌도록 mapfile·빈 배열 확장을 쓰지 않는다.
 set -Eeuo pipefail
 fail() { printf '%s\n' "$*" >&2; exit 1; }
@@ -41,28 +41,48 @@ parents_ok() {
 assembled=''
 trap 'rm -f "$assembled"; printf "%s\n" "Install failed; partial files may remain. Inspect before retry." >&2' ERR
 
-# v3.0 이하가 프로젝트 설정에 등록한 승인 관문 훅(명령에 approval-gate.py 가 든 항목)만 지운다. v3.1 부터 키트는 훅을 쓰지 않는다.
-# 파일 쓰기·명령의 허용은 각 도구의 권한 설정이 맡는다. 다른 훅·설정(예: 프로젝트의 포맷터 훅, enabledPlugins)은 그대로 두고,
-# 관문 항목이 없는 파일은 읽기만 하고 쓰지 않는다. 사용자 전역 설정(~/.claude, ~/.codex)은 건드리지 않는다.
-# $1 = check: 쓰기 전에, 지울 항목이 든 파일이 올바른 JSON 객체인지만 확인한다(깨졌으면 멈춘다). $1 = apply: 지운다.
-gate_hooks() {
-  local f found=''
+# 프로젝트 훅 설정(.claude/settings.json, .codex/hooks.json)에서 키트 항목만 맞춘다. 다른 훅·설정(예: 프로젝트의 포맷터 훅,
+# enabledPlugins, permissions)은 그대로 두고, 바꿀 것이 없는 파일은 쓰지 않는다. 사용자 전역 설정(~/.claude, ~/.codex)은 건드리지 않는다.
+# 키트 항목: ① 세션 시작 정보 훅(명령에 wf-context/context.py, v3.2~): 키트에 그 파일이 있으면 SessionStart 에 하나 두고, 없으면 지운다.
+#            이 훅은 맥락 정보만 낸다(차단·승인 판독 없음, 늘 종료 0). 파일 쓰기·명령 허용은 각 도구의 권한 설정이 맡는다.
+#            ② v3.0 이하의 승인 관문 훅(명령에 approval-gate.py): 지운다.
+# $1 = check: 쓰기 전에, 고칠 파일이 일반 파일이고 올바른 JSON 객체인지만 확인한다(깨졌으면 멈춘다). $1 = apply: 맞춘다.
+kit_hooks() {
+  local f found='' want=0
+  [ -f .agents/skills/wf-context/context.py ] && want=1
+  [ "$1" = check ] && kit show "$new:.agents/skills/wf-context/context.py" >/dev/null 2>&1 && want=1
   for f in .claude/settings.json .codex/hooks.json; do
-    if [ -f "$f" ] && [ ! -L "$f" ] && grep -q 'approval-gate\.py' "$f"; then found="$found $f"; fi
+    if [ -e "$f" ] || [ -L "$f" ]; then
+      if [ "$want" = 1 ] || grep -qE 'approval-gate\.py|wf-context/context\.py' "$f" 2>/dev/null; then found="$found $f"; fi
+    fi
   done
-  [ -n "$found" ] || return 0
+  [ "$want" = 1 ] || [ -n "$found" ] || return 0
   parents_ok .claude/settings.json .codex/hooks.json
+  for f in $found; do [ ! -L "$f" ] && [ -f "$f" ] || fail "Could not read hook settings in $f (not a regular file); fix it, then retry"; done
   if ! command -v python3 >/dev/null 2>&1; then
-    [ "$1" = check ] || printf 'Old approval gate hook entries NOT removed (python3 not found): remove entries running approval-gate.py from%s by hand.\n' "$found"
+    [ "$1" = check ] || printf 'Hook settings NOT updated (python3 not found). The context hook is not registered; run python3 .agents/skills/wf-context/context.py inspect when python3 is available.%s\n' "${found:+ Remove entries running approval-gate.py from$found by hand.}"
     return 0
   fi
-  # shellcheck disable=SC2086
-  python3 -I - "$1" $found <<'PY' || fail "Could not read hook settings in$found; fix the JSON, then retry"
+  AWK_WANT=$want python3 -I - "$1" <<'PY' || fail "Could not read hook settings in$found; fix the JSON, then retry"
 import json, os, sys
-mode, paths = sys.argv[1], sys.argv[2:]
-for path in paths:
+mode, want = sys.argv[1], os.environ.get("AWK_WANT") == "1"
+script = ".agents/skills/wf-context/context.py"
+# 훅 명령: 키트 파일이나 python3·git 이 없어도 아무것도 내지 않고 0 으로 끝난다(정보만 주는 훅이라 세션을 막지 않는다).
+# Claude Code 는 프로젝트 폴더를 CLAUDE_PROJECT_DIR 로 주고, Codex 는 세션 폴더의 저장소 맨 위(없으면 지금 폴더)에서 찾는다.
+tail = f'f="$p/{script}"; [ -f "$f" ] && command -v python3 >/dev/null 2>&1 && python3 -I "$f" hook 2>/dev/null; exit 0'
+want_hook = {
+    ".claude/settings.json": {"type": "command", "command": 'p="$CLAUDE_PROJECT_DIR"; ' + tail, "timeout": 10},
+    ".codex/hooks.json": {"type": "command", "command": 'p="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"; ' + tail, "timeout": 10},
+}
+def kit_entry(h):
+    return isinstance(h, dict) and any(k in str(h.get("command", "")) for k in ("approval-gate.py", "wf-context/context.py"))
+for path, desired in want_hook.items():
+    exists = os.path.exists(path)
+    if not exists and not want:
+        continue
     try:
-        data = json.load(open(path, encoding="utf-8"))
+        raw = open(path, encoding="utf-8").read() if exists else ""
+        data = json.loads(raw) if raw.strip() else {}
     except ValueError:
         sys.exit(1)
     if not isinstance(data, dict) or not isinstance(data.get("hooks", {}), dict):
@@ -71,6 +91,7 @@ for path in paths:
         continue
     before = json.dumps(data)
     hooks = data.get("hooks", {})
+    kept_desired, removed_gate = False, False
     for event in list(hooks):
         if not isinstance(hooks[event], list):
             continue
@@ -80,24 +101,44 @@ for path in paths:
             if not isinstance(inner, list):
                 groups.append(g)
                 continue
-            kept = [h for h in inner if not (isinstance(h, dict) and "approval-gate.py" in str(h.get("command", "")))]
+            kept = []
+            for h in inner:
+                if want and event == "SessionStart" and h == desired and not kept_desired:
+                    kept.append(h); kept_desired = True  # 이미 같은 항목이 있으면 자리를 옮기지 않는다(다시 실행해도 그대로)
+                elif kit_entry(h):
+                    removed_gate = removed_gate or "approval-gate.py" in str(h.get("command", ""))
+                else:
+                    kept.append(h)
             if kept or not inner:
                 groups.append({**g, "hooks": kept})
         if groups:
             hooks[event] = groups
         else:
             del hooks[event]
-    if "hooks" in data and not hooks:
+    if want and not kept_desired:
+        hooks.setdefault("SessionStart", []).append({"hooks": [desired]})
+    if hooks:
+        data["hooks"] = hooks
+    elif "hooks" in data:
         del data["hooks"]
-    if json.dumps(data) == before:
-        continue  # 명령이 아닌 곳에만 이름이 든 파일은 쓰지 않는다
+    if json.dumps(data) == before and exists:
+        continue  # 바꿀 것이 없으면 쓰지 않는다(명령이 아닌 곳에만 이름이 든 파일 포함)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".kit-tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
         f.write("\n")
     os.replace(tmp, path)
-    print(f"Removed old approval gate hook entries from {path} (other hooks and settings kept).")
+    if removed_gate:
+        print(f"Removed old approval gate hook entries from {path} (other hooks and settings kept).")
+    if want and not kept_desired:
+        print(f"Context hook (information only, never blocks) registered in {path} SessionStart (other hooks and settings kept).")
+    elif not want:
+        print(f"Removed kit hook entries from {path} (other hooks and settings kept).")
 PY
+  [ "$1" = apply ] && [ "$want" = 1 ] && [ -f .codex/hooks.json ] && grep -q 'wf-context/context\.py' .codex/hooks.json \
+    && printf '%s\n' 'Codex runs project hooks only after you trust them once (Codex asks at startup). Until then, or in a tool without SessionStart hooks: python3 .agents/skills/wf-context/context.py inspect'
+  return 0
 }
 
 # 처음 설치: 키트 소유 경로가 하나라도 있으면 쓰기 전에 멈춘다
@@ -109,6 +150,7 @@ install_fresh() {
     [ ! -e "$p" ] && [ ! -L "$p" ] || fail "Conflict: $p"
   done
   parents_ok .agents/skills/x .claude/x $files
+  kit_hooks check
   [ ! -L .gitignore ] && { [ ! -e .gitignore ] || { [ -f .gitignore ] && [ -r .gitignore ] && [ -w .gitignore ]; }; } || fail 'Invalid .gitignore'
   mkdir -p .agents/skills .claude
   set -C
@@ -122,6 +164,7 @@ install_fresh() {
   if ! grep -qxF '/work/' .gitignore 2>/dev/null; then
     printf '\n/work/\n' >> .gitignore
   fi
+  kit_hooks apply
   printf '%s\n' 'Files installed. Next, in a new session: survey this repository, fill the 4 project-map lines in AGENTS.md (leave 미확인 where no evidence), decide keep/move/remove for existing agent docs, then confirm with one small real request.'
 }
 
@@ -148,9 +191,9 @@ install_update() {
     listed "$p" "$old_files" || { [ ! -e "$p" ] && [ ! -L "$p" ]; } || changed="$changed $p(exists)"
   done
   [ -z "$changed" ] || fail "Local change in kit-owned path:$changed. Move project changes to project sections or role skills, then retry."
-  gate_hooks check
+  kit_hooks check
   # 같은 버전은 소유 부분이 설치 당시 그대로임을 확인한 뒤에만 무변경으로 끝낸다
-  if [ "$old" = "$new" ]; then gate_hooks apply; printf 'Already at %s\n' "$new"; return; fi
+  if [ "$old" = "$new" ]; then kit_hooks apply; printf 'Already at %s\n' "$new"; return; fi
   # 영역 밖은 바이트 그대로 두고, 권한을 복사한 옆 임시 파일에 명령마다 따로 조립한 뒤 한 번에 바꿔 끼운다
   local b e
   b=$(grep -nxF -- "$begin" AGENTS.md | cut -d: -f1)
@@ -177,7 +220,7 @@ install_update() {
     kit show "$new:$p" > "$p"
   done
   printf '%s\n' "$new" > "$version_file"
-  gate_hooks apply
+  kit_hooks apply
   printf 'Updated %s -> %s. Review the diff and verify skill discovery in a new session.\n' "$old" "$new"
 }
 

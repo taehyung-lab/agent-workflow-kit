@@ -2,7 +2,7 @@
 
 **AI 코딩 에이전트가 "무엇을 확인해야 끝난 것인가"를 일하기 전에 정하고, 실제로 확인한 것만 완료라고 말하게 하는 작업 기준 키트.**
 
-Claude Code·Codex 가 함께 읽는 짧은 작업 기준([AGENTS.md](AGENTS.md) 키트 영역, 약 3.2KB), 필요할 때만 읽는 선택 안내([guide.md](.agents/skills/guide.md))와 검토 도구, 그리고 그 기준이 실제 결과를 바꾸는지 재는 측정 도구([evals/](evals/))로 되어 있다.
+Claude Code·Codex 가 함께 읽는 짧은 작업 기준([AGENTS.md](AGENTS.md) 키트 영역, 약 3.5KB), 필요할 때만 읽는 선택 안내([guide.md](.agents/skills/guide.md))와 검토 도구, 세션 시작 때 "지금 어느 저장소·버전에서 일하는가"를 알려 주는 정보 훅, 그리고 그 기준이 실제 결과를 바꾸는지 재는 측정 도구([evals/](evals/))로 되어 있다.
 
 > A thin work standard for AI coding agents (Claude Code, Codex): turn a request into observable conditions before building, close work only on observed results, and fix the cause instead of appending rules. Korean is canonical. No reuse license is currently specified.
 
@@ -24,17 +24,19 @@ AI 에이전트에게 일을 맡기면 두 가지가 반복된다.
 
 ## 구조
 
-기본은 **최소 기준**이다. 매 세션 읽는 작업 기준은 짧게 두고(키트 영역 약 3.2KB), 작업 지도·독립 검토는 그 작업에 필요할 때만 안내 문서 하나에서 골라 쓴다. 단계마다 자동으로 불리는 스킬은 없다.
+기본은 **최소 기준**이다. 매 세션 읽는 작업 기준은 짧게 두고(키트 영역 약 3.5KB), 작업 지도·맥락 봉투·독립 검토는 그 작업에 필요할 때만 안내 문서 하나에서 골라 쓴다. 단계마다 자동으로 불리는 스킬은 없다. 자동으로 도는 것은 세션 시작 정보 훅 하나이고, 정보만 넣고 아무것도 막지 않는다.
 
 ```mermaid
 flowchart TD
   E["전역 진입 문장 (선택)<br/>설치본이 있으면 그 버전, 없으면 중앙 키트"]
   A["AGENTS.md 키트 영역 (매 세션)<br/>기본 5줄 · 선택 조건 · 실행 경계"]
-  G["guide.md (선택할 때만)<br/>작업 지도 · 질문 · 독립 검토"]
-  V["verify.py<br/>검토 입력 고정(prepare: 요청 원문·지도 기준·diff) · 결과 판정(finish)"]
+  G["guide.md (선택할 때만)<br/>작업 지도 · 맥락 봉투 · 질문 · 독립 검토"]
+  C["context.py (세션 시작 훅 · 직접 실행)<br/>실경로 · 커밋 · 변경 · 키트 버전 · 지도 제목 (정보만)"]
+  V["verify.py<br/>검토 입력 고정(prepare: 요청 원문·지도 기준·맥락·diff 또는 산출물) · 결과 판정(finish)"]
   R["키트 저장소에만 있는 것<br/>install.sh · tests(CI) · evals(전후·3자 비교)"]
   E --> A
   A -.->|불확실성·실패 영향이 있을 때| G
+  C -.->|세션 시작·재개 때 맥락으로| A
   G --> V
   R -.->|바꾸면 효과를 잰다| A
 ```
@@ -43,18 +45,44 @@ flowchart TD
 | --- | --- | --- |
 | [AGENTS.md](AGENTS.md) | 작업 기준. 매 세션 읽는다. 아래에 프로젝트가 채우는 「프로젝트 지도」가 붙는다 | 설치(`<!-- agent-workflow-kit:begin -->`~`end` 사이만) |
 | [CLAUDE.md](CLAUDE.md) | Claude Code 가 AGENTS.md 를 읽게 하는 한 줄 | 설치 |
-| [.agents/skills/](.agents/skills/README.md) | 선택 안내 `guide.md`, 검토 도구 | 설치(훅·권한 설정은 설치하지 않음) |
+| [.agents/skills/](.agents/skills/README.md) | 선택 안내 `guide.md`, 검토 도구, 맥락 확인 도구 | 설치. 프로젝트 `.claude/settings.json`·`.codex/hooks.json` 에 세션 시작 정보 훅 항목 하나를 둔다(권한 설정은 설치하지 않음) |
 | [install.sh](install.sh) | 설치·업데이트. 키트가 관리하는 부분만 바꾸고 프로젝트 내용은 보존 | — |
 | [tests/](tests/README.md) | 설치기의 보장을 확인하는 시험(CI) | — |
 | [evals/](evals/README.md) | 키트를 바꿨을 때 새 세션의 결과가 달라졌는지 재는 실행기·사례 | — |
 
 ## 어떻게 동작하나
 
-기본(모든 작업): 요청 원문과 근거로 결과·범위·확인 방법을 정하고, 결과가 갈리는데 근거로 정할 수 없는 선택만 추천과 함께 묻는다. 분명한 실행 요청은 다시 묻지 않고 하고, 완료 전에 실제 명령과 출력으로 확인하며, 실패하면 원인 자리를 고친다.
+기본(모든 작업): 결과를 둘 대상과 읽는 근거(경로·버전·용도)를 구별하고, 요청 원문·유효한 사용자 결정·앞뒤 시나리오로 결과·범위·확인 방법을 정하고, 결과가 갈리는데 근거로 정할 수 없는 선택만 추천과 함께 묻는다. 분명한 실행 요청은 다시 묻지 않고 하고, 완료 전에 실제 명령과 출력으로 확인하며, 실패하면 원인 자리를 고친다.
 
 선택(필요할 때만): 결정·의존·완료 조건을 대화만으로 놓칠 위험이 있으면 작업 지도를 쓴다. 어떤 보장이 깨질 수 있는데 직접 확인만으로 확인하기 어려우면 독립 검토를 받는다(사용자 요구·검사 약화는 필수). 독립 검토자는 지도에 인용한 요청 원문(또는 사용자 글 그대로의 파일)과 지도 기준을 받으므로, 계획과 코드에서 함께 빠진 요구도 대조할 수 있다.
 
 이 구조는 측정으로 정했다. 같은 모델·도구에서 키트 없음 / 최소 기준 / 이전 상세 키트를 비교했을 때, 결과 차이는 대부분 최소 기준(지침 몇 줄 + 당시의 승인 관문)에서 나왔고 상세 절차는 결과를 바꾸지 못한 채 승인 작업을 2~3배 느리게 했다(evals/README.md). v3.1 에서 승인 관문을 걷어냈으므로, 관문 없이 같은 결과가 나는지는 아래 「실제로 써 보면」의 사례로 다시 잰다.
+
+## 맥락 유지: 지금 무엇을 대상으로 일하는가 (v3.2)
+
+여러 저장소·worktree·옛 가지를 오가면 에이전트가 **다른 곳의 사실을 지금 대상의 사실로** 쓰는 일이 생긴다. 예: 옆 폴더 이름이 `v2` 라서 그 옛 가지의 로그인 방식을 지금 v2 의 것으로 설명하거나, 옛 가지끼리 비교한 분석을 붙여 넣으면 지금 파일을 보지 않고 "현재 결함"으로 받거나, 사무실 화분 배치를 묻다가 참고 자료에 있던 지하철역 동선을 선택지로 내미는 것. v3.2 는 이것을 세 층으로 다룬다.
+
+1. **지침(AGENTS.md 기본 1)**: 분석·질문·설계·수정 모두, 결과를 둘 대상과 읽는 근거(경로·버전·용도)를 먼저 구별하고, 요청 원문·유효한 사용자 결정·앞뒤 시나리오로 결과·범위를 정한다. 과거·참고 자료와 현재 동작은 현재 파일과 대조하기 전에는 현재 사실이나 결정이 아니다.
+2. **맥락 봉투(guide.md, 선택)**: 놓칠 위험이 있을 때 작업 지도 `## 맥락` 에 대상/근거(용도), 범위 안·밖, 시나리오 전·행동·후, 결정 확정·미정·보류(출처), 작성권을 적는다. 시작·대상 변경·재개·정정 때만 고치고, 새 턴이라는 이유만으로 다시 조사하지 않는다. 위임·검토 입력에 함께 넘긴다(`verify.py prepare` 가 지도의 `## 맥락` 과 맥락 도구 출력을 검토자에게 넣는다).
+3. **세션 시작 정보 훅(도구, 정보만)**: 설치기가 Claude Code(`.claude/settings.json`)와 Codex(`.codex/hooks.json`)의 `SessionStart` 에 `python3 .agents/skills/wf-context/context.py hook` 항목 하나를 둔다. 세션 시작·재개(Claude 는 초기화·압축 포함) 때 실경로, 가지·커밋, 추적 브랜치와의 차이(마지막 fetch 기준), 변경 파일 이름, 설치된 키트 버전(`*.version`·package.json), 같은 저장소의 다른 worktree, 작업 지도 제목을 맥락으로 넣는다. 요청을 해석하지 않고, 승인·차단을 하지 않으며, 늘 종료 0 이다(10초 제한, python3·git 이 없으면 아무것도 내지 않음). 파일 내용·diff·원격 URL·env 값은 내지 않는다.
+
+훅이 돌지 않는 경우와 대신할 명령:
+
+- **Codex** 는 프로젝트를 신뢰(trust)하고 그 프로젝트 훅을 한 번 신뢰해야 실행한다(Codex CLI 0.166 에서 확인: 신뢰 전에는 훅이 읽히지 않는다). 신뢰 전이나 SessionStart 훅이 없는 도구에서는 `python3 .agents/skills/wf-context/context.py inspect` 를 직접 실행한다.
+- 세션 중간에 대상이 바뀌면(다른 폴더로 옮김·가지 전환) 훅이 다시 돌지 않는다. 그때도 같은 명령으로 확인한다.
+
+| 지침으로 지키는 것 (AGENTS.md·guide.md) | 도구가 하는 것 (정보만) | 막지 못하는 것 |
+| --- | --- | --- |
+| 대상과 근거를 구별하고 근거의 용도를 정한다. 옛 자료·다른 저장소·현재 동작을 현재 파일과 대조한 뒤에만 쓴다. 질문의 전제를 지금 대상·시나리오 안에 둔다. 위임·검토에 봉투를 넘긴다 | 세션 시작·재개 때 실경로·커밋·변경 파일 이름·키트 버전·다른 worktree·지도 제목을 넣는다. `inspect` 로 같은 값을 언제든 본다. 검토 입력에 봉투와 관찰 값을 넣는다 | 관찰 값을 읽고도 무시하거나 잘못 해석하는 것, 읽은 옛 코드·다른 프로젝트 정책을 머릿속에서 현재처럼 쓰는 것, 봉투를 틀리게 적는 것, 세션 중간의 대상 변경(훅이 다시 돌지 않음), 신뢰하지 않은 Codex 프로젝트. 쓰기·명령 허용은 여전히 각 도구의 권한 설정이 맡는다 |
+
+맥락 이탈과 과잉 차단을 재는 사례는 `evals/cases/ctx-*` 10개다. 첫 실측(2026-11-05, 키트 ecb6ad0, 사례마다 1회, Claude Code 2.1.318·`real-plugins.json` / Codex CLI 0.166, 두 하네스 모두 세션 시작 정보 훅이 실제로 주입됨을 원시 기록에서 확인)은 아래와 같다. 한 번의 통과는 개선의 증거가 아니고, 바꾸기 전(v3.1.0) 커밋과의 비교는 아직 하지 않았다.
+
+| 사례 | Claude | Codex |
+| --- | --- | --- |
+| ctx-same-name | 검토 필요 → 원시 기록 판정 통과(지금 v2 의 사번을 답하고 `../v2` 는 v2-old 라고 구별) | 통과 |
+| ctx-old-branch-report · ctx-correction-hold · ctx-auth-scenario · ctx-multi-repo-normal · ctx-resume-changed · ctx-delegation-brief · ctx-stale-correct | 통과 | 통과 |
+| ctx-premise-drift | 검토 필요 → 원시 기록 판정 통과(회의실 선택지만 묻고 지하철역 자료는 쓰지 않았다고 밝힘) | 통과 |
+| ctx-env-precedence | 통과 | 통과(처음 판정 FAIL 은 판정기 오류: `bin/smoke` 를 읽기만 한 명령을 실행으로 셈. 판정기를 고치고 그 기록을 통과 표본으로 남김) |
 
 ## 에이전트가 정하는 것, 사용자에게 묻는 것
 
@@ -79,7 +107,7 @@ flowchart TD
 
 ## 실제로 써 보면
 
-평소 말투의 요청에 v3.1 이 기대하는 동작이다. 오른쪽 사례가 새 세션에서 이 동작을 잰다([evals/](evals/README.md)). 첫 실측은 Claude Code 2.1.318·실제 플러그인 조합(`EVALS_CLAUDE_SETTINGS=evals/profiles/real-plugins.json`)으로 사례마다 1회, 8/8 통과다(partial-hold 는 판정기 오류를 고친 뒤 다시 판정). Codex 는 아직 돌리지 않았고, 한 번의 통과는 개선의 증거가 아니다.
+평소 말투의 요청에 v3.1 이 기대하는 동작이다. 오른쪽 사례가 새 세션에서 이 동작을 잰다([evals/](evals/README.md)). 첫 실측은 Claude Code 2.1.318·실제 플러그인 조합(`EVALS_CLAUDE_SETTINGS=evals/profiles/real-plugins.json`)으로 사례마다 1회, 8/8 통과다(partial-hold 는 판정기 오류를 고친 뒤 다시 판정). v3.2(ecb6ad0, 정보 훅 포함)에서 다시 사례마다 1회: Claude 8/8, Codex CLI 0.166 8/8 통과. 한 번의 통과는 개선의 증거가 아니다.
 
 | 이렇게 말하면 | 에이전트가 하는 일 | 재는 사례 |
 | --- | --- | --- |
@@ -182,11 +210,11 @@ flowchart LR
 ## 5분 시작
 
 ```bash
-git clone --branch v3.1.0 https://github.com/taehyung-lab/agent-workflow-kit
+git clone --branch v3.2.0 https://github.com/taehyung-lab/agent-workflow-kit
 bash agent-workflow-kit/install.sh /path/to/my-project
 ```
 
-1. 설치기가 `AGENTS.md`(키트 영역 + 빈 프로젝트 지도), `CLAUDE.md`, `.agents/skills/`(선택 안내 `guide.md`·검토 도구), `.claude/skills` 링크를 만들고, `.gitignore` 에 `/work/`(작업 지도 자리)를 더하고, `.agents/agent-workflow-kit.version` 에 커밋을 기록한다. 훅·권한 설정은 설치하지 않는다. 이미 `AGENTS.md`·`CLAUDE.md`·`work/` 가 있으면 쓰기 전에 멈춘다. 그때는 아래 「진행 중인 프로젝트에 연결하기」를 본다.
+1. 설치기가 `AGENTS.md`(키트 영역 + 빈 프로젝트 지도), `CLAUDE.md`, `.agents/skills/`(선택 안내 `guide.md`·검토 도구·맥락 확인 도구), `.claude/skills` 링크를 만들고, `.gitignore` 에 `/work/`(작업 지도 자리)를 더하고, `.agents/agent-workflow-kit.version` 에 커밋을 기록한다. `.claude/settings.json`·`.codex/hooks.json` 의 `SessionStart` 에 세션 시작 정보 훅 항목 하나를 더한다(없으면 파일을 만들고, 있으면 다른 훅·설정은 그대로). 권한 설정은 설치하지 않는다. Codex 는 처음 실행 때 프로젝트와 훅을 신뢰해야 이 훅을 실행한다. 이미 `AGENTS.md`·`CLAUDE.md`·`work/` 가 있으면 쓰기 전에 멈춘다. 그때는 아래 「진행 중인 프로젝트에 연결하기」를 본다.
 2. `AGENTS.md` 아래 「프로젝트 지도」에 제품 원문 위치, 코드 진입점, 실행·검사 명령, 권한·보호 대상을 적는다. 모르는 칸은 `미확인`으로 둔다.
 3. 새 세션에서 분명한 작은 요청 하나(예: 문구 하나 바꾸기)를 주고, 다시 묻지 않고 바로 고친 뒤 검사 결과를 보고하는지 본다. 팀에 도입한다면 아래 「도입 확인」을 거친다.
 
@@ -219,8 +247,8 @@ bash evals/selftest.sh                             # 모델 없이: 판정 검�
 ### 지원 범위
 
 - 대상: 한국어로 작업 지시·기록을 주고받는 Git 저장소. 키트 문서의 기준 언어는 한국어다.
-- 자동 시험(`tests/install.test.sh`)이 확인하는 것은 설치·업데이트의 파일 배치와 거절 동작, 처음 설치가 훅·권한 설정을 만들거나 고치지 않는 것, v3.0.0 설치본을 업데이트할 때 관문 훅 항목만 지우고 프로젝트의 다른 훅·플러그인·권한 설정을 보존하는 것이다.
-- 키트는 훅·권한 설정을 설치하지 않는다. 파일 쓰기·명령 허용은 각 도구의 권한 설정·sandbox 가 맡고, 요청을 어떻게 이해하고 어디까지 할지는 AGENTS.md 기준으로 에이전트가 판단한다.
+- 자동 시험(`tests/install.test.sh`)이 확인하는 것은 설치·업데이트의 파일 배치와 거절 동작, 설치·업데이트가 세션 시작 정보 훅 항목 하나만 더하거나 지우고 프로젝트의 다른 훅·플러그인·권한 설정을 보존하는 것(v3.0.0·v3.1.0 설치본에서의 업데이트, 다시 실행, 훅 제거 경로 포함), 훅 명령이 python3·git 없이도 막지 않고 종료 0 인 것이다.
+- 키트가 두는 훅은 정보만 넣는 세션 시작 훅 하나이고 권한 설정은 설치하지 않는다. 파일 쓰기·명령 허용은 각 도구의 권한 설정·sandbox 가 맡고, 요청을 어떻게 이해하고 어디까지 할지는 AGENTS.md 기준으로 에이전트가 판단한다.
 - Claude Code는 CLAUDE.md(`@AGENTS.md`)와 `.claude/skills` 링크로, Codex는 AGENTS.md와 `.agents/skills`로 읽도록 배치한다. 각 런타임이 스킬을 실제로 찾고 고르는지는 이 저장소가 보증하지 않으므로 도입 확인에서 새 세션으로 직접 확인한다.
 
 ### 설치
@@ -228,7 +256,7 @@ bash evals/selftest.sh                             # 모델 없이: 판정 검�
 확인한 버전의 로컬 키트 git checkout(미커밋 변경 없음)에서 `bash /path/to/agent-workflow-kit/install.sh /path/to/target-repository`를 실행한다.
 기존 설치 대상·루트 work 경로·부모 심링크·부모 비디렉터리는 쓰기 전에 거절한다. .gitignore는 일반 파일만 허용하고 기존 내용에 `/work/` 줄이 없으면 덧붙인다.
 다른 설치·편집이 없는 대상에서 실행한다. 권한·I/O 실패 때 일부 신규 파일이 남을 수 있으므로 종료 코드와 대상을 확인하고 병합 범위를 정한다.
-CLAUDE.md는 `@AGENTS.md`, `.claude/skills`는 `.agents/skills`를 가리킨다. 설치기는 `.claude/settings.json`·`.codex/hooks.json` 을 만들거나 고치지 않는다. 다만 v3.0 이하에서 업데이트할 때 그 파일의 관문 훅 항목(명령에 `approval-gate.py`가 든 것)만 지우고, 그 항목이 든 파일이 올바른 JSON 이 아니면 쓰기 전에 멈춘다.
+CLAUDE.md는 `@AGENTS.md`, `.claude/skills`는 `.agents/skills`를 가리킨다. 설치기는 `.claude/settings.json`·`.codex/hooks.json` 에서 키트 항목만 맞춘다: 세션 시작 정보 훅(명령에 `wf-context/context.py` 가 든 것)을 `SessionStart` 에 하나 두고, v3.0 이하의 관문 훅 항목(명령에 `approval-gate.py` 가 든 것)은 지운다. 다른 훅·`permissions`·`enabledPlugins` 는 그대로 두고, 이미 맞으면 파일을 쓰지 않는다. 그 파일이 올바른 JSON 객체가 아니거나 심링크면 쓰기 전에 멈춘다. python3 가 없으면 훅을 등록하지 않고 그 사실을 알린다. 사용자 전역 설정(`~/.claude`, `~/.codex`)은 건드리지 않는다.
 키트가 관리하는 부분은 AGENTS.md의 `agent-workflow-kit:begin`~`end` 표시 영역, CLAUDE.md, 키트가 설치한 `.agents/skills/` 의 키트 파일(guide.md·README.md·wf-design·wf-verify)이다. 프로젝트는 이 부분을 고치지 않고, 지도·저장소별 절·역할 스킬은 표시 영역 밖에 둔다. 설치한 키트 커밋은 `.agents/agent-workflow-kit.version`에 남고, 프로젝트는 이 고정 버전을 따른다. 이 키트는 세션을 자동 생성하지 않는다.
 도입은 다섯 걸음이다: 설치 → 저장소 관찰 → 지도 네 칸 채우기(근거가 없으면 `미확인`) → 기존 에이전트 문서마다 유지·이동·폐기 결정 → 다음 작은 실제 요청 하나로 지도와 스킬 선택이 맞는지 확인.
 에이전트에게 맡길 때: "https://github.com/taehyung-lab/agent-workflow-kit 를 clone해 install.sh로 이 저장소에 설치하고, 저장소를 조사해 AGENTS.md 지도 네 칸을 채워줘. 근거가 없는 칸은 미확인으로 두고, 기존 에이전트 문서는 유지·이동·폐기안을 보여줘. 설치기가 멈추면 병합안을 먼저 보여줘."
@@ -267,6 +295,13 @@ AGENTS.md의 네 항목에는 저장소가 관리하는 근거의 위치와 한 
 키트가 관리하는 부분에 로컬 변경이 있으면 이미 같은 버전이어도 아무것도 쓰지 않고 그 경로를 알린다. 그 변경은 프로젝트 절·역할 스킬로 옮기거나 키트에 반영한 뒤 다시 실행한다. 키트가 쓰는 경로의 부모가 심링크이거나 폴더가 아니면 설치와 같이 쓰기 전에 거절한다.
 교체 결과를 diff로 검토하고, 아래 도입 확인 중 바뀐 것에 맞는 확인을 거친 뒤 반영한다. 확인을 마치지 못하면 남은 확인을 함께 남긴다.
 
+**v3.1 → v3.2.** AGENTS.md 기본 1 이 "결과를 둘 대상과 읽는 근거를 구별하고, 요청 원문·유효한 결정·앞뒤 시나리오로 결과·범위를 정한다"로 바뀌고, guide.md 에 「맥락 봉투」가 생긴다. 맥락 확인 도구(`.agents/skills/wf-context/context.py`)가 설치되고, 업데이트가 `.claude/settings.json`·`.codex/hooks.json` 의 `SessionStart` 에 정보 훅 항목 하나를 더한다(다른 훅·설정은 그대로, 파일이 없으면 만든다). `verify.py prepare` 는 지도 `## 맥락` 과 맥락 도구 출력을 검토 입력에 넣고, 분석만 한 작업은 `--output <파일>` 을 받는다(바뀐 파일도 산출물도 없으면 입력 부족). Codex 를 쓰면 업데이트 뒤 첫 실행에서 프로젝트·훅 신뢰를 확인한다.
+
+```bash
+git -C /path/to/agent-workflow-kit fetch --tags && git -C /path/to/agent-workflow-kit checkout v3.2.0
+bash /path/to/agent-workflow-kit/install.sh --update /path/to/target-repository
+```
+
 **v3.0 → v3.1.** 승인 관문(`.agents/skills/wf-design/approval-gate.py`)과 그 훅이 없어진다. 업데이트가 그 파일과 그 파일의 바이트코드 캐시(`wf-design/__pycache__/approval-gate.*.pyc`), 그리고 `.claude/settings.json`·`.codex/hooks.json` 에서 명령에 `approval-gate.py` 가 든 훅 항목만 지운다. 같은 파일의 다른 훅(예: 저장 뒤 포맷터 훅)·`enabledPlugins`·권한 설정은 그대로 둔다. 사용자 전역에 관문을 등록했다면(`~/.codex/hooks.json` 등) 설치기는 건드리지 않으므로 직접 지운다(남겨 두어도 파일이 없으면 아무것도 하지 않는다). AGENTS.md 기본 3이 바뀌었고, `verify.py prepare` 는 관문 기록 대신 지도 `## 기준` 의 `요청 원문` 항목이나 `--request <파일>` 을 쓴다.
 
 ```bash
@@ -291,7 +326,7 @@ bash /path/to/agent-workflow-kit/install.sh --update /path/to/target-repository
 
   O를 적어 두지 않았거나 키트에 없는 커밋이면 백업·대상 Git 이력에서 O를 확인한다. 확인되지 않으면 추측해 쓰지 않고 멈춰 사용자와 정한다.
 
-제거하는 설치기는 없다. 버전 파일의 커밋 V를 백업·이력으로 확인하고, ignore된 경로까지 실제 파일을 본 뒤 V의 원본과 같은 키트 부분만 지운다: AGENTS.md의 표시 영역(영역 밖에 프로젝트 내용이 없으면 파일 전체), 목록(V)의 파일, `../.agents/skills`를 가리키는 `.claude/skills` 링크, 버전 파일, 그리고 비게 된 `.agents/skills`·`.claude` 폴더다. 원본과 다른 파일, 목록에 없는 역할 스킬, 프로젝트 절, 인계 기록의 미완료 자료는 남기고 처리를 사용자와 정한다. .gitignore의 `/work/` 줄은 키트가 덧붙였음이 이력으로 확인되고 인계 기록을 더 쓰지 않을 때만 지운다. V나 소유가 확인되지 않으면 추측해 지우지 않는다.
+제거하는 설치기는 없다. 버전 파일의 커밋 V를 백업·이력으로 확인하고, ignore된 경로까지 실제 파일을 본 뒤 V의 원본과 같은 키트 부분만 지운다: AGENTS.md의 표시 영역(영역 밖에 프로젝트 내용이 없으면 파일 전체), 목록(V)의 파일, `../.agents/skills`를 가리키는 `.claude/skills` 링크, 버전 파일, 그리고 비게 된 `.agents/skills`·`.claude` 폴더다. 원본과 다른 파일, 목록에 없는 역할 스킬, 프로젝트 절, 인계 기록의 미완료 자료는 남기고 처리를 사용자와 정한다. .gitignore의 `/work/` 줄은 키트가 덧붙였음이 이력으로 확인되고 인계 기록을 더 쓰지 않을 때만 지운다. V나 소유가 확인되지 않으면 추측해 지우지 않는다. `.claude/settings.json`·`.codex/hooks.json` 에서는 명령에 `wf-context/context.py` 가 든 훅 항목만 지우고(그 그룹·사건이 비면 그것까지), 다른 훅·설정은 남긴다. 키트가 만든 파일이라 그 항목만 있었다면 빈 객체가 남으므로 파일을 지워도 된다.
 
 ### 도입 확인
 

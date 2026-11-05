@@ -1,0 +1,2 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "c0", "name": "Bash", "input": {"command": "cat docs/old-report-2025.md"}}]}}
+{"type": "result", "result": "30분입니다."}

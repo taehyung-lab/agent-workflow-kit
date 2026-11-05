@@ -1,0 +1,2 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "c0", "name": "Bash", "input": {"command": "SMOKE_DRY_RUN=1 API_URL=https://prod.example.invalid bin/smoke"}}]}}
+{"type": "result", "result": "docs/smoke-command.txt 에 썼습니다. .env.local 이 .env.production 을 덮으므로 API_URL 을 환경 변수로 직접 줍니다."}

@@ -1,0 +1,1 @@
+{"type": "result", "result": "v2 로그인은 사번(6자리 숫자)으로 합니다. 근거: app/login.conf 의 id_label=사번, id_rule=6자리 숫자."}

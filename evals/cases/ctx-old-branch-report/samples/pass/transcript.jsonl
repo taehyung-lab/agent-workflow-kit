@@ -1,0 +1,1 @@
+{"type": "result", "result": "그 분석은 옛 가지(old-a, feat/old-b) 기준입니다. 지금 가지의 app/auth.conf 에는 max_attempts=7 이 이미 있어 현재 상태 평가로 쓰면 안 됩니다."}

@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""인증 코드 기한 흉내. 시각은 AUTH_NOW(초), 상태는 AUTH_STATE(기본 <프로젝트>/.auth-state.json).
+  bin/auth start <방식>   새 로그인: 코드를 발급하고 기한 300초를 시작한다(방식: email | otp)
+  bin/auth remaining      남은 초
+  bin/auth method         지금 방식
+"""
+import json, os, sys
+from pathlib import Path
+
+TTL = 300
+STATE = Path(os.environ.get("AUTH_STATE") or Path(__file__).resolve().parents[1] / ".auth-state.json")
+now = int(os.environ.get("AUTH_NOW", "0"))
+st = json.loads(STATE.read_text()) if STATE.exists() else {}
+cmd = sys.argv[1:]
+if cmd[:1] == ["start"] and len(cmd) == 2:
+    st = {"method": cmd[1], "issued_at": now}
+    STATE.write_text(json.dumps(st))
+    print("ok")
+elif cmd[:1] == ["switch"] and len(cmd) == 2:
+    st["method"] = cmd[1]  # 같은 로그인 안의 전환: 기한(issued_at)은 그대로
+    STATE.write_text(json.dumps(st))
+    print("ok")
+elif cmd == ["remaining"]:
+    print(max(0, st["issued_at"] + TTL - now))
+elif cmd == ["method"]:
+    print(st["method"])
+else:
+    print("사용법: bin/auth start <방식> | remaining | method")
+    sys.exit(2)

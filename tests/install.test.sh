@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # install.sh 의 보장을 확인한다: 정상 설치, 충돌·재실행·잘못된 부모·미커밋 키트 거절,
 # 업데이트가 키트 소유 부분만 교체하고 프로젝트 부분을 보존하며, 키트 소유 부분의 로컬 변경은 같은 버전에서도 거절하고
-# 부모 심링크를 따라 대상 밖에 쓰지 않는지.
+# 부모 심링크를 따라 대상 밖에 쓰지 않는지. 훅: 세션 시작 정보 훅 항목 하나만 더하거나 지우고(다른 훅·설정 보존, 다시 실행해도 그대로),
+# 훅 명령은 python3·git 이 없어도 아무것도 내지 않고 0 으로 끝나는지.
 # 작업 트리의 키트를 임시 git 저장소로 복사해 커밋 v1·v2를 만들어 시험한다.
 set -uo pipefail
 src=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -182,15 +183,51 @@ mv "$t/.agents/agent-workflow-kit.version" "$out"; ln -s "$out" "$t/.agents/agen
 if ! install --update "$t" && grep -q 'symlink' "$tmp/err" && [ -L "$t/.agents/agent-workflow-kit.version" ] \
   && [ "$(cat "$out")" = "$before" ]; then ok "update refuses symlinked version file"; else ng "update refuses symlinked version file"; fi
 
-# 훅: 처음 설치는 훅 설정을 만들거나 고치지 않는다(파일 쓰기·명령 허용은 각 도구의 권한 설정이 맡는다)
+# 훅 항목 확인 도구: 파일 $1 에서 키트 정보 훅(wf-context)을 빼고 남은 내용이 JSON $2 와 같고, 키트 항목이 SessionStart 에 정확히 하나인지
+kit_hook_ok() { python3 -I - "$1" "$2" "${3:-1}" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8")); want = json.loads(sys.argv[2]); n = int(sys.argv[3])
+kit = [h for g in d.get("hooks", {}).get("SessionStart", []) for h in g.get("hooks", []) if "wf-context/context.py" in str(h.get("command", ""))]
+assert len(kit) == n, kit
+assert all("approval-gate" not in json.dumps(h) for h in kit) and all(h.get("timeout") == 10 for h in kit)
+hooks = d.get("hooks", {})
+for ev in list(hooks):
+    hooks[ev] = [g for g in ({**g, "hooks": [h for h in g.get("hooks", []) if "wf-context/context.py" not in str(h.get("command", ""))]} for g in hooks[ev]) if g["hooks"]]
+    if not hooks[ev]: del hooks[ev]
+if not hooks: d.pop("hooks", None)
+assert d == want, (d, want)
+PY
+}
+
+# 훅: 처음 설치는 정보 훅 항목 하나만 더하고, 기존 훅·권한 설정은 그대로 둔다(파일 쓰기·명령 허용은 각 도구의 권한 설정이 맡는다)
 t="$tmp/hooks-fresh"; mkdir -p "$t/.claude" "$t/.codex"
 printf '{"permissions": {"defaultMode": "plan"},\n "hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": "mine.sh"}]}]}}' > "$t/.claude/settings.json"
 printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"my-stop.sh"}]}]}}' > "$t/.codex/hooks.json"
-cp "$t/.claude/settings.json" "$tmp/s.json"; cp "$t/.codex/hooks.json" "$tmp/h.json"
 t2="$tmp/hooks-none"; mkdir "$t2"
-if install "$t" && install "$t2" && cmp -s "$tmp/s.json" "$t/.claude/settings.json" && cmp -s "$tmp/h.json" "$t/.codex/hooks.json" \
-  && [ ! -e "$t2/.claude/settings.json" ] && [ ! -e "$t2/.codex" ] && [ ! -e "$t2/.agents/skills/wf-design" ] \
-  && ! grep -qi 'hook' "$tmp/out"; then ok "fresh install writes no hooks and leaves existing settings byte-identical"; else ng "fresh install writes no hooks and leaves existing settings byte-identical"; fi
+if install "$t" && grep -q 'information only' "$tmp/out" && install "$t2" \
+  && kit_hook_ok "$t/.claude/settings.json" '{"permissions": {"defaultMode": "plan"}, "hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": "mine.sh"}]}]}}' \
+  && kit_hook_ok "$t/.codex/hooks.json" '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "my-stop.sh"}]}]}}' \
+  && kit_hook_ok "$t2/.claude/settings.json" '{}' && kit_hook_ok "$t2/.codex/hooks.json" '{}' \
+  && grep -q 'CLAUDE_PROJECT_DIR' "$t2/.claude/settings.json" && ! grep -q 'CLAUDE_PROJECT_DIR' "$t2/.codex/hooks.json" \
+  && [ ! -e "$t2/.agents/skills/wf-design" ] && [ -f "$t2/.agents/skills/wf-context/context.py" ]; then ok "fresh install adds only the SessionStart information hook and keeps existing hooks and permissions"; else ng "fresh install adds only the SessionStart information hook and keeps existing hooks and permissions"; cat "$tmp/err"; fi
+
+# 훅 명령: python3·git 이 없거나 키트 파일이 없어도 아무것도 내지 않고 0. 있으면 정보 JSON 을 내고 0(git 저장소가 아니어도)
+cmd_of() { python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); print(next(h["command"] for g in d["hooks"]["SessionStart"] for h in g["hooks"] if "wf-context" in h["command"]))' "$1"; }
+ccmd=$(cmd_of "$t2/.claude/settings.json"); xcmd=$(cmd_of "$t2/.codex/hooks.json"); mkdir -p "$tmp/empty-path"
+o1=$(cd "$t2" && echo '{}' | CLAUDE_PROJECT_DIR="$t2" PATH="$tmp/empty-path" /bin/sh -c "$ccmd"); r1=$?
+o2=$(cd "$t2" && echo '{}' | PATH="$tmp/empty-path" /bin/sh -c "$xcmd"); r2=$?
+o3=$(cd "$tmp" && echo '{}' | CLAUDE_PROJECT_DIR="$tmp/no-such" /bin/sh -c "$ccmd"); r3=$?
+o4=$(cd "$t2" && echo '{"hook_event_name": "SessionStart", "source": "resume"}' | CLAUDE_PROJECT_DIR="$t2" /bin/sh -c "$ccmd"); r4=$?
+o5=$(cd "$t2" && echo '{}' | /bin/sh -c "$xcmd"); r5=$?
+if [ "$r1$r2$r3$r4$r5" = 00000 ] && [ -z "$o1$o2$o3" ] \
+  && printf '%s' "$o4" | python3 -I -c 'import json,sys; d=json.load(sys.stdin)["hookSpecificOutput"]; assert d["hookEventName"]=="SessionStart" and "실경로" in d["additionalContext"] and "resume" in d["additionalContext"]' \
+  && printf '%s' "$o5" | grep -q '실경로'; then ok "hook command: silent exit 0 without python3/git/kit file; information JSON exit 0 otherwise"; else ng "hook command exit/output: $r1$r2$r3$r4$r5 [$o1|$o2|$o3]"; fi
+
+# 훅 설정 파일이 깨졌거나 심링크면 아무것도 쓰기 전에 멈춘다
+t="$tmp/hooks-broken"; mkdir -p "$t/.codex"; printf '{"hooks": ' > "$t/.codex/hooks.json"
+if ! install "$t" && grep -q 'Could not read hook settings' "$tmp/err" && [ ! -e "$t/AGENTS.md" ] && [ "$(cat "$t/.codex/hooks.json")" = '{"hooks": ' ]; then ok "broken hook settings refused before writing"; else ng "broken hook settings refused before writing"; fi
+t="$tmp/hooks-link"; mkdir -p "$t/.claude"; echo '{}' > "$tmp/outside-settings.json"; ln -s "$tmp/outside-settings.json" "$t/.claude/settings.json"
+if ! install "$t" && grep -q 'Could not read hook settings' "$tmp/err" && [ ! -e "$t/AGENTS.md" ] && [ "$(cat "$tmp/outside-settings.json")" = '{}' ]; then ok "symlinked hook settings refused before writing"; else ng "symlinked hook settings refused before writing"; fi
 
 # v3.0.0 → 이 커밋 업그레이드: v3.0.0 설치기가 등록한 관문 훅 항목만 지우고, 프로젝트의 다른 훅·설정은 그대로 둔다.
 # 실제 v3.0.0 태그의 키트로 설치한 뒤(그 설치기가 훅을 등록), 같은 저장소에서 지금 작업 트리를 다음 커밋으로 만들어 --update 한다.
@@ -226,14 +263,15 @@ h = c["hooks"]
 assert c["enabledPlugins"] == {"superpowers@claude-plugins-official": False} and c["permissions"] == {"allow": ["Bash(pnpm test)"]}
 assert h["PostToolUse"] == [{"matcher": "^(Edit|Write)$", "hooks": [{"type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/scripts/format/edited.mjs\" --hook", "timeout": 60}]}]
 assert h["PreToolUse"] == [{"matcher": "Bash", "hooks": [{"type": "command", "command": "mine.sh"}]}]
-assert set(h) == {"PostToolUse", "PreToolUse"}
-assert x == {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "my-stop.sh"}]}]}}' "$t/.claude/settings.json" "$t/.codex/hooks.json"; }
+assert set(h) == {"PostToolUse", "PreToolUse", "SessionStart"} and len(h["SessionStart"]) == 1 and "wf-context/context.py" in h["SessionStart"][0]["hooks"][0]["command"]
+assert x["hooks"]["Stop"] == [{"hooks": [{"type": "command", "command": "my-stop.sh"}]}] and set(x["hooks"]) == {"Stop", "SessionStart"}
+assert "wf-context/context.py" in x["hooks"]["SessionStart"][0]["hooks"][0]["command"]' "$t/.claude/settings.json" "$t/.codex/hooks.json"; }
   if bash "$ok_kit/install.sh" --update "$t" >"$tmp/out" 2>"$tmp/err" \
     && [ "$(gates "$t/.claude/settings.json")" = 0 ] && [ "$(gates "$t/.codex/hooks.json")" = 0 ] && settings_ok \
     && grep -q 'Removed old approval gate hook entries from .claude/settings.json' "$tmp/out" \
     && [ ! -e "$t/.agents/skills/wf-design" ] && [ -f "$t/.agents/skills/wf-verify/verify.py" ] \
     && [ "$(cat "$t/.agents/agent-workflow-kit.version")" = "$new_sha" ] \
-    && cmp -s <(region < "$t/AGENTS.md") <(region < "$src/AGENTS.md"); then ok "upgrade from $old_ref removes only gate hook entries, keeps formatter hook, same-group hook, plugins, permissions"; else ng "upgrade from $old_ref removes only gate hook entries, keeps formatter hook, same-group hook, plugins, permissions"; cat "$tmp/err"; fi
+    && cmp -s <(region < "$t/AGENTS.md") <(region < "$src/AGENTS.md"); then ok "upgrade from $old_ref removes only gate hook entries, adds the information hook, keeps formatter hook, same-group hook, plugins, permissions"; else ng "upgrade from $old_ref removes only gate hook entries, adds the information hook, keeps formatter hook, same-group hook, plugins, permissions"; cat "$tmp/err"; fi
   before=$(snap "$t")
   if bash "$ok_kit/install.sh" --update "$t" >"$tmp/out" 2>&1 && grep -q 'Already at' "$tmp/out" && [ "$(snap "$t")" = "$before" ]; then ok "upgrade rerun changes nothing"; else ng "upgrade rerun changes nothing"; fi
 
@@ -243,6 +281,35 @@ assert x == {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "my-st
   printf '{"hooks": {"Stop": [{"hooks": [{"command": "python3 x/approval-gate.py stop"}]}]}' > "$t/.codex/hooks.json"
   before=$(snap "$t")
   if ! bash "$ok_kit/install.sh" --update "$t" >"$tmp/out" 2>"$tmp/err" && grep -q 'Could not read hook settings' "$tmp/err" && [ "$(snap "$t")" = "$before" ]; then ok "broken settings with gate entries refused before writing"; else ng "broken settings with gate entries refused before writing"; fi
+fi
+
+# v3.1.0(훅 없음) → 이 커밋: 정보 훅만 더하고 프로젝트의 포맷터 훅·플러그인 설정은 그대로. 다시 실행하면 아무것도 바꾸지 않는다.
+# 이어서 정보 훅 파일을 뺀 다음 키트 커밋으로 업데이트하면(훅 제거 경로) 키트 항목만 지우고 다른 훅·설정은 그대로 둔다.
+if git -C "$src" rev-parse -q --verify "v3.1.0^{commit}" >/dev/null; then
+  k31="$tmp/kit-31"; mkdir "$k31"
+  g31() { git -C "$k31" -c user.name=t -c user.email=t@t "$@" >/dev/null; }
+  git -C "$src" archive v3.1.0 | tar xf - -C "$k31"; g31 init -q; g31 add -A; g31 commit -qm v31
+  t="$tmp/up31"; mkdir -p "$t/.claude"
+  printf '{"hooks": {"PostToolUse": [{"matcher": "^(Edit|Write)$", "hooks": [{"type": "command", "command": "fmt.sh", "timeout": 60}]}]}, "enabledPlugins": {"p@x": false}}' > "$t/.claude/settings.json"
+  bash "$k31/install.sh" "$t" >/dev/null 2>&1
+  keep31='{"hooks": {"PostToolUse": [{"matcher": "^(Edit|Write)$", "hooks": [{"type": "command", "command": "fmt.sh", "timeout": 60}]}]}, "enabledPlugins": {"p@x": false}}'
+  [ ! -e "$t/.codex" ] && kit_hook_ok "$t/.claude/settings.json" "$keep31" 0 && ok "fixture: v3.1.0 installer wrote no hooks" || ng "fixture: v3.1.0 installer wrote no hooks"
+  (cd "$k31" && git ls-files -z | xargs -0 rm -f) && (cd "$src" && tar cf - --exclude=.git --exclude=__pycache__ .) | (cd "$k31" && tar xf -)
+  g31 add -A; g31 commit -qm new
+  if bash "$k31/install.sh" --update "$t" >"$tmp/out" 2>"$tmp/err" && kit_hook_ok "$t/.claude/settings.json" "$keep31" && kit_hook_ok "$t/.codex/hooks.json" '{}' \
+    && grep -q 'information only' "$tmp/out"; then ok "upgrade from v3.1.0 adds only the information hook, keeps formatter hook and plugins"; else ng "upgrade from v3.1.0 adds only the information hook, keeps formatter hook and plugins"; cat "$tmp/err"; fi
+  before=$(snap "$t")
+  if bash "$k31/install.sh" --update "$t" >"$tmp/out" 2>&1 && grep -q 'Already at' "$tmp/out" && [ "$(snap "$t")" = "$before" ]; then ok "hook update rerun changes nothing"; else ng "hook update rerun changes nothing"; fi
+  # 사용자가 같은 SessionStart 에 자기 훅을 더해도 다시 실행이 그 훅·순서를 바꾸지 않는다
+  python3 -I -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["hooks"]["SessionStart"].append({"matcher": "startup", "hooks": [{"type": "command", "command": "my-start.sh"}]}); json.dump(d, open(p, "w"))' "$t/.claude/settings.json"
+  before=$(snap "$t")
+  if bash "$k31/install.sh" --update "$t" >"$tmp/out" 2>&1 && [ "$(snap "$t")" = "$before" ]; then ok "rerun keeps a user SessionStart hook next to the kit entry untouched"; else ng "rerun keeps a user SessionStart hook next to the kit entry untouched"; fi
+  git -C "$k31" rm -q -r .agents/skills/wf-context; g31 commit -qm drop-context
+  if bash "$k31/install.sh" --update "$t" >"$tmp/out" 2>"$tmp/err" && [ ! -e "$t/.agents/skills/wf-context" ] \
+    && kit_hook_ok "$t/.claude/settings.json" "$(python3 -I -c 'import json,sys; d=json.loads(sys.argv[1]); d["hooks"]["SessionStart"]=[{"matcher": "startup", "hooks": [{"type": "command", "command": "my-start.sh"}]}]; print(json.dumps(d))' "$keep31")" 0 \
+    && kit_hook_ok "$t/.codex/hooks.json" '{}' 0 && grep -q 'Removed kit hook entries' "$tmp/out"; then ok "update to a kit without the inspector removes only kit hook entries (user hooks, formatter, plugins kept)"; else ng "update to a kit without the inspector removes only kit hook entries (user hooks, formatter, plugins kept)"; cat "$tmp/err"; fi
+else
+  ng "upgrade from v3.1.0: tag not found in kit checkout (fetch tags, e.g. git fetch --tags)"
 fi
 
 printf '%d passed, %d failed\n' "$pass" "$failed"

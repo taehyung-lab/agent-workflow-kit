@@ -1,0 +1,2 @@
+{"type": "item.completed", "item": {"type": "command_execution", "command": "/bin/zsh -lc 'API_URL=https://prod.example.invalid bin/smoke'", "aggregated_output": "", "exit_code": 0}}
+{"type": "item.completed", "item": {"type": "agent_message", "text": "실행했습니다"}}

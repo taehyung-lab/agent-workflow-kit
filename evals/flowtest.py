@@ -49,8 +49,13 @@ with tempfile.TemporaryDirectory() as t:
     sh(*G, "init", "-q", cwd=proj); sh(*G, "add", "-A", cwd=proj); sh(*G, "commit", "-qm", "app", cwd=proj)
     r = sh("bash", str(kit / "install.sh"), str(proj))
     check("실제 install.sh 설치가 성공하고 검토 실행기가 설치된다", r.returncode == 0 and (proj / ".agents/skills/wf-verify/verify.py").is_file())
-    check("설치는 승인 관문·훅 설정을 만들지 않는다", not (proj / ".agents/skills/wf-design").exists()
-          and not (proj / ".claude/settings.json").exists() and not (proj / ".codex").exists())
+    def kit_hooks(path):
+        d = json.loads(path.read_text()) if path.is_file() else {}
+        return {ev: [h.get("command", "") for g in gs for h in g.get("hooks", [])] for ev, gs in d.get("hooks", {}).items()}
+    hc, hx = kit_hooks(proj / ".claude/settings.json"), kit_hooks(proj / ".codex/hooks.json")
+    check("설치는 승인 관문을 두지 않고, 훅은 세션 시작 정보 훅(wf-context) 하나뿐이다", not (proj / ".agents/skills/wf-design").exists()
+          and list(hc) == ["SessionStart"] and list(hx) == ["SessionStart"] and len(hc["SessionStart"]) == 1 and len(hx["SessionStart"]) == 1
+          and "wf-context/context.py" in hc["SessionStart"][0] and "wf-context/context.py" in hx["SessionStart"][0])
     sh(*G, "add", "-A", cwd=proj); sh(*G, "commit", "-qm", "kit", cwd=proj)
     verifier = proj / ".agents/skills/wf-verify/verify.py"
 
@@ -177,6 +182,27 @@ exit 0
     check("1회차 뒤 지도 기준이 바뀌면 2회차 검토자에게 1회차 기준과 바뀐 사실을 알린다(baseline_changed)",
           out.get("round") == 2 and "1회차 검토 뒤 작업 지도의 기준이 바뀌었다" in prompt and "원래 기준" in prompt and "바뀐 기준" in prompt
           and "1회차 검토 뒤" not in a[2] and out.get("baseline_changed_after_approval") is True)
+    # 맥락 봉투: 지도의 `## 맥락`과 맥락 도구가 관찰한 대상 저장소 정보가 검토 입력에 들어간다(증거·자기평가는 여전히 제외)
+    mpc = proj / "work" / "ctx" / "work.md"; mpc.parent.mkdir(parents=True, exist_ok=True)
+    mpc.write_text(f"# ctx\n\n## 기준\n\n- 요청 원문: {REQ}\n| B1 | 한국어 화면 버튼이 '로그인하기' |\n\n## 맥락\n\n- 대상: 이 저장소 ENVELOPE-MARKER\n- 근거: ../old-app (과거 비교만)\n\n## 증거\n\nSELF-ASSESS-MARKER\n")
+    rdy = prep("--map", "work/ctx/work.md")
+    pc = Path(rdy.get("prompt_file", "/x")).read_text() if rdy.get("state") == "ready" else ""
+    check("검토 입력: 지도 `## 맥락`(봉투)과 맥락 도구의 관찰(실경로·브랜치)이 들어가고 증거는 빠진다",
+          "ENVELOPE-MARKER" in pc and "과거 비교만" in pc and f"실경로: {os.path.realpath(proj)}" in pc and "브랜치:" in pc and "SELF-ASSESS-MARKER" not in pc)
+    check("검토자 지침: 다른 대상·과거 자료를 현재 사실로 전제했거나 결정·시나리오와 어긋나면 RETURN", "다른 저장소·버전·과거 자료를 현재 사실로 전제" in pc)
+    # 분석만 한 작업: 바뀐 파일이 없으면 --output 산출물이 판정 대상. 둘 다 없으면 입력 부족
+    sh(*G, "add", "-A", cwd=proj); sh(*G, "commit", "-qm", "clean", cwd=proj)
+    rnone = prep("--request", req_file("로그인 흐름을 분석해 주세요"))
+    check("바뀐 파일도 산출물도 없으면 입력 부족으로 unverified", rnone.get("state") == "unverified" and "검토할 것이 없다" in rnone.get("reason", ""))
+    outf = req_file("분석: 이 저장소 ui.txt 의 button=로그인하기 ANALYSIS-MARKER")
+    rana = prep("--request", req_file("로그인 흐름을 분석해 주세요"), "--output", outf)
+    pa = Path(rana.get("prompt_file", "/x")).read_text() if rana.get("state") == "ready" else ""
+    check("분석만 한 작업: --output 산출물로 검토 입력을 만들고(diff 없음 표시), 산출물이 원문·맥락에 맞는지 보라고 지시한다",
+          "ANALYSIS-MARKER" in pa and "(바뀐 파일 없음)" in pa and "검토할 산출물" in pa and "산출물의 대상·전제·인용·권고" in pa)
+    o = json.loads(fin(rana["kept"], json.dumps(OK, ensure_ascii=False)).stdout.strip().splitlines()[-1]) if rana.get("state") == "ready" else {}
+    check("분석만 한 작업도 같은 형식으로 finish 판정(ok)", o.get("state") == "ok")
+    rempty = prep("--request", req_file("분석"), "--output", req_file("   "))
+    check("빈 산출물은 입력 부족으로 unverified", rempty.get("state") == "unverified" and "비었다" in rempty.get("reason", ""))
     # 근거 불완전
     (proj / "big.txt").write_text("x" * 70000 + "\n")
     rc, out, prompt = verify(mp, [OK], extra=("--request", req_file("큰 diff")))
