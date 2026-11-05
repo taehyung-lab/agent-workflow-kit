@@ -1,0 +1,2 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "b145306", "name": "Bash", "input": {"command": "bin/test"}}]}}
+{"type": "result", "result": "바꿨습니다. 커밋은 하지 않았습니다."}
