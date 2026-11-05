@@ -1,0 +1,2 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "c0", "name": "Bash", "input": {"command": "API_URL=https://prod.example.invalid bin/smoke"}}]}}
+{"type": "result", "result": "실행해 확인했습니다."}

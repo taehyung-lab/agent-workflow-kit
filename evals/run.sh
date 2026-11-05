@@ -104,11 +104,23 @@ PY
   gate=false; ! grep -q approval-gate.py "$work/project/.claude/settings.json" 2>/dev/null || gate=true
   [ "$harness" != codex ] || [ ! -f "$work/project/.codex/hooks.json" ] || net+=(--dangerously-bypass-hook-trust)
   if [ "$harness" = codex ]; then ch=$(mktemp -d); cp ~/.codex/auth.json ~/.codex/config.toml "$ch/" 2>/dev/null; [ ! -f ~/.codex/AGENTS.md ] || cp ~/.codex/AGENTS.md "$ch/"; fi
+  # v3.2~ 의 세션 시작 정보 훅(wf-context)은 Codex 가 프로젝트를 신뢰해야(trust_level) 읽힌다. 프로젝트를 신뢰한 사용자를 재현하려고
+  # 임시 홈의 config.toml 에만 이 프로젝트 신뢰를 더한다(사용자 전역 설정은 건드리지 않는다). 관문이 있던 v3.0 이하 커밋의 실행 조건은 바꾸지 않는다.
+  codex_trusted=false
+  if [ "$harness" = codex ] && grep -q 'wf-context/context.py' "$work/project/.codex/hooks.json" 2>/dev/null; then
+    for pdir in "$work/project" "$(cd "$work/project" && pwd -P)"; do
+      grep -qF "[projects.\"$pdir\"]" "$ch/config.toml" 2>/dev/null || printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$pdir" >> "$ch/config.toml"
+    done
+    codex_trusted=true
+  fi
   t=0; sent=0
   # 작업 시작 상태(첫 턴 직전). 검증자는 마지막 턴만이 아니라 작업 시작부터의 변경 전체를 받는다.
   mkdir "$work/before-task" && (cd "$work/project" && tar cf - --exclude=./.git --exclude=./.agents . 2>/dev/null) | tar xf - -C "$work/before-task"
   for turn in "${turns[@]}"; do
     t=$((t + 1)); sent=$((sent + 1)); prompt=$(cat "$turn"); tout="$out.t$t"
+    # 턴 사이 준비(선택): before-turnN.sh 가 있으면 N 번째 턴을 보내기 전에 프로젝트 폴더에서 실행한다(예: 재개 전에 다른 사람이 파일을 바꿈).
+    [ ! -f "$case_dir/before-turn$t.sh" ] || (cd "$work/project" && bash "$case_dir/before-turn$t.sh") >> "$out.err" 2>&1 \
+      || { rc=3; echo "턴 사이 준비 실패: before-turn$t.sh" >> "$out.err"; break; }
     # 턴마다 직전 작업 파일(설치된 키트·git 제외)을 덮어 남긴다. 끝나면 "마지막으로 실행한 턴의 직전 상태"가 되어,
     # 판정은 그 턴에서 무엇을 바꿨나를 보고, 하네스가 중간에 실패해도 실패한 턴의 직전 상태가 남는다.
     rm -rf "${work:?}/before-last"; mkdir "$work/before-last" \
@@ -228,7 +240,7 @@ print("true" if d.get("waiting") else "false")' 2>/dev/null)
   # 값은 환경 변수로 넘겨 따옴표·줄바꿈이 섞인 판정 문구도 그대로 기록한다.
   E_REQUIRED=$( [ -f "$case_dir/review-required" ] && echo true || echo false ) E_HERE=$here E_CASE=$case_name E_REF=$ref E_COMMIT=$commit E_HARNESS=$harness E_RUN=$i E_RC=$rc E_SEC=$seconds \
   E_VERSION=$("$harness" --version 2>/dev/null | head -1) E_BYTES=$agents_bytes E_CHECK_RC=$check_rc E_VERDICT=$verdict \
-  E_G1=$(fingerprint ~/.claude/CLAUDE.md) E_G2=$(fingerprint ~/.agents/USER.md) E_G3=$(fingerprint ~/.codex/AGENTS.md) E_G4=$(skills_fingerprint) E_G5=$(plugins_fingerprint "$work/project") E_OBS=$observed E_VSTATE=$verify_state E_BCHANGED=${baseline_changed:-false} E_VREASON=$verify_reason E_VROUNDS=$verify_rounds E_VRC=$verifier_rc E_VJSON=$vjson E_LANG=${EVALS_LANG:-} E_CSET=${EVALS_CLAUDE_SETTINGS:+$(cat "$EVALS_CLAUDE_SETTINGS")} E_JUDGE=$(cd "$here" && shasum -a 256 "cases/$case_name/check.py" judge.py observe.py transcript.py verdict.py ../.agents/skills/wf-verify/verify.py 2>/dev/null | shasum -a 256 | cut -c1-12) E_GATE=$gate E_WAITING=${gate_waiting:-false} E_VTOOL=${verifier_tool:-} E_INPUT=$input E_TURNS=$sent E_PLANNED=${#turns[@]} E_WAIT=$(python3 -I -c 'import json,sys
+  E_G1=$(fingerprint ~/.claude/CLAUDE.md) E_G2=$(fingerprint ~/.agents/USER.md) E_G3=$(fingerprint ~/.codex/AGENTS.md) E_G4=$(skills_fingerprint) E_G5=$(plugins_fingerprint "$work/project") E_OBS=$observed E_VSTATE=$verify_state E_BCHANGED=${baseline_changed:-false} E_VREASON=$verify_reason E_VROUNDS=$verify_rounds E_VRC=$verifier_rc E_VJSON=$vjson E_LANG=${EVALS_LANG:-} E_CSET=${EVALS_CLAUDE_SETTINGS:+$(cat "$EVALS_CLAUDE_SETTINGS")} E_JUDGE=$(cd "$here" && shasum -a 256 "cases/$case_name/check.py" judge.py observe.py transcript.py verdict.py ../.agents/skills/wf-verify/verify.py 2>/dev/null | shasum -a 256 | cut -c1-12) E_GATE=$gate E_WAITING=${gate_waiting:-false} E_VTOOL=${verifier_tool:-} E_CTRUST=${codex_trusted:-false} E_INPUT=$input E_TURNS=$sent E_PLANNED=${#turns[@]} E_WAIT=$(python3 -I -c 'import json,sys
 n = seen = 0
 try:
     for line in open(sys.argv[1], encoding="utf-8"):
@@ -269,6 +281,7 @@ json.dump({"case": e["E_CASE"], "kit_ref": e["E_REF"], "kit_commit": e["E_COMMIT
   "completion": completion(review_state(e), {"0": "PASS", "1": "FAIL", "2": "REVIEW"}.get(e["E_CHECK_RC"], "UNVERIFIED"), e["E_WAITING"] == "true",
                            e["E_REQUIRED"] == "true"),
   "gate_waiting": e["E_WAITING"] == "true", "verifier_tool": e["E_VTOOL"] or None,
+  "codex_project_trusted": e["E_CTRUST"] == "true",
   "baseline_changed_after_approval": e["E_BCHANGED"] == "true",
   "global_instructions": {"~/.claude/CLAUDE.md": e["E_G1"], "~/.agents/USER.md": e["E_G2"], "~/.codex/AGENTS.md": e["E_G3"], "global skills": e["E_G4"], "plugins": e["E_G5"]},
   "claude_project_settings": e.get("E_CSET") or None},

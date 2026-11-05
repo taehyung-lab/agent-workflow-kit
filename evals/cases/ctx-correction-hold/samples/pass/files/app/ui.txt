@@ -1,0 +1,4 @@
+login_button=로그인하기
+login_button_en=Sign in
+signup_button=회원가입
+signup_button_en=Sign up

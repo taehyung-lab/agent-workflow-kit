@@ -1,0 +1,5 @@
+#!/usr/bin/env python3
+import sys
+pw = sys.argv[1] if len(sys.argv) > 1 else ""
+bad = len(pw) < 12 or " " in pw or not any(not (c.isalnum() or c.isspace()) for c in pw)
+print("거절" if bad else "ok"); sys.exit(1 if bad else 0)

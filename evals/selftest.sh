@@ -99,10 +99,18 @@ m = json.load(open(sys.argv[1])); s = json.load(open(sys.argv[2]))
 assert s["enabledPlugins"]["superpowers@claude-plugins-official"] is False
 assert "superpowers@claude-plugins-official" in m["claude_project_settings"] and m["global_instructions"]["plugins"] not in ("", None)' "$pm" "${pm%.meta.json}.files/.claude/settings.json" 2>/dev/null \
   && ok "실제 플러그인 조합 옵션: 프로젝트 설정에 enabledPlugins 를 합치고 meta 에 설정·플러그인 지문을 남김" || ng "플러그인 조합 옵션: $pm"
-# Codex: 프로젝트 훅 파일이 없는 커밋(v3.1~)에서는 훅 신뢰 우회(--dangerously-bypass-hook-trust)를 넘기지 않는다
-printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho "$*" >> "$FAKE_LOG"\necho \x27{"type": "thread.started", "thread_id": "t"}\x27\nexit 0\n' > "$fake/codex"; chmod +x "$fake/codex"
+# Codex: 프로젝트 훅 파일이 있을 때만 훅 신뢰 우회(--dangerously-bypass-hook-trust)를 넘긴다. v3.2~ 의 정보 훅(wf-context)이 있으면
+# 임시 홈 config.toml 에만 이 프로젝트 신뢰(trust_level)를 더해 훅이 실제로 읽히게 한다(프로젝트를 신뢰한 사용자 재현). 훅 파일이 없던 v3.1.0 은 둘 다 없다.
+printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho "$*" >> "$FAKE_LOG"\ngrep -c trust_level "$CODEX_HOME/config.toml" >> "$FAKE_LOG" 2>/dev/null || echo 0 >> "$FAKE_LOG"\necho \x27{"type": "thread.started", "thread_id": "t"}\x27\nexit 0\n' > "$fake/codex"; chmod +x "$fake/codex"
 : > "$fake/log"; FAKE_LOG=$fake/log EVALS_RESULTS=$results/codex PATH="$fake:$PATH" bash "$here/run.sh" weight-disposable "$REF" codex >/dev/null 2>&1
-grep -q 'codex\|exec' "$fake/log" && ! grep -q 'bypass-hook-trust' "$fake/log" && ok "Codex: 훅 파일이 없으면 훅 신뢰 우회를 넘기지 않음" || ng "Codex 훅 신뢰 우회: $(cat "$fake/log")"
+before_trust=$(grep -c trust_level ~/.codex/config.toml 2>/dev/null || echo 0)
+grep -q 'bypass-hook-trust' "$fake/log" && [ "$(tail -1 "$fake/log")" -gt "$before_trust" ] && grep -q '"codex_project_trusted": true' "$results"/codex/*.meta.json \
+  && ok "Codex: 정보 훅이 있으면 훅 신뢰 우회와 임시 홈의 프로젝트 신뢰를 넘기고 meta 에 남김" || ng "Codex 정보 훅 신뢰: $(cat "$fake/log")"
+if git -C "$kitdir" rev-parse -q --verify 'v3.1.0^{commit}' >/dev/null; then
+  : > "$fake/log"; FAKE_LOG=$fake/log EVALS_RESULTS=$results/codex31 PATH="$fake:$PATH" bash "$here/run.sh" weight-disposable v3.1.0 codex >/dev/null 2>&1
+  grep -q 'exec' "$fake/log" && ! grep -q 'bypass-hook-trust' "$fake/log" && [ "$(tail -1 "$fake/log")" = "$before_trust" ] \
+    && ok "Codex: 훅 파일이 없는 커밋(v3.1.0)은 훅 신뢰 우회·프로젝트 신뢰를 넘기지 않음" || ng "Codex v3.1.0 훅 신뢰: $(cat "$fake/log")"
+else ng "Codex v3.1.0 비교: 태그 없음(git fetch --tags)"; fi
 rm -rf "${fake:?}" "${results:?}"
 # 독립 검증 루프(가짜 하네스): 검증자 입력의 독립성, 정해진 결과 형식만 통과, 반환 → 교정 → 새 버전 재검증, 한도 = 미완료, 수정 = 무효
 vf=$(mktemp -d); mkdir "$vf/bin"
@@ -307,6 +315,9 @@ cat > "$vf/bin/codex" <<'FAKE'
 #!/bin/sh
 [ "$1" = --version ] && { echo fake 0; exit 0; }
 for a in "$@"; do case "$a" in *"당신은 별도 검증자다"*) echo '{"type": "item.completed", "item": {"type": "agent_message", "text": ""}}'; exit 9;; esac; done
+# 구현자는 파일 하나를 바꾼다(바뀐 것이 없으면 검토할 것이 없어 검토자를 띄우지 않는다: verify.py 입력 부족)
+# 첫 턴은 -C <프로젝트> 로 폴더를 받는다(실행기의 현재 폴더가 아니다)
+d=.; prev=; for a in "$@"; do [ "$prev" = -C ] && d=$a; prev=$a; done; echo made > "$d/made-by-fake-codex.txt"
 echo '{"type": "thread.started", "thread_id": "fake-thread"}'; echo '{"type": "item.completed", "item": {"type": "agent_message", "text": "IMPL"}}'; exit 0
 FAKE
 chmod +x "$vf/bin/codex"; d="$vf/codex"; mkdir -p "$d"
