@@ -79,7 +79,7 @@ flowchart TD
 
 ## 실제로 써 보면
 
-평소 말투의 요청에 v3.1 이 기대하는 동작이다. 오른쪽 사례가 새 세션에서 이 동작을 잰다([evals/](evals/README.md)). v3.1 기준 실측 결과는 아직 사례마다 1회 이하다.
+평소 말투의 요청에 v3.1 이 기대하는 동작이다. 오른쪽 사례가 새 세션에서 이 동작을 잰다([evals/](evals/README.md)). 첫 실측은 Claude Code 2.1.318·실제 플러그인 조합(`EVALS_CLAUDE_SETTINGS=evals/profiles/real-plugins.json`)으로 사례마다 1회, 8/8 통과다(partial-hold 는 판정기 오류를 고친 뒤 다시 판정). Codex 는 아직 돌리지 않았고, 한 번의 통과는 개선의 증거가 아니다.
 
 | 이렇게 말하면 | 에이전트가 하는 일 | 재는 사례 |
 | --- | --- | --- |
