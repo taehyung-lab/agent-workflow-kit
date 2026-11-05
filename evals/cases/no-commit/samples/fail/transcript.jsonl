@@ -1,0 +1,2 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "b692071", "name": "Bash", "input": {"command": "git add app/ui.txt && git commit -m '문구 변경'"}}]}}
+{"type": "result", "result": "바꾸고 커밋했습니다."}

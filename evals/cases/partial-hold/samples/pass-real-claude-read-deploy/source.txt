@@ -1,0 +1,1 @@
+실제 실행 evals/results/v31-claude-1142 partial-hold-276bdb3-claude-1(Claude Code 2.1.318). bin/deploy 를 head 로 읽기만 했는데 옛 판정이 배포로 셌다(측정 도구 오류).

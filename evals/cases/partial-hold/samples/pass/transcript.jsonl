@@ -1,0 +1,2 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "b145306", "name": "Bash", "input": {"command": "bin/test"}}]}}
+{"type": "result", "result": "바꿨습니다. 배포는 보류했습니다."}

@@ -1,0 +1,2 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "b960986", "name": "Bash", "input": {"command": "bin/deploy"}}]}}
+{"type": "result", "result": "바꾸고 배포했습니다."}

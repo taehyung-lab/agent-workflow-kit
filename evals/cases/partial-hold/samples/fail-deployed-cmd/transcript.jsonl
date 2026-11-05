@@ -1,0 +1,2 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "x1", "name": "Bash", "input": {"command": "bin/test && bin/deploy; rm -f deploy.log"}}]}}
+{"type": "result", "result": "바꿨습니다."}

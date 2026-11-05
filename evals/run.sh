@@ -16,6 +16,9 @@
 #   ok → 완료, returned → 구현자에게 돌려보내고 새 버전을 다시 판정(EVALS_VERIFY_ROUNDS 번까지, 기본 2), 그 밖(빈 답·형식 오류·
 #   조건 누락·OK 인데 미충족)·검증자 하네스 오류·검증자가 추적 파일을 바꿈 → 미확인. 한도에 닿으면 미완료. 미확인·미완료는 완료가 아니다.
 # EVALS_LANG=<언어> 는 사례의 setup.sh 에 넘겨 같은 사례를 다른 제품 언어로 만든다(사례가 지원할 때). meta 의 lang 에 남는다.
+# EVALS_CLAUDE_SETTINGS=<JSON 파일> 은 설치 뒤 프로젝트 .claude/settings.json 에 그 내용을 합친다(맨 위 키 단위, enabledPlugins 는 항목 단위).
+#   실제 사용 조합 재현용 예: evals/profiles/real-plugins.json(superpowers 를 프로젝트에서 끄고, 사용자 설정의 나머지 플러그인은 그대로).
+#   Claude 는 늘 사용자 홈(~/.claude)의 전역 지침·플러그인·훅을 함께 읽는다. 실제로 켜진 플러그인 목록의 지문은 meta 의 global_instructions.plugins 에 남는다.
 set -uo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 kit=$(cd -- "$here/.." && pwd -P)
@@ -41,6 +44,16 @@ case "$harness" in claude|codex) command -v "$harness" >/dev/null || fail "$harn
 fingerprint() { [ -f "$1" ] && shasum -a 256 "$1" | cut -c1-12 || echo none; }
 # 전역 스킬은 폴더 전체의 SKILL.md 내용으로 지문을 만든다(스킬이 하나 바뀌어도 지문이 달라진다).
 skills_fingerprint() { find -L "$HOME/.agents/skills" "$HOME/.claude/skills" -name SKILL.md 2>/dev/null | sort | xargs shasum -a 256 2>/dev/null | shasum -a 256 | cut -c1-12; }
+# Claude 에서 실제로 켜지는 플러그인 목록(사용자 설정 위에 프로젝트 설정을 덮은 enabledPlugins 중 true)의 지문. 플러그인 조합이 다른 실행끼리 비교하지 않게 한다.
+plugins_fingerprint() { python3 -I - "$HOME/.claude/settings.json" "$1/.claude/settings.json" "$1/.claude/settings.local.json" <<'PY' 2>/dev/null || echo none
+import hashlib, json, os, sys
+on = {}
+for f in sys.argv[1:]:
+    if os.path.isfile(f):
+        on.update(json.load(open(f, encoding="utf-8")).get("enabledPlugins") or {})
+print(hashlib.sha256(json.dumps(sorted(k for k, v in on.items() if v)).encode()).hexdigest()[:12])
+PY
+}
 out_root=${EVALS_RESULTS:-"$here/results/$(date +%Y%m%d)"}
 # 이후 턴은 프로젝트 폴더로 옮겨 실행하므로 결과 폴더는 절대 경로로 바꿔 둔다(상대 경로면 2턴 기록을 쓰지 못한다).
 mkdir -p "$out_root" && out_root=$(cd -- "$out_root" && pwd -P)
@@ -53,6 +66,17 @@ for i in $(seq $((1 + ${EVALS_RUN_OFFSET:-0})) $((times + ${EVALS_RUN_OFFSET:-0}
     && { [ ! -f "$case_dir/setup.sh" ] || EVALS_LANG=${EVALS_LANG:-} bash "$case_dir/setup.sh"; } \
     && git add -A && git -c user.name=evals -c user.email=evals@invalid commit -qm fixture) || fail "사례 준비 실패"
   bash "$work/kit/install.sh" "$work/project" >/dev/null 2>&1 || fail "키트 설치 실패: $commit"
+  if [ -n "${EVALS_CLAUDE_SETTINGS:-}" ]; then
+    python3 -I - "$EVALS_CLAUDE_SETTINGS" "$work/project/.claude/settings.json" <<'PY' || fail "EVALS_CLAUDE_SETTINGS 를 합치지 못했다: $EVALS_CLAUDE_SETTINGS"
+import json, os, sys
+add = json.load(open(sys.argv[1], encoding="utf-8"))
+cur = json.load(open(sys.argv[2], encoding="utf-8")) if os.path.isfile(sys.argv[2]) else {}
+for k, v in add.items():
+    cur[k] = {**cur.get(k, {}), **v} if k == "enabledPlugins" and isinstance(v, dict) else v
+os.makedirs(os.path.dirname(sys.argv[2]), exist_ok=True)
+json.dump(cur, open(sys.argv[2], "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+PY
+  fi
   (cd "$work/project" && git add -A && git -c user.name=evals -c user.email=evals@invalid commit -qm kit)
   # 설치 뒤 준비(선택): 설치된 상태를 바꿔야 하는 사례(예: 키트 본문을 읽을 수 없게, 다른 저장소를 옆에 두기)가 쓴다.
   # 설치 커밋 뒤에 실행하므로 그 변경은 세션이 보는 작업 트리에만 남는다. EVALS_KIT 는 설치에 쓴 키트 checkout 이다.
@@ -72,13 +96,13 @@ for i in $(seq $((1 + ${EVALS_RUN_OFFSET:-0})) $((times + ${EVALS_RUN_OFFSET:-0}
   # Codex 는 전역 지침을 CODEX_HOME 에서 읽는다. 실제 설정을 복사한 임시 홈을 쓰고, 세션을 이어 가도록 모든 턴이 끝날 때까지 둔다.
   # EVALS_CODEX_NETWORK=1 이면 Codex 작업 공간에 네트워크를 허용한다(세션 안에서 다른 세션을 띄우는 후보를 시험할 때).
   net=(); [ "${EVALS_CODEX_NETWORK:-0}" != 1 ] || net=(-c sandbox_workspace_write.network_access=true)
-  # 승인 관문 훅은 설치기가 프로젝트 설정(.claude/settings.json, .codex/hooks.json)에 등록한 그대로 쓴다(그 커밋의 키트에 관문이 있을 때).
-  # Codex 는 프로젝트 훅을 사용자가 한 번 신뢰해야 실행하므로, 그 신뢰를 대신해 --dangerously-bypass-hook-trust 를 준다.
-  # 훅 판단은 결과 옆 .hook.log 에 남긴다. 사용자 전역 설정은 건드리지 않는다.
+  # v3.1 부터 키트는 훅을 설치하지 않는다. 승인 관문이 있던 커밋(v3.0 이하)을 비교할 때만 설치기가 등록한 관문 훅이 돌고,
+  # 그 판단을 결과 옆 .hook.log 에 남긴다(AWK_GATE_LOG). Codex 는 프로젝트 훅을 사용자가 한 번 신뢰해야 실행하므로,
+  # 프로젝트에 .codex/hooks.json 이 있을 때만 그 신뢰를 대신해 --dangerously-bypass-hook-trust 를 준다. 사용자 전역 설정은 건드리지 않는다.
   limit=1200
   export AWK_GATE_LOG="$out.hook.log"
   gate=false; ! grep -q approval-gate.py "$work/project/.claude/settings.json" 2>/dev/null || gate=true
-  [ "$harness" != codex ] || net+=(--dangerously-bypass-hook-trust)
+  [ "$harness" != codex ] || [ ! -f "$work/project/.codex/hooks.json" ] || net+=(--dangerously-bypass-hook-trust)
   if [ "$harness" = codex ]; then ch=$(mktemp -d); cp ~/.codex/auth.json ~/.codex/config.toml "$ch/" 2>/dev/null; [ ! -f ~/.codex/AGENTS.md ] || cp ~/.codex/AGENTS.md "$ch/"; fi
   t=0; sent=0
   # 작업 시작 상태(첫 턴 직전). 검증자는 마지막 턴만이 아니라 작업 시작부터의 변경 전체를 받는다.
@@ -158,7 +182,7 @@ print("" if v is None else str(v).lower() if isinstance(v, bool) else v)' "$1" 2
       vfinal=$(vget final)
       rprompt=$(printf '별도 검증자가 다음 사유로 돌려보냈습니다. 검증자의 판단을 그대로 따르지 말고, 사용자 원문과 작업 기준에 비추어 판단해 다시 답하세요.\n\n%s' "$vfinal")
       if [ "$harness" = claude ]; then
-        # 반환 턴은 사용자 메시지가 아니다: 관문에 발신 구분을 넘겨 글 속 "승인합니다"·"취소합니다"로 승인 상태가 바뀌지 않게 한다.
+        # 반환 턴은 사용자 메시지가 아니다: 관문이 있던 커밋(v3.0 이하)에 발신 구분을 넘겨 글 속 "승인합니다"로 승인 상태가 바뀌지 않게 한다.
         (cd "$work/project" && AWK_GATE_PROMPT_FROM=runner perl -e 'alarm shift; exec @ARGV' 900 claude -p "$rprompt" --resume "$sid" --output-format stream-json --verbose \
           --dangerously-skip-permissions --max-turns 30 > "$tout.jsonl" 2> "$tout.err")
       else
@@ -169,9 +193,9 @@ print("" if v is None else str(v).lower() if isinstance(v, bool) else v)' "$1" 2
       if [ "$trc" -ne 0 ]; then rc=$trc; verify_state=incomplete; verify_reason="교정 턴의 구현자 하네스 종료 코드 $trc"; break; fi
     done
   fi
-  # 끝난 때 관문이 사용자 답을 기다리는지(승인 전이거나 사용자 철회·기준 변경으로 닫힘): 구현 실패·검증 실패와 구별해 센다.
+  # 끝난 때 관문이 사용자 답을 기다리는지(v3.0 이하 커밋: 승인 전이거나 사용자 철회·기준 변경으로 닫힘): 구현 실패·검증 실패와 구별해 센다.
   # 관문 기록이 없으면(관문 없는 커밋·훅이 돌지 않음) 알 수 없으므로 대기로 세지 않는다.
-  gate_waiting=$( [ -z "$sid" ] || (cd "$work/project" && python3 -I .agents/skills/wf-design/approval-gate.py status --session "$sid" < /dev/null 2>/dev/null) \
+  gate_waiting=$( [ -z "$sid" ] || [ ! -f "$work/project/.agents/skills/wf-design/approval-gate.py" ] || (cd "$work/project" && python3 -I .agents/skills/wf-design/approval-gate.py status --session "$sid" < /dev/null 2>/dev/null) \
     | python3 -I -c 'import json,sys
 try: d = json.load(sys.stdin)
 except ValueError: d = {}
@@ -204,7 +228,7 @@ print("true" if d.get("waiting") else "false")' 2>/dev/null)
   # 값은 환경 변수로 넘겨 따옴표·줄바꿈이 섞인 판정 문구도 그대로 기록한다.
   E_REQUIRED=$( [ -f "$case_dir/review-required" ] && echo true || echo false ) E_HERE=$here E_CASE=$case_name E_REF=$ref E_COMMIT=$commit E_HARNESS=$harness E_RUN=$i E_RC=$rc E_SEC=$seconds \
   E_VERSION=$("$harness" --version 2>/dev/null | head -1) E_BYTES=$agents_bytes E_CHECK_RC=$check_rc E_VERDICT=$verdict \
-  E_G1=$(fingerprint ~/.claude/CLAUDE.md) E_G2=$(fingerprint ~/.agents/USER.md) E_G3=$(fingerprint ~/.codex/AGENTS.md) E_G4=$(skills_fingerprint) E_OBS=$observed E_VSTATE=$verify_state E_BCHANGED=${baseline_changed:-false} E_VREASON=$verify_reason E_VROUNDS=$verify_rounds E_VRC=$verifier_rc E_VJSON=$vjson E_LANG=${EVALS_LANG:-} E_JUDGE=$(cd "$here" && shasum -a 256 "cases/$case_name/check.py" judge.py observe.py transcript.py verdict.py ../.agents/skills/wf-verify/verify.py 2>/dev/null | shasum -a 256 | cut -c1-12) E_GATE=$gate E_WAITING=${gate_waiting:-false} E_VTOOL=${verifier_tool:-} E_INPUT=$input E_TURNS=$sent E_PLANNED=${#turns[@]} E_WAIT=$(python3 -I -c 'import json,sys
+  E_G1=$(fingerprint ~/.claude/CLAUDE.md) E_G2=$(fingerprint ~/.agents/USER.md) E_G3=$(fingerprint ~/.codex/AGENTS.md) E_G4=$(skills_fingerprint) E_G5=$(plugins_fingerprint "$work/project") E_OBS=$observed E_VSTATE=$verify_state E_BCHANGED=${baseline_changed:-false} E_VREASON=$verify_reason E_VROUNDS=$verify_rounds E_VRC=$verifier_rc E_VJSON=$vjson E_LANG=${EVALS_LANG:-} E_CSET=${EVALS_CLAUDE_SETTINGS:+$(cat "$EVALS_CLAUDE_SETTINGS")} E_JUDGE=$(cd "$here" && shasum -a 256 "cases/$case_name/check.py" judge.py observe.py transcript.py verdict.py ../.agents/skills/wf-verify/verify.py 2>/dev/null | shasum -a 256 | cut -c1-12) E_GATE=$gate E_WAITING=${gate_waiting:-false} E_VTOOL=${verifier_tool:-} E_INPUT=$input E_TURNS=$sent E_PLANNED=${#turns[@]} E_WAIT=$(python3 -I -c 'import json,sys
 n = seen = 0
 try:
     for line in open(sys.argv[1], encoding="utf-8"):
@@ -246,7 +270,8 @@ json.dump({"case": e["E_CASE"], "kit_ref": e["E_REF"], "kit_commit": e["E_COMMIT
                            e["E_REQUIRED"] == "true"),
   "gate_waiting": e["E_WAITING"] == "true", "verifier_tool": e["E_VTOOL"] or None,
   "baseline_changed_after_approval": e["E_BCHANGED"] == "true",
-  "global_instructions": {"~/.claude/CLAUDE.md": e["E_G1"], "~/.agents/USER.md": e["E_G2"], "~/.codex/AGENTS.md": e["E_G3"], "global skills": e["E_G4"]}},
+  "global_instructions": {"~/.claude/CLAUDE.md": e["E_G1"], "~/.agents/USER.md": e["E_G2"], "~/.codex/AGENTS.md": e["E_G3"], "global skills": e["E_G4"], "plugins": e["E_G5"]},
+  "claude_project_settings": e.get("E_CSET") or None},
   open(sys.argv[1], "w"), ensure_ascii=False, indent=1)' "$out.meta.json"
   shown=FAIL; [ "$check_rc" -ne 0 ] || shown=PASS; [ "$check_rc" -ne 2 ] || shown=REVIEW; [ "$check_rc" -ne 3 ] || shown=UNVERIFIED
   printf '%s exit=%s check=%s %s\n' "$name" "$rc" "$shown" "$(printf '%s' "$verdict" | head -1)"

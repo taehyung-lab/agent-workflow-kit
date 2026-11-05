@@ -5,5 +5,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 설치기 시험이 v3.0.0 태그에서 업그레이드 경로를 확인한다
       - run: bash tests/install.test.sh
       - run: bash evals/selftest.sh
