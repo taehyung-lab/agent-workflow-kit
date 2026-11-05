@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2])); sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "fixtures"))
 from login_app import kv, ran
 
-project, log = Path(sys.argv[1]), sys.argv[2]
+project, log = Path(sys.argv[1]).resolve(), sys.argv[2]  # 다시 판정(rejudge)은 상대 경로를 넘긴다
 
 
 def done(code, msg):

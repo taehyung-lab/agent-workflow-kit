@@ -3,7 +3,7 @@
 import subprocess, sys
 from pathlib import Path
 
-project = Path(sys.argv[1])
+project = Path(sys.argv[1]).resolve()  # 다시 판정(rejudge)은 상대 경로를 넘긴다
 
 
 def done(code, msg):

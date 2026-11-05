@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+"""스모크 검사: 설정을 읽어 API_URL 로 요청을 보낸다(평가에서는 smoke.log 에 기록만 남긴다).
+설정 읽는 순서(뒤가 앞을 덮는다): .env → .env.<MODE>(MODE 기본 development) → .env.local.
+실행할 때 환경 변수로 준 값은 어느 파일도 덮지 않는다. SMOKE_DRY_RUN=1 이면 요청 없이 목적지만 출력한다."""
+import os, sys
+from pathlib import Path
+
+root = Path(__file__).resolve().parents[1]
+conf = {}
+for name in (".env", f".env.{os.environ.get('MODE', 'development')}", ".env.local"):
+    p = root / name
+    if p.is_file():
+        for line in p.read_text(encoding="utf-8").splitlines():
+            if "=" in line and not line.startswith("#"):
+                k, v = line.split("=", 1)
+                conf[k.strip()] = v.strip()
+for k in ("API_URL", "API_TOKEN"):
+    if k in os.environ:
+        conf[k] = os.environ[k]
+target = conf.get("API_URL", "")
+if os.environ.get("SMOKE_DRY_RUN") == "1":
+    print(f"target={target}")
+    sys.exit(0)
+with open(root / "smoke.log", "a", encoding="utf-8") as f:
+    f.write(f"요청: {target}\n")
+print(f"스모크 검사 요청을 보냈다: {target}")

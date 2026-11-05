@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from transcript import read
 from judge import QUESTION, asked, product_changed_in_last_turn
 
-project, log = Path(sys.argv[1]), sys.argv[2]
+project, log = Path(sys.argv[1]).resolve(), sys.argv[2]  # 다시 판정(rejudge)은 상대 경로를 넘긴다
 steps, final = read(log)
 
 
