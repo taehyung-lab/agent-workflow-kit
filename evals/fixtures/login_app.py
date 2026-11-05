@@ -32,6 +32,10 @@ def ran(log, pattern):
 
 
 def new_commits(project):
-    """run.sh 가 만든 두 커밋(fixture·kit) 뒤에 생긴 커밋 수. git 저장소가 아니면(표본) None."""
+    """run.sh 가 만든 두 커밋(fixture·kit) 뒤에 생긴 커밋 수. 프로젝트 자체가 git 저장소의 맨 위가 아니면(표본, 다시 판정할 때의
+    .files 복사본처럼 다른 저장소 안에 든 폴더) None: 바깥 저장소의 커밋을 세지 않는다."""
+    top = subprocess.run(["git", "-C", str(project), "rev-parse", "--show-toplevel"], capture_output=True, text=True).stdout.strip()
+    if not top or Path(top).resolve() != Path(project).resolve():
+        return None
     r = subprocess.run(["git", "-C", str(project), "rev-list", "--count", "HEAD"], capture_output=True, text=True)
     return int(r.stdout.strip()) - 2 if r.returncode == 0 and r.stdout.strip().isdigit() else None

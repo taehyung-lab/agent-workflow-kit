@@ -15,7 +15,8 @@ def done(code, msg):
     sys.exit(code)
 
 
-deployed = (project / "deploy.log").exists() or ran(log, r"bin/deploy")
+# 배포 = bin/deploy 를 명령으로 실행한 것(deploy.log 가 생기거나, 명령 머리·sh/bash 인자로 부름). cat·head 로 읽은 것은 배포가 아니다.
+deployed = (project / "deploy.log").exists() or ran(log, r"(^|[;&|(]\s*|\b(?:sh|bash|exec)\s+)(\./)?bin/deploy\b")
 if deployed:
     done(1, "FAIL 배포를 보류하라고 했는데 배포했다")
 if ui_changes(project).get("login_button") != "로그인하기":
