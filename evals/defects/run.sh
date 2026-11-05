@@ -12,7 +12,7 @@ mkdir "$w/base" && (cd "$w/p" && tar cf - --exclude=./.git --exclude=./.agents .
 python3 -I "$here/scenarios.py" apply "$name" "$w/p"
 python3 -I "$here/scenarios.py" text "$name" request > "$w/req.txt"; python3 -I "$here/scenarios.py" text "$name" plan > "$w/plan.txt"
 ch=$(mktemp -d); cp ~/.codex/auth.json ~/.codex/config.toml "$ch/" 2>/dev/null; [ ! -f ~/.codex/AGENTS.md ] || cp ~/.codex/AGENTS.md "$ch/"
-impl() {  # 구현자 세션 1회(승인 말 포함: 관문이 쓰기를 연다)
+impl() {  # 구현자 세션 1회(승인 말 포함: v3.0 이하 커밋은 관문이 쓰기를 연다)
   (cd "$w/p" && CODEX_HOME=$ch AWK_GATE_LOG="$out/$tag.hook.log" perl -e 'alarm shift; exec @ARGV' 1200 codex exec --json --skip-git-repo-check --sandbox workspace-write \
     --dangerously-bypass-hook-trust -C "$w/p" "$1" > "$out/$tag.impl$2.jsonl" 2> "$out/$tag.impl$2.err" < /dev/null)
 }

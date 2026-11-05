@@ -23,6 +23,7 @@ g add -A; g commit -qm v0; v0=$(git -C "$kit" rev-parse HEAD)
 cp "$tmp/agents.v1" "$kit/AGENTS.md"; g add -A; g commit -qm v1
 v1=$(git -C "$kit" rev-parse HEAD)
 begin='<!-- agent-workflow-kit:begin -->'
+region() { awk -v b="$begin" -v e='<!-- agent-workflow-kit:end -->' '$0==b{f=1} f{print} $0==e{f=0}'; }
 
 # 정상 설치: 키트 파일이 원본과 같고, 링크·ignore·버전 기록이 생긴다
 t="$tmp/fresh"; mkdir "$t"
@@ -42,7 +43,7 @@ if ! install "$t" && grep -q 'Conflict' "$tmp/err" && [ "$(snap "$t")" = "$befor
 for p in AGENTS.md CLAUDE.md .claude/skills; do
   t="$tmp/conflict-${p//\//_}"; mkdir -p "$t/$(dirname "$p")"
   if [ "$p" = .claude/skills ]; then mkdir "$t/$p"; touch "$t/$p/mine"; else echo mine > "$t/$p"; fi
-  if ! install "$t" && grep -q "Conflict: $p" "$tmp/err" && [ ! -e "$t/.agents/skills/wf-design" ] \
+  if ! install "$t" && grep -q "Conflict: $p" "$tmp/err" && [ ! -e "$t/.agents/skills/wf-verify" ] \
     && { [ -f "$t/$p" ] && [ "$(cat "$t/$p")" = mine ] || [ -f "$t/$p/mine" ]; }; then ok "conflict $p kept"; else ng "conflict $p kept"; fi
 done
 
@@ -53,8 +54,8 @@ t="$tmp/parent-file"; mkdir "$t"; echo x > "$t/.claude"
 if ! install "$t" && grep -q 'Invalid parent: .claude' "$tmp/err"; then ok "file parent refused"; else ng "file parent refused"; fi
 
 # 키트 스킬 폴더가 이미 있으면 멈춘다
-t="$tmp/conflict-skill"; mkdir -p "$t/.agents/skills/wf-design"
-if ! install "$t" && grep -q 'Conflict: .agents/skills/wf-design' "$tmp/err" && [ ! -e "$t/AGENTS.md" ]; then ok "conflict wf dir kept"; else ng "conflict wf dir kept"; fi
+t="$tmp/conflict-skill"; mkdir -p "$t/.agents/skills/wf-verify"
+if ! install "$t" && grep -q 'Conflict: .agents/skills/wf-verify' "$tmp/err" && [ ! -e "$t/AGENTS.md" ]; then ok "conflict wf dir kept"; else ng "conflict wf dir kept"; fi
 
 # git이 아니거나 다른 저장소 안에 들어 있는 키트는 거절한다
 t="$tmp/nogit"; mkdir -p "$t" "$tmp/plain"; git -C "$kit" archive HEAD | tar xf - -C "$tmp/plain"
@@ -102,7 +103,7 @@ if install --update "$t" && [ ! -s "$tmp/err" ] \
   && grep -qxF -- '- 이 저장소만의 약속' "$t/AGENTS.md" \
   && cmp -s "$kit/.agents/skills/guide.md" "$t/.agents/skills/guide.md" \
   && [ -f "$t/.agents/skills/wf-new/SKILL.md" ] && [ ! -e "$t/.agents/skills/README.md" ] \
-  && [ -f "$t/.agents/skills/wf-design/approval-gate.py" ] && [ "$(cat "$t/.agents/skills/my-role/SKILL.md")" = role ] \
+  && [ -f "$t/.agents/skills/wf-verify/verify.py" ] && [ "$(cat "$t/.agents/skills/my-role/SKILL.md")" = role ] \
   && [ "$(cat "$t/.agents/agent-workflow-kit.version")" = "$v2" ] \
   && [ "$(grep -cxF "$begin" "$t/AGENTS.md")" = 1 ] \
   && [ "$(tail -c 25 "$t/AGENTS.md")" = 'tail & \1 without newline' ] \
@@ -181,44 +182,68 @@ mv "$t/.agents/agent-workflow-kit.version" "$out"; ln -s "$out" "$t/.agents/agen
 if ! install --update "$t" && grep -q 'symlink' "$tmp/err" && [ -L "$t/.agents/agent-workflow-kit.version" ] \
   && [ "$(cat "$out")" = "$before" ]; then ok "update refuses symlinked version file"; else ng "update refuses symlinked version file"; fi
 
-# 승인 관문 훅: 처음 설치에서 두 설정 파일에 세 사건을 등록하고, 기존 설정·훅은 그대로 둔다
-kit_entries() { python3 -I -c 'import json,sys
-d=json.load(open(sys.argv[1])).get("hooks",{})
-n=lambda e: sum(1 for g in d.get(e,[]) for h in g.get("hooks",[]) if "approval-gate.py" in h.get("command",""))
-print(" ".join(e+":"+str(n(e)) for e in ("UserPromptSubmit","PreToolUse","Stop")))' "$1"; }
-want='UserPromptSubmit:1 PreToolUse:1 Stop:1'
-t="$tmp/hooks"; mkdir -p "$t/.claude" "$t/.codex"
-printf '{"permissions": {"allow": ["Bash(ls)"]}, "hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": "mine.sh"}]}]}}' > "$t/.claude/settings.json"
-printf '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "my-stop.sh"}]}]}}' > "$t/.codex/hooks.json"
-git -C "$kit" checkout -q "$v1"
-if install "$t" && [ "$(kit_entries "$t/.claude/settings.json")" = "$want" ] && [ "$(kit_entries "$t/.codex/hooks.json")" = "$want" ] \
-  && grep -q 'mine.sh' "$t/.claude/settings.json" && grep -q 'Bash(ls)' "$t/.claude/settings.json" && grep -q 'my-stop.sh' "$t/.codex/hooks.json" \
-  && grep -q 'Approval gate hook registered' "$tmp/out"; then ok "install registers approval hooks and keeps project hooks"; else ng "install registers approval hooks and keeps project hooks"; fi
-git -C "$kit" checkout -q -
-# 업데이트를 거듭해도 키트 항목은 사건마다 하나다
-if install --update "$t" && install --update "$t" && [ "$(kit_entries "$t/.claude/settings.json")" = "$want" ] \
-  && [ "$(kit_entries "$t/.codex/hooks.json")" = "$want" ] && grep -q 'mine.sh' "$t/.claude/settings.json"; then ok "update keeps one kit hook per event"; else ng "update keeps one kit hook per event"; fi
-# 키트 훅과 같은 그룹에 든 프로젝트 훅·matcher 는 남긴다
-t="$tmp/hooks-group"; mkdir -p "$t/.claude"
-printf '{"hooks": {"PreToolUse": [{"matcher": "Edit", "hooks": [{"type": "command", "command": "mine.sh"}, {"type": "command", "command": "python3 old/approval-gate.py pre"}]}]}}' > "$t/.claude/settings.json"
-git -C "$kit" checkout -q "$v1"
-if install "$t" && grep -q 'mine.sh' "$t/.claude/settings.json" && grep -q '"matcher": "Edit"' "$t/.claude/settings.json" \
-  && [ "$(kit_entries "$t/.claude/settings.json")" = "$want" ] && ! grep -q 'old/approval-gate.py' "$t/.claude/settings.json"; then ok "same-group project hook kept"; else ng "same-group project hook kept"; fi
-git -C "$kit" checkout -q -
-# 훅 설정 부모(.codex)가 심링크면 아무것도 쓰기 전에 멈춘다
-t="$tmp/hooks-link"; out="$tmp/hooks-link-out"; mkdir -p "$t" "$out"; ln -s "$out" "$t/.codex"
-git -C "$kit" checkout -q "$v1"
-if ! install "$t" && grep -q 'Invalid parent: .codex' "$tmp/err" && [ ! -e "$t/AGENTS.md" ] && [ -z "$(ls -A "$out")" ]; then ok "symlinked .codex refused before writing"; else ng "symlinked .codex refused before writing"; fi
-git -C "$kit" checkout -q -
-# 깨진 설정 파일이 있으면 아무것도 쓰기 전에 멈춘다
-t="$tmp/hooks-bad"; mkdir -p "$t/.claude"; echo '{broken' > "$t/.claude/settings.json"
-if ! install "$t" && grep -q 'Invalid JSON in .claude/settings.json' "$tmp/err" && [ ! -e "$t/AGENTS.md" ] \
-  && [ "$(cat "$t/.claude/settings.json")" = '{broken' ]; then ok "broken hook settings refused before writing"; else ng "broken hook settings refused before writing"; fi
-# 관문이 빠진 키트로 업데이트하면 키트 항목만 지우고 프로젝트 훅은 남긴다
-git -C "$kit" rm -q .agents/skills/wf-design/approval-gate.py; g commit -qm v4
-t="$tmp/hooks"
-if install --update "$t" && [ "$(kit_entries "$t/.claude/settings.json")" = 'UserPromptSubmit:0 PreToolUse:0 Stop:0' ] \
-  && grep -q 'mine.sh' "$t/.claude/settings.json" && grep -q 'my-stop.sh' "$t/.codex/hooks.json"; then ok "update without gate removes only kit hooks"; else ng "update without gate removes only kit hooks"; fi
+# 훅: 처음 설치는 훅 설정을 만들거나 고치지 않는다(파일 쓰기·명령 허용은 각 도구의 권한 설정이 맡는다)
+t="$tmp/hooks-fresh"; mkdir -p "$t/.claude" "$t/.codex"
+printf '{"permissions": {"defaultMode": "plan"},\n "hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": "mine.sh"}]}]}}' > "$t/.claude/settings.json"
+printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"my-stop.sh"}]}]}}' > "$t/.codex/hooks.json"
+cp "$t/.claude/settings.json" "$tmp/s.json"; cp "$t/.codex/hooks.json" "$tmp/h.json"
+t2="$tmp/hooks-none"; mkdir "$t2"
+if install "$t" && install "$t2" && cmp -s "$tmp/s.json" "$t/.claude/settings.json" && cmp -s "$tmp/h.json" "$t/.codex/hooks.json" \
+  && [ ! -e "$t2/.claude/settings.json" ] && [ ! -e "$t2/.codex" ] && [ ! -e "$t2/.agents/skills/wf-design" ] \
+  && ! grep -qi 'hook' "$tmp/out"; then ok "fresh install writes no hooks and leaves existing settings byte-identical"; else ng "fresh install writes no hooks and leaves existing settings byte-identical"; fi
+
+# v3.0.0 → 이 커밋 업그레이드: v3.0.0 설치기가 등록한 관문 훅 항목만 지우고, 프로젝트의 다른 훅·설정은 그대로 둔다.
+# 실제 v3.0.0 태그의 키트로 설치한 뒤(그 설치기가 훅을 등록), 같은 저장소에서 지금 작업 트리를 다음 커밋으로 만들어 --update 한다.
+old_ref=${KIT_OLD_REF:-v3.0.0}
+if ! git -C "$src" rev-parse -q --verify "$old_ref^{commit}" >/dev/null; then
+  ng "upgrade from $old_ref: tag not found in kit checkout (fetch tags, e.g. git fetch --tags)"
+else
+  ok_kit="$tmp/kit-old"; mkdir "$ok_kit"
+  gk() { git -C "$ok_kit" -c user.name=t -c user.email=t@t "$@" >/dev/null; }
+  git -C "$src" archive "$old_ref" | tar xf - -C "$ok_kit"; gk init -q; gk add -A; gk commit -qm old
+  t="$tmp/upgrade"; mkdir -p "$t/.claude" "$t/.codex"
+  cat > "$t/.claude/settings.json" <<'JSON'
+{
+  "permissions": {"allow": ["Bash(pnpm test)"]},
+  "hooks": {
+    "PostToolUse": [{"matcher": "^(Edit|Write)$", "hooks": [{"type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/scripts/format/edited.mjs\" --hook", "timeout": 60}]}],
+    "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "mine.sh"}, {"type": "command", "command": "python3 old/approval-gate.py pre"}]}]
+  },
+  "enabledPlugins": {"superpowers@claude-plugins-official": false}
+}
+JSON
+  printf '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "my-stop.sh"}]}]}}' > "$t/.codex/hooks.json"
+  bash "$ok_kit/install.sh" "$t" >"$tmp/out" 2>"$tmp/err"
+  mkdir -p "$t/.agents/skills/wf-design/__pycache__"; echo pyc > "$t/.agents/skills/wf-design/__pycache__/approval-gate.cpython-314.pyc"
+  gates() { grep -c 'approval-gate' "$1" || true; }
+  if [ "$(gates "$t/.claude/settings.json")" = 3 ] && [ "$(gates "$t/.codex/hooks.json")" = 3 ]; then ok "fixture: $old_ref installer registered its gate hooks"; else ng "fixture: $old_ref installer registered its gate hooks"; fi
+  # 지금 작업 트리를 다음 커밋으로 만든다(위 시험이 바꾼 임시 키트가 아니라 원본 작업 트리에서 복사)
+  (cd "$ok_kit" && git ls-files -z | xargs -0 rm -f) && (cd "$src" && tar cf - --exclude=.git --exclude=__pycache__ .) | (cd "$ok_kit" && tar xf -)
+  gk add -A; gk commit -qm new; new_sha=$(git -C "$ok_kit" rev-parse HEAD)
+  settings_ok() { python3 -I -c 'import json,sys
+c = json.load(open(sys.argv[1])); x = json.load(open(sys.argv[2]))
+h = c["hooks"]
+assert c["enabledPlugins"] == {"superpowers@claude-plugins-official": False} and c["permissions"] == {"allow": ["Bash(pnpm test)"]}
+assert h["PostToolUse"] == [{"matcher": "^(Edit|Write)$", "hooks": [{"type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/scripts/format/edited.mjs\" --hook", "timeout": 60}]}]
+assert h["PreToolUse"] == [{"matcher": "Bash", "hooks": [{"type": "command", "command": "mine.sh"}]}]
+assert set(h) == {"PostToolUse", "PreToolUse"}
+assert x == {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "my-stop.sh"}]}]}}' "$t/.claude/settings.json" "$t/.codex/hooks.json"; }
+  if bash "$ok_kit/install.sh" --update "$t" >"$tmp/out" 2>"$tmp/err" \
+    && [ "$(gates "$t/.claude/settings.json")" = 0 ] && [ "$(gates "$t/.codex/hooks.json")" = 0 ] && settings_ok \
+    && grep -q 'Removed old approval gate hook entries from .claude/settings.json' "$tmp/out" \
+    && [ ! -e "$t/.agents/skills/wf-design" ] && [ -f "$t/.agents/skills/wf-verify/verify.py" ] \
+    && [ "$(cat "$t/.agents/agent-workflow-kit.version")" = "$new_sha" ] \
+    && cmp -s <(region < "$t/AGENTS.md") <(region < "$src/AGENTS.md"); then ok "upgrade from $old_ref removes only gate hook entries, keeps formatter hook, same-group hook, plugins, permissions"; else ng "upgrade from $old_ref removes only gate hook entries, keeps formatter hook, same-group hook, plugins, permissions"; cat "$tmp/err"; fi
+  before=$(snap "$t")
+  if bash "$ok_kit/install.sh" --update "$t" >"$tmp/out" 2>&1 && grep -q 'Already at' "$tmp/out" && [ "$(snap "$t")" = "$before" ]; then ok "upgrade rerun changes nothing"; else ng "upgrade rerun changes nothing"; fi
+
+  # 관문 항목이 든 설정 파일이 깨졌으면 아무것도 쓰기 전에 멈춘다
+  t="$tmp/upgrade-bad"; mkdir "$t"
+  git -C "$ok_kit" checkout -q HEAD~1; bash "$ok_kit/install.sh" "$t" >/dev/null 2>&1; git -C "$ok_kit" checkout -q -
+  printf '{"hooks": {"Stop": [{"hooks": [{"command": "python3 x/approval-gate.py stop"}]}]}' > "$t/.codex/hooks.json"
+  before=$(snap "$t")
+  if ! bash "$ok_kit/install.sh" --update "$t" >"$tmp/out" 2>"$tmp/err" && grep -q 'Could not read hook settings' "$tmp/err" && [ "$(snap "$t")" = "$before" ]; then ok "broken settings with gate entries refused before writing"; else ng "broken settings with gate entries refused before writing"; fi
+fi
 
 printf '%d passed, %d failed\n' "$pass" "$failed"
 [ "$failed" -eq 0 ]

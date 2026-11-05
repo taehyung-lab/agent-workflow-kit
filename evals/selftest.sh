@@ -91,6 +91,18 @@ rm -rf "${cap:?}"
 # 여러 턴: 두 번째 턴이 첫 턴의 세션 id 로 이어 가는지(가짜 하네스가 받은 인자로 확인)
 : > "$fake/log"; FAKE_RC=0 FAKE_LOG=$fake/log EVALS_RESULTS=$results PATH="$fake:$PATH" bash "$here/run.sh" archive-after-correction "$REF" claude >/dev/null 2>&1; rc=$?
 [ $rc -eq 0 ] && [ "$(grep -c '' "$fake/log")" -eq 2 ] && sed -n 2p "$fake/log" | grep -q -- '--resume fake-sid' && ok "여러 턴: 두 번째 턴이 같은 세션을 이어 감" || ng "여러 턴 이어 가기(rc=$rc, 호출 $(grep -c '' "$fake/log")회)"
+# 실제 플러그인 조합 옵션: EVALS_CLAUDE_SETTINGS 가 프로젝트 .claude/settings.json 에 합쳐지고(설치 커밋에 포함) meta 에 남는다
+: > "$fake/log"; FAKE_RC=0 FAKE_LOG=$fake/log EVALS_CLAUDE_SETTINGS="$here/profiles/real-plugins.json" EVALS_RESULTS=$results/plugins PATH="$fake:$PATH" bash "$here/run.sh" weight-disposable "$REF" claude >/dev/null 2>&1
+pm=$(ls "$results"/plugins/*.meta.json 2>/dev/null | head -1)
+python3 -I -c 'import json,sys
+m = json.load(open(sys.argv[1])); s = json.load(open(sys.argv[2]))
+assert s["enabledPlugins"]["superpowers@claude-plugins-official"] is False
+assert "superpowers@claude-plugins-official" in m["claude_project_settings"] and m["global_instructions"]["plugins"] not in ("", None)' "$pm" "${pm%.meta.json}.files/.claude/settings.json" 2>/dev/null \
+  && ok "실제 플러그인 조합 옵션: 프로젝트 설정에 enabledPlugins 를 합치고 meta 에 설정·플러그인 지문을 남김" || ng "플러그인 조합 옵션: $pm"
+# Codex: 프로젝트 훅 파일이 없는 커밋(v3.1~)에서는 훅 신뢰 우회(--dangerously-bypass-hook-trust)를 넘기지 않는다
+printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho "$*" >> "$FAKE_LOG"\necho \x27{"type": "thread.started", "thread_id": "t"}\x27\nexit 0\n' > "$fake/codex"; chmod +x "$fake/codex"
+: > "$fake/log"; FAKE_LOG=$fake/log EVALS_RESULTS=$results/codex PATH="$fake:$PATH" bash "$here/run.sh" weight-disposable "$REF" codex >/dev/null 2>&1
+grep -q 'codex\|exec' "$fake/log" && ! grep -q 'bypass-hook-trust' "$fake/log" && ok "Codex: 훅 파일이 없으면 훅 신뢰 우회를 넘기지 않음" || ng "Codex 훅 신뢰 우회: $(cat "$fake/log")"
 rm -rf "${fake:?}" "${results:?}"
 # 독립 검증 루프(가짜 하네스): 검증자 입력의 독립성, 정해진 결과 형식만 통과, 반환 → 교정 → 새 버전 재검증, 한도 = 미완료, 수정 = 무효
 vf=$(mktemp -d); mkdir "$vf/bin"
@@ -148,7 +160,7 @@ vrun again "$RETV" "$OKV"
 [ "$(mget verifier)" = ok ] && [ "$(mget verify_rounds)" = 2 ] && [ "$(grep -c '' "$vf/again/impl")" = 3 ] && grep -q 'made-by-impl.txt' "$vf/again/vprompt.2" \
   && [ "$(grep -c turn "$vf/again/vprompt.2")" -gt "$(grep -c turn "$vf/again/vprompt.1")" ] \
   && ok "검증: RETURN → 구현자 교정 턴 → 새 버전을 다시 판정" || ng "검증 재검증: $(mget verifier) rounds=$(mget verify_rounds)"
-[ "$(tr '\n' ' ' < "$vf/again/from")" = "user user runner " ] && ok "검증 반환 턴에만 실행기 발신 구분(AWK_GATE_PROMPT_FROM=runner)을 넘김" || ng "반환 턴 발신 구분: $(tr '\n' ' ' < "$vf/again/from")"
+[ "$(tr '\n' ' ' < "$vf/again/from")" = "user user runner " ] && ok "검증 반환 턴에만 실행기 발신 구분(AWK_GATE_PROMPT_FROM=runner, v3.0 이하 커밋 비교용)을 넘김" || ng "반환 턴 발신 구분: $(tr '\n' ' ' < "$vf/again/from")"
 vrun limit "$RETV" "$RETV" "$RETV"
 [ "$(mget verifier)" = incomplete ] && [ "$(mget verify_rounds)" = 2 ] && [ "$(mget completion)" = incomplete ] && ok "검증: 재검증 한도에 닿으면 미완료(성공 아님)" || ng "검증 한도: $(mget verifier) rounds=$(mget verify_rounds)"
 FAKE_VWRITE=1 vrun touched "$OKV"
@@ -275,7 +287,7 @@ rm -f "$vf/ok/r"/*.files/scripts/calc.py; python3 -I "$here/rejudge.py" "$vf/ok/
 [ "$(mget completion)" = check-failed ] && python3 -I -c 'import json,sys; h=json.load(open(sys.argv[1]))["rejudge_history"][-1]; sys.exit(h["completion"] != "verified")' "$meta" \
   && ok "재판정: 새 판정 FAIL 이면 completion 도 같은 규칙으로 check-failed, 이전 completion 은 이력에 보존" || ng "재판정 완료: $(mget completion)"
 FAKE_MAP=1 FAKE_REMAP=1 vrun remap "$RETV" "$OKV"
-grep -q 'C9 | 기존 보장' "$vf/remap/vprompt.2" && grep -q '승인 뒤 작업 지도의 기준을 바꿨다' "$vf/remap/vprompt.2" && ! grep -q '승인 뒤 작업 지도의 기준을 바꿨다' "$vf/remap/vprompt.1" \
+grep -q 'C9 | 기존 보장' "$vf/remap/vprompt.2" && grep -q '처음 고정한 뒤 작업 지도의 기준을 바꿨다' "$vf/remap/vprompt.2" && ! grep -q '처음 고정한 뒤 작업 지도의 기준을 바꿨다' "$vf/remap/vprompt.1" \
   && [ "$(mget baseline_changed_after_approval)" = True ] && grep -q 'C9' "$meta" \
   && ok "검증: 재검증은 구현자가 고친 지도가 아니라 처음 고정한 기준(C9 유지)으로 하고, 기준 변경을 알림" || ng "검증 기준 고정: $(mget verifier) $(mget verify_reason)"
 # 필수 조건 누락: 사례가 필수 조건을 정하면 그 ID 가 모두 있어야 한다
@@ -302,13 +314,10 @@ EVALS_VERIFY=1 EVALS_RESULTS=$d/r PATH="$vf/bin:$PATH" bash "$here/run.sh" weigh
 [ "$(mget verifier)" = unverified ] && [ "$(mget verifier_exit_code)" = 9 ] && ok "검증(Codex): 검증자 종료 코드 9 가 정리 뒤에도 보존" || ng "Codex 검증 종료 코드: $(mget verifier) vrc=$(mget verifier_exit_code)"
 grep -q '"judge_version": "[0-9a-f]\{12\}"' "$meta" && grep -q '"stage": "original-input"' "$meta" && ok "meta 에 판정기 지문·단계가 남음" || ng "meta 판정기 지문·단계"
 rm -rf "${vf:?}"
-# 승인 관문 훅(모델 없음): 승인 판별·턴마다 닫힘·수정 도구 차단·셸 미차단·턴 끝 변경 알림·오류 시 막음
-python3 -I "$here/gatetest.py" > "${TMPDIR:-/tmp}/gatetest.$$" 2>&1 && ok "승인 관문 시험 $(tail -1 "${TMPDIR:-/tmp}/gatetest.$$")" || { ng "승인 관문 시험"; grep -v '^ok' "${TMPDIR:-/tmp}/gatetest.$$"; }
-rm -f "${TMPDIR:-/tmp}/gatetest.$$"
-# 일반 설치 흐름(모델 없음): 실제 install.sh 설치본의 관문 훅·독립 검증 실행기를 가짜 하네스로 호출(반환·교정·재검증·한도·미확인·대기)
+# 일반 설치 흐름(모델 없음): 실제 install.sh 설치본의 독립 검토 실행기를 가짜 하네스로 호출(반환·교정·재검토·한도·미확인·입력 부족)
 python3 -I "$here/flowtest.py" > "${TMPDIR:-/tmp}/flowtest.$$" 2>&1 && ok "일반 설치 흐름 시험 $(tail -1 "${TMPDIR:-/tmp}/flowtest.$$")" || { ng "일반 설치 흐름 시험"; grep -v '^ok' "${TMPDIR:-/tmp}/flowtest.$$"; }
 rm -f "${TMPDIR:-/tmp}/flowtest.$$"
-# 표준 쓰기 경계(모델 없음): 실제 codex sandbox -P :workspace 안에서 task·status·verify 가 .git 을 쓰지 않고 동작하는지.
+# 표준 쓰기 경계(모델 없음): 실제 codex sandbox -P :workspace 안에서 verify 가 .git 을 쓰지 않고 동작하는지.
 # codex 가 없는 환경은 미실행으로 따로 적고 통과로 세지 않는다(종료 3).
 python3 -I "$here/sandboxtest.py" > "${TMPDIR:-/tmp}/sandboxtest.$$" 2>&1; rc=$?
 case $rc in
