@@ -229,7 +229,7 @@ flowchart LR
 ## 5분 시작
 
 ```bash
-git clone --branch v3.3.0 https://github.com/taehyung-lab/agent-workflow-kit
+git clone --branch v3.3.1 https://github.com/taehyung-lab/agent-workflow-kit
 bash agent-workflow-kit/install.sh /path/to/my-project
 ```
 
@@ -314,10 +314,17 @@ AGENTS.md의 네 항목에는 저장소가 관리하는 근거의 위치와 한 
 키트가 관리하는 부분에 로컬 변경이 있으면 이미 같은 버전이어도 아무것도 쓰지 않고 그 경로를 알린다. 그 변경은 프로젝트 절·역할 스킬로 옮기거나 키트에 반영한 뒤 다시 실행한다. 키트가 쓰는 경로의 부모가 심링크이거나 폴더가 아니면 설치와 같이 쓰기 전에 거절한다.
 교체 결과를 diff로 검토하고, 아래 도입 확인 중 바뀐 것에 맞는 확인을 거친 뒤 반영한다. 확인을 마치지 못하면 남은 확인을 함께 남긴다.
 
+**v3.2 → v3.3.** AGENTS.md 는 그대로다. guide.md 「작업 지도」의 `## 기준` 이 요구 기록 표(`ID | 요구 | 출처·위치 | 의존 | 확인 방법 | 상태`: 확정·미정·미확인)로 바뀌고, 「독립 검토」 3단계가 `verify.py finish --round <kept> --check <직접 검사 결과 PASS|FAIL|REVIEW>` 로 바뀐다. 전체 완료(`completion`)는 검토 OK·직접 검사 PASS·미정·미확인 행 없음이 모두 맞을 때만 `verified` 다: `--check` 를 주지 않으면 통과로 가정하지 않고 `unverified`, 직접 검사 REVIEW 는 `needs-review`(전에는 `verified`), 미정 행이 남으면 `waiting-user`. 표의 형식 문제는 검토자 없이 `returned` 로 돌아온다. 표가 없는 기존 지도는 그대로 동작한다(형식 검사를 건너뛴다). 훅·설정 파일은 바뀌지 않는다.
+
+```bash
+git -C /path/to/agent-workflow-kit fetch --tags && git -C /path/to/agent-workflow-kit checkout v3.3.1
+bash /path/to/agent-workflow-kit/install.sh --update /path/to/target-repository
+```
+
 **v3.1 → v3.2.** AGENTS.md 기본 1 이 "결과를 둘 대상과 읽는 근거를 구별하고, 요청 원문·유효한 결정·앞뒤 시나리오로 결과·범위를 정한다"로 바뀌고, guide.md 에 「맥락 봉투」가 생긴다. 맥락 확인 도구(`.agents/skills/wf-context/context.py`)가 설치되고, 업데이트가 `.claude/settings.json`·`.codex/hooks.json` 의 `SessionStart` 에 정보 훅 항목 하나를 더한다(다른 훅·설정은 그대로, 파일이 없으면 만든다). `verify.py prepare` 는 지도 `## 맥락` 과 맥락 도구 출력을 검토 입력에 넣고, 분석만 한 작업은 `--output <파일>` 을 받는다(바뀐 파일도 산출물도 없으면 입력 부족). Codex 를 쓰면 업데이트 뒤 첫 실행에서 프로젝트·훅 신뢰를 확인한다.
 
 ```bash
-git -C /path/to/agent-workflow-kit fetch --tags && git -C /path/to/agent-workflow-kit checkout v3.3.0
+git -C /path/to/agent-workflow-kit fetch --tags && git -C /path/to/agent-workflow-kit checkout v3.2.0
 bash /path/to/agent-workflow-kit/install.sh --update /path/to/target-repository
 ```
 
