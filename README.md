@@ -165,6 +165,25 @@ sandbox_mode = "read-only"
 
 기본은 직접 확인이다: 완료 전에 요청 원문과 실제 결과를 대조하고 실행한 명령과 출력으로 확인한다. 독립 검토는 사용자가 요구하거나 검사 기준을 약화할 때 반드시, 어떤 보장이 깨질 수 있는데 직접 확인만으로 확인하기 어려울 때 선택해서 받는다. 검토자는 하네스의 하위 에이전트이고, 검토 도구(`.agents/skills/wf-verify/verify.py`)가 지도에 인용한 요청 원문(또는 사용자 글 그대로의 파일)·지도 기준·변경만 넘긴 뒤 결과 형식을 판정한다.
 
+### 애매하면 완료가 아니다 (v3.3)
+
+작업 지도를 쓰는 일에서 `## 기준`은 **요구 기록 표** 하나다: `ID | 요구(입력→관찰 장소→기대) | 출처·위치 | 의존 | 확인 방법 | 상태`. 상태는 확정·미정(사용자 답 필요)·미확인(조사 필요)이다. 출처가 결과의 일부만 정하면 행을 나눠 나머지를 미정으로 둔다. 예: "기존 신청 기록은 유지"는 기록을 지우지 않는다는 것만 정하고, 충돌한 옛 기록 중 무엇을 확정으로 안내할지는 정하지 않으므로 그 부분은 미정 행이 되어 추천과 함께 묻는다.
+
+완료는 한 규칙(`verify.py` 의 `completion`)으로 정한다. 검토 OK 만으로는 완료가 아니다.
+
+| 상황 | 완료 판정 |
+| --- | --- |
+| 검토 OK + 직접 검사 PASS(`finish --check PASS`) + 미정·미확인 행 없음 | verified(완료) |
+| 직접 검사 결과를 넘기지 않음 | unverified(통과로 가정하지 않음) |
+| 직접 검사가 사람 확인 필요(REVIEW) | needs-review |
+| 미정 행이 남음 | waiting-user(묻는다) |
+| 미확인 행이 남음 | unverified |
+| 직접 검사 실패 | check-failed(대기보다 먼저) |
+
+표 형식 문제(상태 값, 확정인데 출처 없음, 미정에 의존하는 확정 행)는 검토자를 부르기 전에 도구가 돌려보낸다. 출처가 정말 그 결과를 정하는지는 검토자가 판정한다.
+
+실측(2026-11-06, [goalflow](evals/goalflow/README.md) 회차 신청 앱, 지도 Claude·검토 Codex·구현 Codex 새 세션·최종 검토 Claude, 같은 판정 기준·판정기): 시험에 심어 둔 미정(옛 충돌 기록 정책)을 v3.2.0 은 지도 단계 2회 모두 묻지 않았고 v3.3 은 2회 모두 물었다. 끝까지 간 1회씩에서 둘 다 최종 verified 였지만, v3.3 은 사용자 답에 남은 빈칸(새 요청 ID 를 기존 확정에 연결할지)을 구현 전에 찾아 물었고 v3.2.0 은 넘겼다. 그 결과 v3.2.0 완성본은 그 새 ID 로 조회하면 "확인 필요"만 나오고 다른 회원이 그 ID 로 신청해도 확정됐다. 모델 시간 합계 17.0분 대 18.2분, 사용자 질문은 v3.3 이 1번 더 많았다. 끝까지 간 비교는 버전당 1회이고 공개된 작은 사례라 일반적인 우위로 세지 않는다.
+
 ### 외부가 아직 없을 때 (예: 서버 API 가 아직 없다)
 
 검증 기준을 "완벽하게" 만드는 게 아니라 **지금 확인할 수 있는 조건과 그렇지 않은 조건을 나눈다.**
@@ -210,7 +229,7 @@ flowchart LR
 ## 5분 시작
 
 ```bash
-git clone --branch v3.2.0 https://github.com/taehyung-lab/agent-workflow-kit
+git clone --branch v3.3.0 https://github.com/taehyung-lab/agent-workflow-kit
 bash agent-workflow-kit/install.sh /path/to/my-project
 ```
 
@@ -298,7 +317,7 @@ AGENTS.md의 네 항목에는 저장소가 관리하는 근거의 위치와 한 
 **v3.1 → v3.2.** AGENTS.md 기본 1 이 "결과를 둘 대상과 읽는 근거를 구별하고, 요청 원문·유효한 결정·앞뒤 시나리오로 결과·범위를 정한다"로 바뀌고, guide.md 에 「맥락 봉투」가 생긴다. 맥락 확인 도구(`.agents/skills/wf-context/context.py`)가 설치되고, 업데이트가 `.claude/settings.json`·`.codex/hooks.json` 의 `SessionStart` 에 정보 훅 항목 하나를 더한다(다른 훅·설정은 그대로, 파일이 없으면 만든다). `verify.py prepare` 는 지도 `## 맥락` 과 맥락 도구 출력을 검토 입력에 넣고, 분석만 한 작업은 `--output <파일>` 을 받는다(바뀐 파일도 산출물도 없으면 입력 부족). Codex 를 쓰면 업데이트 뒤 첫 실행에서 프로젝트·훅 신뢰를 확인한다.
 
 ```bash
-git -C /path/to/agent-workflow-kit fetch --tags && git -C /path/to/agent-workflow-kit checkout v3.2.0
+git -C /path/to/agent-workflow-kit fetch --tags && git -C /path/to/agent-workflow-kit checkout v3.3.0
 bash /path/to/agent-workflow-kit/install.sh --update /path/to/target-repository
 ```
 

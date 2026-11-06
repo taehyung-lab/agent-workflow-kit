@@ -1,0 +1,10 @@
+{
+  "case": "goal-context",
+  "kit_snapshot": "9d1aa17e5771a0a663b1248ab503e9a5a86f1559",
+  "harness": "claude",
+  "raw_logs": "local run record, not included; see excerpt.md",
+  "expected": "G4 not satisfied; do not count as semantic PASS",
+  "reason": "Unknown concurrency atomicity is listed but assumed in unconditional at-most-one scenario and C5 expected result. Sequential 409 does not establish concurrent uniqueness.",
+  "replay": "Compare excerpt.md with ../../setup.sh environment and ../../rubric.md; semantic review required.",
+  "full_map": "local run record, not included; see excerpt.md"
+}

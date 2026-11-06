@@ -1,0 +1,34 @@
+{
+  "run_date": "2026-11-06",
+  "scope": "local public fixture; one end-to-end flow, not general benchmark superiority",
+  "runtime_kit_trial": "8528817628039cf4ee0eb73f9a09b567b8064ee2",
+  "design_repair": {
+    "original_failure": "unverified concurrency guarantee asserted as current fact",
+    "corrections": "guarantee scoped to actual contract; dependent scenarios/tests corrected; sent/inflight/lost response states separated",
+    "re_review": "ok after two correction rounds"
+  },
+  "handoff": {
+    "planner": "Claude, new session",
+    "implementation": "Codex, new session without planner conversation",
+    "plan_review": "returned for extra policy -> corrected -> ok",
+    "public_tests_before": 3,
+    "public_tests_after": 19,
+    "external_automated_before": "1/12",
+    "external_automated_after": "12/12",
+    "final_independent_review": "Claude; G1-G5 satisfied, actual participant message meaning and storage observer checked"
+  },
+  "oracle_controls": {
+    "passed": 15,
+    "semantic_review_required": true,
+    "unknown_storage_adapter": "unverified, not product failure"
+  },
+  "limitations": [
+    "one public example",
+    "global harness configuration not fully isolated",
+    "finite concurrency trials, not all possible interleavings",
+    "actual operations data and field effects unverified",
+    "checker audit revisions made independently before reading the generated implementation outcome; same final checker used for before/after"
+  ],
+  "raw_artifacts_local": "local run records, not included in this repository",
+  "criteria_note": "이 기록은 criteria.md·answer.txt 도입 전 기준으로 측정했다: 옛 충돌 기록 정책이 원문·환경에 없는데 판정기가 한 정책을 가정했고, 외부 검사는 12개였다(지금 13개). 지금 기준의 결과로 세지 않는다."
+}

@@ -282,8 +282,10 @@ json.dump({"case": e["E_CASE"], "kit_ref": e["E_REF"], "kit_commit": e["E_COMMIT
   # 독립 검토가 필수인 사례(review-required 파일)에서 검토가 없으면 review-missing 이다(필요 없어 0회인 것과 구별).
   "review_state": review_state(e),
   "review_required": e["E_REQUIRED"] == "true",
-  "completion": completion(review_state(e), {"0": "PASS", "1": "FAIL", "2": "REVIEW"}.get(e["E_CHECK_RC"], "UNVERIFIED"), e["E_WAITING"] == "true",
-                           e["E_REQUIRED"] == "true"),
+  # 실행기 검토의 요구 기록 미정(사용자 답 대기)·미확인 행도 같은 규칙으로 완료를 막는다.
+  "completion": completion(review_state(e), {"0": "PASS", "1": "FAIL", "2": "REVIEW"}.get(e["E_CHECK_RC"], "UNVERIFIED"),
+                           e["E_WAITING"] == "true" or bool(json.loads(e["E_VJSON"] or "{}").get("open_decisions")),
+                           e["E_REQUIRED"] == "true", unresolved=bool(json.loads(e["E_VJSON"] or "{}").get("unconfirmed"))),
   "gate_waiting": e["E_WAITING"] == "true", "verifier_tool": e["E_VTOOL"] or None,
   "codex_project_trusted": e["E_CTRUST"] == "true",
   "baseline_changed_after_approval": e["E_BCHANGED"] == "true",
