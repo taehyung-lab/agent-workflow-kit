@@ -1,0 +1,12 @@
+{
+  "case": "goal-context",
+  "kit_snapshot": "b21c372c5ff6e1e705126226f0d22849a3a63ada",
+  "harness": "claude",
+  "expected": "G4 not satisfied; not semantic PASS",
+  "reason": "Conditional note did not constrain unconditional duplicate-prevention and concurrent-one-409 claims. Receipt timestamp was also labeled server freshness without a server timestamp contract.",
+  "candidate_instruction": "미확인에 기대는 요구·설계·검사는 조건부로 두고 확인 뒤 확정한다",
+  "adoption": "withdrawn: same failure remained; no demonstrated benefit",
+  "raw_logs": "local run record, not included; see excerpt.md",
+  "full_map": "local run record, not included; see excerpt.md",
+  "replay": "Compare excerpt.md with ../../setup.sh environment and ../../rubric.md; semantic review required."
+}

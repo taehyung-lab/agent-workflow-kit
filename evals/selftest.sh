@@ -346,5 +346,14 @@ case $rc in
   *) ng "표준 쓰기 경계 시험"; grep -v '^ok' "${TMPDIR:-/tmp}/sandboxtest.$$" ;;
 esac
 rm -f "${TMPDIR:-/tmp}/sandboxtest.$$"
+# 외부 목표 판정기: 정상 대조·저장 구조 변경·관찰 불가·결함 변이를 실제로 실행한다.
+goal_log=$(mktemp)
+if python3 -I "$here/goalflow/selftest.py" > "$goal_log" 2>&1; then
+  ok "목표 흐름 판정기 $(tail -1 "$goal_log")"
+else
+  ng "목표 흐름 판정기"
+  cat "$goal_log"
+fi
+rm -f "$goal_log"
 printf '%d passed, %d failed%s\n' "$pass" "$failed" "${unrun:+, 1 미실행(표준 쓰기 경계 시험)}"
 [ "$failed" -eq 0 ]
