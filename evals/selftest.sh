@@ -60,6 +60,15 @@ FAKE_LOG=$fake/log EVALS_RESULTS=$results PATH="$fake:$PATH" bash "$here/run.sh"
 snap=$(ls -d "$results"/weight-disposable-*-claude-1.files 2>/dev/null | tail -1)
 [ -f "$snap/made-by-fake.txt" ] && ok "끝난 프로젝트 파일 보존" || ng "끝난 프로젝트 파일이 남지 않음"
 grep -q '"exit_code": 7' "${snap%.files}.meta.json" 2>/dev/null && ok "메타데이터에 종료 코드 기록" || ng "메타데이터 종료 코드"
+# 판정기 지문: 실행(run.sh)과 재판정(rejudge.py)이 같은 코드면 같은 지문을 낸다(일반 사례·숨긴 holdout 사례 모두).
+# 판정 파일을 바꾸거나 빼는 경우와 재판정의 이력 보존은 caseinfotest.py 가 임시 키트 사본에서 본다.
+fpres=$(mktemp -d)
+for c in weight-disposable account-specified; do
+  FAKE_RC=0 FAKE_LOG=$fake/log EVALS_RESULTS=$fpres/$c PATH="$fake:$PATH" bash "$here/run.sh" "$c" "$REF" claude >/dev/null 2>&1
+done
+python3 -I "$here/caseinfotest.py" "$fpres/weight-disposable" "$fpres/account-specified" > "$fpres/log" 2>&1 \
+  && ok "판정기 지문 시험 $(tail -1 "$fpres/log")" || { ng "판정기 지문 시험"; grep -v '^ok' "$fpres/log"; }
+rm -rf "$fpres"
 # 외부 장애(모델 용량 부족)로 끝난 실행은 실패가 아니라 미확인으로 남고 분모에서 빠진다
 cap=$(mktemp -d)
 printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho \x27{"type": "error", "message": "Selected model is at capacity."}\x27\nexit 1\n' > "$fake/claude-cap"

@@ -35,8 +35,10 @@ if [[ "$ref" == *..* ]]; then
   python3 -I "$here/rejudge.py" "$out" > /dev/null || rc=$?
   python3 -I "$here/report.py" --compare "${ref%%..*}" "${ref##*..}" "$out"; exit "$rc"
 fi
-case_dir="$here/cases/$case_name"; [ -d "$case_dir" ] || case_dir="$here/holdout/$case_name"  # holdout: 숨겨 둔 평가 사례(최종 판정 때만)
+case_dir=$(python3 -I "$here/caseinfo.py" path "$case_name") || fail "사례 위치를 정하지 못했다: $case_name"  # cases 에 없으면 holdout(숨겨 둔 평가 사례)
 [ -f "$case_dir/prompt.txt" ] && [ -f "$case_dir/check.py" ] || fail "사례가 없거나 prompt.txt·check.py 가 빠졌다: $case_dir"
+# 판정기 지문은 재판정(rejudge.py)과 같은 함수로 만든다. 판정 파일이 빠졌으면 모델을 돌리기 전에 멈춘다.
+python3 -I "$here/caseinfo.py" version "$case_dir" > /dev/null || fail "판정기 지문을 만들 수 없다(위 파일 누락)"
 commit=$(git -C "$kit" rev-parse --verify -q "$ref^{commit}") || fail "키트에 없는 커밋·태그: $ref"
 case "$harness" in claude|codex) command -v "$harness" >/dev/null || fail "$harness 명령이 없다";; *) fail "하네스는 claude 또는 codex";; esac
 
@@ -235,12 +237,14 @@ print("true" if d.get("waiting") else "false")' 2>/dev/null)
     # 판정 검사 자체가 오류로 끝나면(예외 등) 실패가 아니라 미확인이다. 판정 검사는 결과 줄을 PASS·FAIL·REVIEW 로 시작한다.
     case "$check_rc:$verdict" in 0:PASS*|1:FAIL*|2:REVIEW*) ;; *) verdict="UNVERIFIED 판정 검사 오류(종료 코드 $check_rc): $(printf '%s' "$verdict" | tail -1)"; check_rc=3;; esac
   fi
+  # 판정에 쓴 파일의 지문. 실행 중 판정 파일이 사라졌으면 빈 지문으로 기록하지 않고 멈춘다(원시 기록 .jsonl 은 남아 있다).
+  judge_version=$(python3 -I "$here/caseinfo.py" version "$case_dir") || fail "판정기 지문을 만들 수 없다(위 파일 누락): $out"
   # 사례가 AGENTS.md 를 읽을 수 없게 만들었으면 바이트는 설치에 쓴 키트 checkout 에서 잰다.
   agents_bytes=$( { wc -c < "$work/project/AGENTS.md" || wc -c < "$work/kit/AGENTS.md"; } 2>/dev/null | tr -d ' ')
   # 값은 환경 변수로 넘겨 따옴표·줄바꿈이 섞인 판정 문구도 그대로 기록한다.
   E_REQUIRED=$( [ -f "$case_dir/review-required" ] && echo true || echo false ) E_HERE=$here E_CASE=$case_name E_REF=$ref E_COMMIT=$commit E_HARNESS=$harness E_RUN=$i E_RC=$rc E_SEC=$seconds \
   E_VERSION=$("$harness" --version 2>/dev/null | head -1) E_BYTES=$agents_bytes E_CHECK_RC=$check_rc E_VERDICT=$verdict \
-  E_G1=$(fingerprint ~/.claude/CLAUDE.md) E_G2=$(fingerprint ~/.agents/USER.md) E_G3=$(fingerprint ~/.codex/AGENTS.md) E_G4=$(skills_fingerprint) E_G5=$(plugins_fingerprint "$work/project") E_OBS=$observed E_VSTATE=$verify_state E_BCHANGED=${baseline_changed:-false} E_VREASON=$verify_reason E_VROUNDS=$verify_rounds E_VRC=$verifier_rc E_VJSON=$vjson E_LANG=${EVALS_LANG:-} E_CSET=${EVALS_CLAUDE_SETTINGS:+$(cat "$EVALS_CLAUDE_SETTINGS")} E_JUDGE=$(cd "$here" && shasum -a 256 "cases/$case_name/check.py" judge.py observe.py transcript.py verdict.py ../.agents/skills/wf-verify/verify.py 2>/dev/null | shasum -a 256 | cut -c1-12) E_GATE=$gate E_WAITING=${gate_waiting:-false} E_VTOOL=${verifier_tool:-} E_CTRUST=${codex_trusted:-false} E_INPUT=$input E_TURNS=$sent E_PLANNED=${#turns[@]} E_WAIT=$(python3 -I -c 'import json,sys
+  E_G1=$(fingerprint ~/.claude/CLAUDE.md) E_G2=$(fingerprint ~/.agents/USER.md) E_G3=$(fingerprint ~/.codex/AGENTS.md) E_G4=$(skills_fingerprint) E_G5=$(plugins_fingerprint "$work/project") E_OBS=$observed E_VSTATE=$verify_state E_BCHANGED=${baseline_changed:-false} E_VREASON=$verify_reason E_VROUNDS=$verify_rounds E_VRC=$verifier_rc E_VJSON=$vjson E_LANG=${EVALS_LANG:-} E_CSET=${EVALS_CLAUDE_SETTINGS:+$(cat "$EVALS_CLAUDE_SETTINGS")} E_JUDGE=$judge_version E_GATE=$gate E_WAITING=${gate_waiting:-false} E_VTOOL=${verifier_tool:-} E_CTRUST=${codex_trusted:-false} E_INPUT=$input E_TURNS=$sent E_PLANNED=${#turns[@]} E_WAIT=$(python3 -I -c 'import json,sys
 n = seen = 0
 try:
     for line in open(sys.argv[1], encoding="utf-8"):
