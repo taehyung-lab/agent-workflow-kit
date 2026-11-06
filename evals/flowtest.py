@@ -94,7 +94,7 @@ exit 0
         return r.returncode, out, prompt
 
     prep = lambda *a: json.loads(sh(sys.executable, "-I", str(verifier), "prepare", *a, cwd=proj, env=base_env).stdout.strip().splitlines()[-1])
-    fin = lambda kept, ans: sh(sys.executable, "-I", str(verifier), "finish", "--round", kept, cwd=proj, env=base_env, input=ans)
+    fin = lambda kept, ans, *extra: sh(sys.executable, "-I", str(verifier), "finish", "--round", kept, *extra, cwd=proj, env=base_env, input=ans)
 
     # 4) 지도(요청 원문 포함) → 구현 → 검토. 작업 전 사용자 변경은 커밋해 두었으므로(기준 커밋 HEAD) diff 에 섞이지 않는다
     (proj / "notes.txt").write_text("사용자 메모(작업 전 변경)\n"); sh(*G, "commit", "-qam", "user", cwd=proj)
@@ -110,7 +110,8 @@ exit 0
     (proj / "ui.txt").write_text("button=로그인하기\nbutton_en=Login\n")  # 교정
     (proj / "extra.txt").write_text("새 파일\n"); (proj / "README.md").unlink()
     rc, out, prompt = verify(mp, [OK])
-    check("교정 뒤 2회차: 새 버전을 다시 판정해 ok(종료 0), 완료=verified", rc == 0 and out.get("state") == "ok" and out.get("round") == 2 and out.get("completion") == "verified")
+    check("교정 뒤 2회차: 새 버전을 다시 판정해 ok(종료 0). 직접 검사 결과를 받지 않았으면 전체 완료는 가정하지 않는다(unverified)",
+          rc == 0 and out.get("state") == "ok" and out.get("round") == 2 and out.get("completion") == "unverified" and out.get("direct_check") is None)
     check("2회차 diff 에 교정 내용·새 파일·지운 파일이 보인다", "button=로그인하기" in prompt and "extra.txt" in prompt and "README.md" in prompt)
     (proj / "README.md").write_text("# 앱\n검사: bin/test\n"); (proj / "extra.txt").unlink()
     rc, out, prompt = verify(mp, [OK], harness="codex")
@@ -161,9 +162,40 @@ exit 0
     check("prepare: 모델을 띄우지 않고 검토 입력(prompt_file)과 판정 대상 폴더를 낸다",
           rdy.get("state") == "ready" and "| B1 |" in Path(rdy["prompt_file"]).read_text() and Path(rdy["target_dir"]).is_dir()
           and str(rdy["target_dir"]) in Path(rdy["prompt_file"]).read_text())
-    r = fin(rdy["kept"], "검토 결과입니다.\n" + json.dumps(OK, ensure_ascii=False))
+    r = fin(rdy["kept"], "검토 결과입니다.\n" + json.dumps(OK, ensure_ascii=False), "--check", "PASS")
     o = json.loads(r.stdout.strip().splitlines()[-1])
-    check("finish: 검토자의 마지막 답(표준 입력)을 형식대로 판정해 ok, completion=verified", r.returncode == 0 and o.get("state") == "ok" and o.get("completion") == "verified")
+    check("finish: 검토자의 마지막 답(표준 입력)을 형식대로 판정해 ok, 직접 검사 PASS 와 합쳐 completion=verified",
+          r.returncode == 0 and o.get("state") == "ok" and o.get("completion") == "verified" and o.get("direct_check") == "PASS")
+    for chk, want in (("FAIL", "check-failed"), ("REVIEW", "needs-review")):
+        rd = prep("--map", mpp, "--request", req_file(f"직접 검사 {chk} 시도"))
+        o = json.loads(fin(rd["kept"], json.dumps(OK, ensure_ascii=False), "--check", chk).stdout.strip().splitlines()[-1])
+        check(f"검토 ok 여도 직접 검사 {chk} 면 completion={want}(완료가 아님)", o.get("state") == "ok" and o.get("completion") == want)
+    check("finish --check 에 정해진 값 밖은 사용 오류(종료 2)", fin(prep("--map", mpp, "--request", req_file("잘못된 check"))["kept"], json.dumps(OK), "--check", "maybe").returncode == 2)
+    # 요구 기록 표: 미정(사용자 답)·미확인(조사) 행이 남으면 완료가 아니고, 형식이 틀리면 검토자를 띄우지 않고 돌려보낸다
+    HEAD = "| ID | 요구(입력→관찰 장소→기대) | 출처·위치 | 의존 | 확인 방법 | 상태 |\n|---|---|---|---|---|---|\n"
+    def rec_map(name, rows):
+        return write_map(name, f"- 요청 원문: {REQ}\n\n" + HEAD + rows)
+    ok_r1 = {"verdict": "OK", "conditions": [{"id": "R1", "result": "충족", "evidence": "bin/test 통과"}], "out_of_scope": []}
+    m_open = rec_map("rec-open", "| R1 | 한국어 버튼 → 화면 → 로그인하기 | 원문 | - | bin/test | 확정 |\n| Q1 | 영어 버튼 문구 | 원문이 정하지 않음 | - | 답 뒤 | 미정 |\n")
+    rd = prep("--map", m_open)
+    o = json.loads(fin(rd["kept"], json.dumps(ok_r1, ensure_ascii=False), "--check", "PASS").stdout.strip().splitlines()[-1]) if rd.get("state") == "ready" else rd
+    check("요구 기록에 미정 행이 남으면 검토 ok·직접 검사 PASS 여도 completion=waiting-user, 미정 행은 검토 필수 조건에서 빠진다",
+          o.get("state") == "ok" and o.get("completion") == "waiting-user" and o.get("open_decisions") == ["Q1"] and "Q1" not in o.get("required", []) and "R1" in o.get("required", []))
+    rd = prep("--map", m_open, "--request", req_file("미정+실패"))
+    o = json.loads(fin(rd["kept"], json.dumps(ok_r1, ensure_ascii=False), "--check", "FAIL").stdout.strip().splitlines()[-1])
+    check("미정이 남아도 직접 검사 실패는 감추지 않는다(check-failed)", o.get("completion") == "check-failed")
+    m_unk = rec_map("rec-unk", "| R1 | 한국어 버튼 → 화면 → 로그인하기 | 원문 | - | bin/test | 확정 |\n| F1 | 서버가 문구를 덮어쓰는지 | 조사 필요 | - | 서버 확인 | 미확인 |\n")
+    rd = prep("--map", m_unk)
+    o = json.loads(fin(rd["kept"], json.dumps(ok_r1, ensure_ascii=False), "--check", "PASS").stdout.strip().splitlines()[-1])
+    check("미확인 행이 남으면 completion=unverified", o.get("completion") == "unverified" and o.get("unconfirmed") == ["F1"])
+    for name, rows, word in (
+        ("rec-dep", "| R1 | 한국어 버튼 → 화면 → 로그인하기 | 원문 | Q1 | bin/test | 확정 |\n| Q1 | 영어 버튼 문구 | 원문이 정하지 않음 | - | 답 뒤 | 미정 |\n", "의존"),
+        ("rec-src", "| R1 | 한국어 버튼 → 화면 → 로그인하기 |  | - | bin/test | 확정 |\n", "출처"),
+        ("rec-state", "| R1 | 한국어 버튼 → 화면 → 로그인하기 | 원문 | - | bin/test | 아마 |\n", "확정·미정·미확인"),
+        ("rec-ghost", "| R1 | 한국어 버튼 → 화면 → 로그인하기 | 원문 | Z9 | bin/test | 확정 |\n", "없다")):
+        rd = prep("--map", rec_map(name, rows))
+        check(f"요구 기록 형식 문제({name})는 검토자를 띄우지 않고 returned, 사유에 '{word}'",
+              rd.get("state") == "returned" and word in rd.get("reason", "") and "prompt_file" not in rd and rd.get("completion") == "returned")
     r2_ = fin(rdy["kept"], json.dumps(RET, ensure_ascii=False))
     check("같은 회차를 다시 finish 해도 판정을 바꾸지 않는다(새 회차는 prepare 로)", json.loads(r2_.stdout.strip().splitlines()[-1]).get("state") == "ok")
     rdy = prep("--map", mpp); (Path(rdy["target_dir"]) / "ui.txt").write_text("changed\n")
@@ -201,6 +233,26 @@ exit 0
           "ANALYSIS-MARKER" in pa and "(바뀐 파일 없음)" in pa and "검토할 산출물" in pa and "산출물의 대상·전제·인용·권고" in pa)
     o = json.loads(fin(rana["kept"], json.dumps(OK, ensure_ascii=False)).stdout.strip().splitlines()[-1]) if rana.get("state") == "ready" else {}
     check("분석만 한 작업도 같은 형식으로 finish 판정(ok)", o.get("state") == "ok")
+    # 구현자의 실행·보고를 묻는 조건: 보고는 --output 으로 판정 대상에 들어가고, 없으면 검토자가 자기 실행으로 대신 충족시키지 않는다
+    check("검토자 지침: 구현자의 행동·보고를 묻는 조건은 기록이 없으면 미확인, 조건 일부를 빼고 충족을 내지 않는다",
+          "대신 충족시키지 않고 미확인" in pa and "조건의 일부를 판정 범위에서 빼고" in pa and "완료 보고·실행 기록이면 그 주장이 실행 기록·현재 동작과 맞는지" in pa)
+    check("검토자 지침: 기존 보장을 깨는 반례와 목표를 깨는 입력·사건 순서를 모두 미충족 근거로 본다",
+          "연결된 기존 보장을 깨는 반례" in pa and "목표가 깨지는 입력·사건 순서" in pa)
+    # 구현 diff와 완료 보고를 함께 전달해도 둘 다 검토 입력에 남고, 보고는 판정 대상으로 구분된다.
+    report_target = proj / "report-target.txt"; report_target.write_text("REPORT-DIFF-MARKER\n")
+    report_request = req_file("변경과 완료 보고를 원문에 맞게 검토해 주세요")
+    report_file = req_file("REPORT-OUTPUT-MARKER: 실행 명령과 실제 출력, 확인한 것과 미확인 사항")
+    rreport = prep("--request", report_request, "--output", report_file)
+    pr = Path(rreport.get("prompt_file", "/x")).read_text() if rreport.get("state") == "ready" else ""
+    check("구현 diff와 --output 보고를 함께 전달하고 보고를 판정 대상으로 표시한다",
+          rreport.get("state") == "ready" and "REPORT-DIFF-MARKER" in pr and "REPORT-OUTPUT-MARKER" in pr
+          and "구현의 완료 보고·실행 기록. 판정 대상이며" in pr and "(바뀐 파일 없음)" not in pr)
+    rbare = prep("--request", report_request)
+    pb = Path(rbare.get("prompt_file", "/x")).read_text() if rbare.get("state") == "ready" else ""
+    check("보고를 안 주면 diff는 남고 보고 산출물 구간은 생기지 않는다",
+          rbare.get("state") == "ready" and "REPORT-DIFF-MARKER" in pb and "REPORT-OUTPUT-MARKER" not in pb
+          and "## 검토할 산출물(" not in pb)
+    report_target.unlink()
     rempty = prep("--request", req_file("분석"), "--output", req_file("   "))
     check("빈 산출물은 입력 부족으로 unverified", rempty.get("state") == "unverified" and "비었다" in rempty.get("reason", ""))
     # 근거 불완전

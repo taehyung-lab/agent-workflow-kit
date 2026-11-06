@@ -287,14 +287,17 @@ with tempfile.TemporaryDirectory() as d:
     row = lambda c: next(l for l in out.splitlines() if l.startswith(c + " "))
     assert "회귀 후보" in row("reg") and "재발" in row("rec") and "재발" not in row("rev") and "비교 불가: 전역 지침" in row("cmp"), out
 PY
-python3 -I - "$here" <<'PY' && ok "완료 분류: 직접 PASS+검토 불필요=완료, 직접 FAIL 은 검토 OK 여도 실패, 필수 검토 미수행=review-missing, 검토 실패·대기 구별" || ng "완료 분류"
+python3 -I - "$here" <<'PY' && ok "완료 분류: 모두 관찰로 확인했을 때만 완료(직접 증거 없음·REVIEW·미정·미확인은 완료 아님), 실패는 대기보다 먼저, 필수 검토 미수행=review-missing" || ng "완료 분류"
 import sys; sys.path.insert(0, sys.argv[1]); from verdict import completion as c
 assert c("off", "PASS") == "verified" and c("off", "REVIEW") == "needs-review"          # 검토가 필요 없는 변경은 직접 증거로 완료
 assert c("ok", "FAIL") == "check-failed" and c("off", "FAIL", required=True) == "check-failed"  # 직접 실패는 검토 OK 여도 실패
 assert c("off", "PASS", required=True) == "review-missing"                                # 필수 검토를 안 함(호출 누락)
-assert c("ok", "PASS", required=True) == "verified" and c("ok", "REVIEW") == "verified"
+assert c("ok", "PASS", required=True) == "verified" and c("ok", "REVIEW") == "needs-review"   # 사람이 봐야 하는 직접 증거는 검토 OK 로 대신하지 않음
+assert c("ok", None) == "unverified" and c("ok", "UNVERIFIED") == "unverified"               # 직접 증거를 받지 않았으면 완료를 가정하지 않음
+assert c("ok", "PASS", waiting=True) == "waiting-user" and c("ok", "FAIL", waiting=True) == "check-failed"  # 사용자 답 대기, 실패는 감추지 않음
+assert c("ok", "PASS", unresolved=True) == "unverified"                                      # 필요한 사실이 미확인
 assert c("unverified", "PASS", required=True) == "unverified" and c("returned", "PASS") == "returned" and c("incomplete", "PASS") == "incomplete"
-assert c("ok", "PASS", True) == "waiting-user" and c("off", "FAIL", True) == "waiting-user" and c("ok", "UNVERIFIED") == "unverified"
+assert c("ok", "PASS", True) == "waiting-user" and c("off", "FAIL", True) == "check-failed"
 PY
 FAKE_BREAK=1 vrun checkfail "$OKV"
 [ "$(mget verifier)" = ok ] && [ "$(mget completion)" = check-failed ] && [ "$(mget check_passed)" = False ] \
