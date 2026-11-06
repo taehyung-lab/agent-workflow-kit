@@ -12,9 +12,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from verdict import completion
+from caseinfo import MissingJudgeFile, case_path, judge_version as judge_fingerprint  # 실행기(run.sh)와 같은 사례 위치·지문
 
-here_ = Path(__file__).resolve().parent
-case_path = lambda name: (here_ / "cases" / name) if (here_ / "cases" / name).is_dir() else (here_ / "holdout" / name)  # holdout: 숨겨 둔 평가 사례
+failed = []
 for root in sys.argv[1:]:
     for meta_path in sorted(Path(root).rglob("*.meta.json")):
         m = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -32,6 +32,13 @@ for root in sys.argv[1:]:
         env["EVALS_GATE"] = "true" if gate else "false"
         env["EVALS_INPUT"] = m.get("input", "with-approval" if ran > prompts else "original")
         env["EVALS_LANG"] = m.get("lang") or ""
+        # 판정 파일이 빠져 지문을 만들 수 없으면 이 meta 는 고치지 않고 실패로 알린다(빠진 파일을 뺀 지문을 쓰지 않는다).
+        try:
+            judge_version = judge_fingerprint(case_path(m["case"]))
+        except MissingJudgeFile as e:
+            print(f"{Path(base).name}: 다시 판정하지 않음: {e}", file=sys.stderr)
+            failed.append(str(meta_path))
+            continue
         r = subprocess.run([sys.executable, "-I", str(case_path(m["case"]) / "check.py"), base + ".files", base + ".jsonl"],
                            capture_output=True, text=True, env=env)
         out = (r.stdout + r.stderr).strip()
@@ -44,9 +51,6 @@ for root in sys.argv[1:]:
         import hashlib
         check_hash = hashlib.sha256((case_path(m["case"]) / "check.py").read_bytes()).hexdigest()[:12]
         # 원시 기록(.jsonl·.files)은 바꾸지 않는다. 이전 판정과 그때의 판정기 지문을 이력으로 남기고 새 지문을 기록한다.
-        here = Path(__file__).resolve().parent
-        judge_version = hashlib.sha256(b"".join(hashlib.sha256(f.read_bytes()).digest() for f in
-                                               [case_path(m["case"]) / "check.py"] + [here / n for n in ("judge.py", "observe.py", "transcript.py", "verdict.py", "../.agents/skills/wf-verify/verify.py")] if f.is_file())).hexdigest()[:12]
         m.setdefault("rejudge_history", []).append({"verdict": old, "check_output": m.get("check_output", ""), "completion": m.get("completion"),
                                                     "judge_version": m.get("judge_version"), "check_sha": m.get("check_sha")})
         if "verifier" in m:  # 검증 루프가 있던 실행만 완료를 다시 계산한다(예전 결과에는 검증 상태가 없다)
@@ -54,3 +58,5 @@ for root in sys.argv[1:]:
         m.update(check_passed=new == "PASS", check_needs_review=new == "REVIEW", check_unverified=new == "UNVERIFIED", check_output=out, rejudged=True, check_sha=check_hash,
                  judge_version=judge_version)
         meta_path.write_text(json.dumps(m, ensure_ascii=False, indent=1), encoding="utf-8")
+if failed:
+    sys.exit(1)
