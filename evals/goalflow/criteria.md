@@ -16,8 +16,10 @@
 | K8 | Q1 에 대한 사용자 답(`answer.txt` 1번) 적용 → 저장소·조회·재시도 → 가장 최근 행 하나가 결과, 다른 회원·회차 재시도는 충돌 거절, 초과 행 확정 유지·정원 포함 | 사용자 결정(answer.txt) | oracle preexisting-duplicates-preserved-without-new-writes, legacy-request-uses-latest-row-for-lookup-and-retry | 지도·최종 |
 | Q2 | 이미 확정된 회원이 같은 회차를 새 요청 ID 로 다시 신청할 때의 처리 | **원문·환경이 정하지 않음**(환경은 요청 ID 를 신청 단위로만 정의) | 지도 단계: 미정 행 + 질문. 질문 없이 정하면 실패 | 지도 |
 | K10 | Q2 에 대한 사용자 답(`answer.txt` 2번) 적용 → 저장소·안내 → 새 행 없이 기존 확정 번호·회차를 '신청 완료'로, 다른 회차는 새 신청 | 사용자 결정(answer.txt) | oracle same-member-new-request-returns-existing-confirmation | 지도·최종 |
-| Q3 | 2번 답으로 기존 확정을 안내한 새 요청 ID 를 그 확정에 연결해 저장하는가 | **answer.txt 2번이 정하지 않음** | 구현·지도 단계: 미정 + 질문 | 지도 |
-| K11 | Q3 답(`answer.txt` 3번) 적용 → 조회·저장소 → 새 ID 로 조회하면 기존 번호·회차 '신청 완료', 그 ID 를 다른 회원·회차에 쓰면 충돌 거절, 신청 행은 늘지 않음 | 사용자 결정(answer.txt) | oracle new-request-id-linked-to-existing-confirmation | 지도·최종 |
+| Q3 | 2번 답의 새 ID 성공 응답이 유실된 뒤에도 기존 조회로 같은 결과를 찾을 수 있는가 | environment.md의 응답 유실 복구·ID 결속 계약 + answer.txt 2번 + 기존 status(request_id, member) 인터페이스 | 연결 정보를 보존할 책임과 확인 방법을 설계한다. 저장 구조는 구현 선택이며 별도 정책 질문이 없다는 이유로 실패시키지 않는다 | 지도 |
+| K11 | 새 ID 로 기존 확정을 안내 → 조회·저장소 → 그 ID 로 조회하면 기존 번호·회차 '신청 완료', 그 ID 를 다른 회원·회차에 쓰면 충돌 거절, 신청 행은 늘지 않음 | Q3의 계약·사용자 결정 결합; answer.txt 3번은 같은 동작을 명시적으로 재확인 | oracle new-request-id-linked-to-existing-confirmation | 지도·최종 |
 | K9 | 구현자 보고 → 실행 기록 → 실제 실행한 명령·출력과 일치, 미확인은 미확인으로 | request.txt "구현·검증까지" | 의미 검토(--output 으로 보고·실행 기록 전달) | 최종 |
 
 보호 파일(기준 커밋에 있던 것, 고치거나 지우지 않음): `tests/test_smoke.py`, `bin/probe.py`, `request.txt`, `docs/environment.md`, `README.md`. 이번 작업에서 새로 만든 검사는 보호 대상이 아니다(틀린 기대값은 고친다).
+
+2026-11-09 Q3 판정 정정: 예전 기준은 연결 저장을 추가 사용자 결정으로 분류했지만, 같은 회원이 두 회차에 확정된 상태에서 새 ID 응답이 유실되면 연결 정보 없이 기존 조회 인자만으로 어느 결과인지 찾을 수 없다. 이는 이미 정한 복구 계약을 지키기 위한 설계다. 이전 기록의 Q3 질문 누락 FAIL은 새 기준과 직접 비교하지 않고 정정 이력을 남긴다. Q1·Q2의 실제 미정과 최신 행 정책 위반은 별개다.
