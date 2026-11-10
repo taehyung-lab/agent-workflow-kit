@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 키트를 대상 저장소에 처음 설치하거나(--update 없이), 설치된 저장소의 키트 소유 부분만 키트의 현재 커밋으로 교체한다.
 # 키트 소유 부분: AGENTS.md의 표시 영역, CLAUDE.md, 키트 .agents/skills 아래 파일. 그 밖은 프로젝트가 관리한다.
-# 훅: 세션 시작 정보 훅(정보만, 차단 없음) 하나를 프로젝트 설정에 두고, v3.0 이하의 승인 관문 훅 항목은 지운다(kit_hooks). 다른 훅·설정은 그대로 둔다.
+# 훅: Claude 프로젝트 설정에 세션 시작 정보 훅(정보만, 차단 없음) 하나를 두고, Codex 설정의 키트 훅과 v3.0 이하의 승인 관문 훅 항목은 지운다(kit_hooks). 다른 훅·설정은 그대로 둔다.
 # macOS 기본 bash 3.2에서 돌도록 mapfile·빈 배열 확장을 쓰지 않는다.
 set -Eeuo pipefail
 fail() { printf '%s\n' "$*" >&2; exit 1; }
@@ -43,8 +43,10 @@ trap 'rm -f "$assembled"; printf "%s\n" "Install failed; partial files may remai
 
 # 프로젝트 훅 설정(.claude/settings.json, .codex/hooks.json)에서 키트 항목만 맞춘다. 다른 훅·설정(예: 프로젝트의 포맷터 훅,
 # enabledPlugins, permissions)은 그대로 두고, 바꿀 것이 없는 파일은 쓰지 않는다. 사용자 전역 설정(~/.claude, ~/.codex)은 건드리지 않는다.
-# 키트 항목: ① 세션 시작 정보 훅(명령에 wf-context/context.py, v3.2~): 키트에 그 파일이 있으면 SessionStart 에 하나 두고, 없으면 지운다.
+# 키트 항목: ① 세션 시작 정보 훅(명령에 wf-context/context.py, v3.2~): 키트에 그 파일이 있으면 Claude 의 SessionStart 에 하나 두고, 없으면 지운다.
 #            이 훅은 맥락 정보만 낸다(차단·승인 판독 없음, 늘 종료 0). 파일 쓰기·명령 허용은 각 도구의 권한 설정이 맡는다.
+#            Codex(.codex/hooks.json)에는 두지 않고 있던 항목을 지운다(v3.5~): Codex 는 경로·명령마다 훅 신뢰를 따로 묻고, 신뢰 전에는
+#            경고 없이 건너뛰어 새 워크트리·자동 실행에서 정보를 넣지 못하면서 확인창만 늘렸다. 같은 정보는 context.py inspect 로 얻는다.
 #            ② v3.0 이하의 승인 관문 훅(명령에 approval-gate.py): 지운다.
 # $1 = check: 쓰기 전에, 고칠 파일이 일반 파일이고 올바른 JSON 객체인지만 확인한다(깨졌으면 멈춘다). $1 = apply: 맞춘다.
 kit_hooks() {
@@ -53,7 +55,7 @@ kit_hooks() {
   [ "$1" = check ] && kit show "$new:.agents/skills/wf-context/context.py" >/dev/null 2>&1 && want=1
   for f in .claude/settings.json .codex/hooks.json; do
     if [ -e "$f" ] || [ -L "$f" ]; then
-      if [ "$want" = 1 ] || grep -qE 'approval-gate\.py|wf-context/context\.py' "$f" 2>/dev/null; then found="$found $f"; fi
+      if { [ "$want" = 1 ] && [ "$f" = .claude/settings.json ]; } || grep -qE 'approval-gate\.py|wf-context/context\.py' "$f" 2>/dev/null; then found="$found $f"; fi
     fi
   done
   [ "$want" = 1 ] || [ -n "$found" ] || return 0
@@ -65,7 +67,7 @@ kit_hooks() {
   fi
   AWK_WANT=$want python3 -I - "$1" <<'PY' || fail "Could not read hook settings in$found; fix the JSON, then retry"
 import json, os, sys
-mode, want = sys.argv[1], os.environ.get("AWK_WANT") == "1"
+mode, want_any = sys.argv[1], os.environ.get("AWK_WANT") == "1"
 script = ".agents/skills/wf-context/context.py"
 # 훅 명령: 키트 파일이나 python3·git 이 없어도 아무것도 내지 않고 0 으로 끝난다(정보만 주는 훅이라 세션을 막지 않는다).
 # Claude Code 는 프로젝트 폴더를 CLAUDE_PROJECT_DIR 로 주고, Codex 는 세션 폴더의 저장소 맨 위(없으면 지금 폴더)에서 찾는다.
@@ -77,6 +79,7 @@ want_hook = {
 def kit_entry(h):
     return isinstance(h, dict) and any(k in str(h.get("command", "")) for k in ("approval-gate.py", "wf-context/context.py"))
 for path, desired in want_hook.items():
+    want = want_any and path == ".claude/settings.json"  # Codex 에는 정보 훅을 두지 않는다(위 ① 설명)
     exists = os.path.exists(path)
     if not exists and not want:
         continue
@@ -123,6 +126,10 @@ for path, desired in want_hook.items():
         del data["hooks"]
     if json.dumps(data) == before and exists:
         continue  # 바꿀 것이 없으면 쓰지 않는다(명령이 아닌 곳에만 이름이 든 파일 포함)
+    if not data and path == ".codex/hooks.json":
+        os.remove(path)  # 키트 항목만 있던 파일: 빈 설정을 남기지 않는다(다른 키·훅이 하나라도 있으면 그대로 쓴다)
+        print(f"Removed kit hook entries from {path}; the file held nothing else, so it was removed.")
+        continue
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".kit-tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -136,8 +143,8 @@ for path, desired in want_hook.items():
     elif not want:
         print(f"Removed kit hook entries from {path} (other hooks and settings kept).")
 PY
-  [ "$1" = apply ] && [ "$want" = 1 ] && [ -f .codex/hooks.json ] && grep -q 'wf-context/context\.py' .codex/hooks.json \
-    && printf '%s\n' 'Codex runs project hooks only after you trust them once (Codex asks at startup). Until then, or in a tool without SessionStart hooks: python3 .agents/skills/wf-context/context.py inspect'
+  [ "$1" = apply ] && [ "$want" = 1 ] \
+    && printf '%s\n' 'Codex gets no kit hook (no trust prompt from the kit). At start, target change or resume, run: python3 .agents/skills/wf-context/context.py inspect'
   return 0
 }
 

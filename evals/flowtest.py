@@ -53,9 +53,9 @@ with tempfile.TemporaryDirectory() as t:
         d = json.loads(path.read_text()) if path.is_file() else {}
         return {ev: [h.get("command", "") for g in gs for h in g.get("hooks", [])] for ev, gs in d.get("hooks", {}).items()}
     hc, hx = kit_hooks(proj / ".claude/settings.json"), kit_hooks(proj / ".codex/hooks.json")
-    check("설치는 승인 관문을 두지 않고, 훅은 세션 시작 정보 훅(wf-context) 하나뿐이다", not (proj / ".agents/skills/wf-design").exists()
-          and list(hc) == ["SessionStart"] and list(hx) == ["SessionStart"] and len(hc["SessionStart"]) == 1 and len(hx["SessionStart"]) == 1
-          and "wf-context/context.py" in hc["SessionStart"][0] and "wf-context/context.py" in hx["SessionStart"][0])
+    check("설치는 승인 관문을 두지 않고, 훅은 Claude 세션 시작 정보 훅(wf-context) 하나뿐이다(Codex 에는 키트 훅 없음)", not (proj / ".agents/skills/wf-design").exists()
+          and list(hc) == ["SessionStart"] and len(hc["SessionStart"]) == 1 and "wf-context/context.py" in hc["SessionStart"][0]
+          and hx == {} and not (proj / ".codex/hooks.json").exists())
     sh(*G, "add", "-A", cwd=proj); sh(*G, "commit", "-qm", "kit", cwd=proj)
     verifier = proj / ".agents/skills/wf-verify/verify.py"
 

@@ -204,24 +204,23 @@ t="$tmp/hooks-fresh"; mkdir -p "$t/.claude" "$t/.codex"
 printf '{"permissions": {"defaultMode": "plan"},\n "hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": "mine.sh"}]}]}}' > "$t/.claude/settings.json"
 printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"my-stop.sh"}]}]}}' > "$t/.codex/hooks.json"
 t2="$tmp/hooks-none"; mkdir "$t2"
+codex_before=$(cat "$t/.codex/hooks.json")
 if install "$t" && grep -q 'information only' "$tmp/out" && install "$t2" \
   && kit_hook_ok "$t/.claude/settings.json" '{"permissions": {"defaultMode": "plan"}, "hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": "mine.sh"}]}]}}' \
-  && kit_hook_ok "$t/.codex/hooks.json" '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "my-stop.sh"}]}]}}' \
-  && kit_hook_ok "$t2/.claude/settings.json" '{}' && kit_hook_ok "$t2/.codex/hooks.json" '{}' \
-  && grep -q 'CLAUDE_PROJECT_DIR' "$t2/.claude/settings.json" && ! grep -q 'CLAUDE_PROJECT_DIR' "$t2/.codex/hooks.json" \
-  && [ ! -e "$t2/.agents/skills/wf-design" ] && [ -f "$t2/.agents/skills/wf-context/context.py" ]; then ok "fresh install adds only the SessionStart information hook and keeps existing hooks and permissions"; else ng "fresh install adds only the SessionStart information hook and keeps existing hooks and permissions"; cat "$tmp/err"; fi
+  && [ "$(cat "$t/.codex/hooks.json")" = "$codex_before" ] \
+  && kit_hook_ok "$t2/.claude/settings.json" '{}' && [ ! -e "$t2/.codex" ] \
+  && grep -q 'CLAUDE_PROJECT_DIR' "$t2/.claude/settings.json" && grep -q 'context.py inspect' "$tmp/out" \
+  && [ ! -e "$t2/.agents/skills/wf-design" ] && [ -f "$t2/.agents/skills/wf-context/context.py" ]; then ok "fresh install adds only the Claude SessionStart information hook, no Codex hook, keeps existing hooks and permissions"; else ng "fresh install adds only the Claude SessionStart information hook, no Codex hook, keeps existing hooks and permissions"; cat "$tmp/err"; fi
 
 # 훅 명령: python3·git 이 없거나 키트 파일이 없어도 아무것도 내지 않고 0. 있으면 정보 JSON 을 내고 0(git 저장소가 아니어도)
 cmd_of() { python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); print(next(h["command"] for g in d["hooks"]["SessionStart"] for h in g["hooks"] if "wf-context" in h["command"]))' "$1"; }
-ccmd=$(cmd_of "$t2/.claude/settings.json"); xcmd=$(cmd_of "$t2/.codex/hooks.json"); mkdir -p "$tmp/empty-path"
+ccmd=$(cmd_of "$t2/.claude/settings.json"); mkdir -p "$tmp/empty-path"
 o1=$(cd "$t2" && echo '{}' | CLAUDE_PROJECT_DIR="$t2" PATH="$tmp/empty-path" /bin/sh -c "$ccmd"); r1=$?
-o2=$(cd "$t2" && echo '{}' | PATH="$tmp/empty-path" /bin/sh -c "$xcmd"); r2=$?
 o3=$(cd "$tmp" && echo '{}' | CLAUDE_PROJECT_DIR="$tmp/no-such" /bin/sh -c "$ccmd"); r3=$?
 o4=$(cd "$t2" && echo '{"hook_event_name": "SessionStart", "source": "resume"}' | CLAUDE_PROJECT_DIR="$t2" /bin/sh -c "$ccmd"); r4=$?
-o5=$(cd "$t2" && echo '{}' | /bin/sh -c "$xcmd"); r5=$?
-if [ "$r1$r2$r3$r4$r5" = 00000 ] && [ -z "$o1$o2$o3" ] \
+if [ "$r1$r3$r4" = 000 ] && [ -z "$o1$o3" ] \
   && printf '%s' "$o4" | python3 -I -c 'import json,sys; d=json.load(sys.stdin)["hookSpecificOutput"]; assert d["hookEventName"]=="SessionStart" and "실경로" in d["additionalContext"] and "resume" in d["additionalContext"]' \
-  && printf '%s' "$o5" | grep -q '실경로'; then ok "hook command: silent exit 0 without python3/git/kit file; information JSON exit 0 otherwise"; else ng "hook command exit/output: $r1$r2$r3$r4$r5 [$o1|$o2|$o3]"; fi
+  ; then ok "hook command: silent exit 0 without python3/git/kit file; information JSON exit 0 otherwise"; else ng "hook command exit/output: $r1$r3$r4 [$o1|$o3]"; fi
 
 # 훅 설정 파일이 깨졌거나 심링크면 아무것도 쓰기 전에 멈춘다
 t="$tmp/hooks-broken"; mkdir -p "$t/.codex"; printf '{"hooks": ' > "$t/.codex/hooks.json"
@@ -264,8 +263,7 @@ assert c["enabledPlugins"] == {"superpowers@claude-plugins-official": False} and
 assert h["PostToolUse"] == [{"matcher": "^(Edit|Write)$", "hooks": [{"type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/scripts/format/edited.mjs\" --hook", "timeout": 60}]}]
 assert h["PreToolUse"] == [{"matcher": "Bash", "hooks": [{"type": "command", "command": "mine.sh"}]}]
 assert set(h) == {"PostToolUse", "PreToolUse", "SessionStart"} and len(h["SessionStart"]) == 1 and "wf-context/context.py" in h["SessionStart"][0]["hooks"][0]["command"]
-assert x["hooks"]["Stop"] == [{"hooks": [{"type": "command", "command": "my-stop.sh"}]}] and set(x["hooks"]) == {"Stop", "SessionStart"}
-assert "wf-context/context.py" in x["hooks"]["SessionStart"][0]["hooks"][0]["command"]' "$t/.claude/settings.json" "$t/.codex/hooks.json"; }
+assert x == {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "my-stop.sh"}]}]}}, x' "$t/.claude/settings.json" "$t/.codex/hooks.json"; }
   if bash "$ok_kit/install.sh" --update "$t" >"$tmp/out" 2>"$tmp/err" \
     && [ "$(gates "$t/.claude/settings.json")" = 0 ] && [ "$(gates "$t/.codex/hooks.json")" = 0 ] && settings_ok \
     && grep -q 'Removed old approval gate hook entries from .claude/settings.json' "$tmp/out" \
@@ -296,7 +294,7 @@ if git -C "$src" rev-parse -q --verify "v3.1.0^{commit}" >/dev/null; then
   [ ! -e "$t/.codex" ] && kit_hook_ok "$t/.claude/settings.json" "$keep31" 0 && ok "fixture: v3.1.0 installer wrote no hooks" || ng "fixture: v3.1.0 installer wrote no hooks"
   (cd "$k31" && git ls-files -z | xargs -0 rm -f) && (cd "$src" && tar cf - --exclude=.git --exclude=__pycache__ .) | (cd "$k31" && tar xf -)
   g31 add -A; g31 commit -qm new
-  if bash "$k31/install.sh" --update "$t" >"$tmp/out" 2>"$tmp/err" && kit_hook_ok "$t/.claude/settings.json" "$keep31" && kit_hook_ok "$t/.codex/hooks.json" '{}' \
+  if bash "$k31/install.sh" --update "$t" >"$tmp/out" 2>"$tmp/err" && kit_hook_ok "$t/.claude/settings.json" "$keep31" && [ ! -e "$t/.codex/hooks.json" ] \
     && grep -q 'information only' "$tmp/out"; then ok "upgrade from v3.1.0 adds only the information hook, keeps formatter hook and plugins"; else ng "upgrade from v3.1.0 adds only the information hook, keeps formatter hook and plugins"; cat "$tmp/err"; fi
   before=$(snap "$t")
   if bash "$k31/install.sh" --update "$t" >"$tmp/out" 2>&1 && grep -q 'Already at' "$tmp/out" && [ "$(snap "$t")" = "$before" ]; then ok "hook update rerun changes nothing"; else ng "hook update rerun changes nothing"; fi
@@ -307,9 +305,41 @@ if git -C "$src" rev-parse -q --verify "v3.1.0^{commit}" >/dev/null; then
   git -C "$k31" rm -q -r .agents/skills/wf-context; g31 commit -qm drop-context
   if bash "$k31/install.sh" --update "$t" >"$tmp/out" 2>"$tmp/err" && [ ! -e "$t/.agents/skills/wf-context" ] \
     && kit_hook_ok "$t/.claude/settings.json" "$(python3 -I -c 'import json,sys; d=json.loads(sys.argv[1]); d["hooks"]["SessionStart"]=[{"matcher": "startup", "hooks": [{"type": "command", "command": "my-start.sh"}]}]; print(json.dumps(d))' "$keep31")" 0 \
-    && kit_hook_ok "$t/.codex/hooks.json" '{}' 0 && grep -q 'Removed kit hook entries' "$tmp/out"; then ok "update to a kit without the inspector removes only kit hook entries (user hooks, formatter, plugins kept)"; else ng "update to a kit without the inspector removes only kit hook entries (user hooks, formatter, plugins kept)"; cat "$tmp/err"; fi
+    && [ ! -e "$t/.codex/hooks.json" ] && grep -q 'Removed kit hook entries' "$tmp/out"; then ok "update to a kit without the inspector removes only kit hook entries (user hooks, formatter, plugins kept)"; else ng "update to a kit without the inspector removes only kit hook entries (user hooks, formatter, plugins kept)"; cat "$tmp/err"; fi
 else
   ng "upgrade from v3.1.0: tag not found in kit checkout (fetch tags, e.g. git fetch --tags)"
+fi
+
+
+# v3.4.3(Codex 에도 정보 훅) → 이 커밋: Codex 설정의 키트 항목만 지운다. 같은 그룹·다른 칸의 프로젝트 훅과 순번은 그대로,
+# 키트 항목만 있던 Codex 설정 파일은 지운다. Claude 정보 훅은 그대로 둔다.
+if git -C "$src" rev-parse -q --verify "v3.4.3^{commit}" >/dev/null; then
+  k34="$tmp/kit-343"; mkdir "$k34"
+  g34() { git -C "$k34" -c user.name=t -c user.email=t@t "$@" >/dev/null; }
+  git -C "$src" archive v3.4.3 | tar xf - -C "$k34"; g34 init -q; g34 add -A; g34 commit -qm v343
+  ta="$tmp/up343-mixed"; tb="$tmp/up343-only"; mkdir -p "$ta" "$tb"
+  bash "$k34/install.sh" "$ta" >/dev/null 2>&1; bash "$k34/install.sh" "$tb" >/dev/null 2>&1
+  [ "$(grep -c 'wf-context/context.py' "$ta/.codex/hooks.json")" = 1 ] && ok "fixture: v3.4.3 installer registered the Codex information hook" || ng "fixture: v3.4.3 installer registered the Codex information hook"
+  python3 -I -c 'import json,sys
+p=sys.argv[1]; d=json.load(open(p)); h=d["hooks"]
+h["SessionStart"][0]["hooks"].append({"type": "command", "command": "my-start.sh"})
+h["PostToolUse"]=[{"matcher": "^(apply_patch|Edit|Write)$", "hooks": [{"type": "command", "command": "lint.sh"}]}]
+d["other"]={"keep": True}; json.dump(d, open(p, "w"))' "$ta/.codex/hooks.json"
+  claude_before=$(cat "$ta/.claude/settings.json")
+  (cd "$k34" && git ls-files -z | xargs -0 rm -f) && (cd "$src" && tar cf - --exclude=.git --exclude=__pycache__ .) | (cd "$k34" && tar xf -)
+  g34 add -A; g34 commit -qm new
+  if bash "$k34/install.sh" --update "$ta" >"$tmp/out" 2>"$tmp/err" && bash "$k34/install.sh" --update "$tb" >>"$tmp/out" 2>>"$tmp/err" \
+    && python3 -I -c 'import json,sys
+d=json.load(open(sys.argv[1]))
+assert d == {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "my-start.sh"}]}],
+                       "PostToolUse": [{"matcher": "^(apply_patch|Edit|Write)$", "hooks": [{"type": "command", "command": "lint.sh"}]}]},
+             "other": {"keep": True}}, d' "$ta/.codex/hooks.json" \
+    && [ ! -e "$tb/.codex/hooks.json" ] && [ "$(cat "$ta/.claude/settings.json")" = "$claude_before" ] \
+    && grep -q 'Removed kit hook entries from .codex/hooks.json' "$tmp/out"; then ok "update from v3.4.3 removes only the Codex kit hook (project hooks, order, other keys kept; kit-only file removed; Claude hook kept)"; else ng "update from v3.4.3 removes only the Codex kit hook (project hooks, order, other keys kept; kit-only file removed; Claude hook kept)"; cat "$tmp/err"; fi
+  before=$(snap "$ta")
+  if bash "$k34/install.sh" --update "$ta" >"$tmp/out" 2>&1 && [ "$(snap "$ta")" = "$before" ]; then ok "rerun after Codex hook removal changes nothing"; else ng "rerun after Codex hook removal changes nothing"; fi
+else
+  ng "update from v3.4.3: tag not found in kit checkout (fetch tags, e.g. git fetch --tags)"
 fi
 
 printf '%d passed, %d failed\n' "$pass" "$failed"

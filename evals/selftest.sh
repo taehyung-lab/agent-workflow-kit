@@ -108,13 +108,14 @@ m = json.load(open(sys.argv[1])); s = json.load(open(sys.argv[2]))
 assert s["enabledPlugins"]["superpowers@claude-plugins-official"] is False
 assert "superpowers@claude-plugins-official" in m["claude_project_settings"] and m["global_instructions"]["plugins"] not in ("", None)' "$pm" "${pm%.meta.json}.files/.claude/settings.json" 2>/dev/null \
   && ok "실제 플러그인 조합 옵션: 프로젝트 설정에 enabledPlugins 를 합치고 meta 에 설정·플러그인 지문을 남김" || ng "플러그인 조합 옵션: $pm"
-# Codex: 프로젝트 훅 파일이 있을 때만 훅 신뢰 우회(--dangerously-bypass-hook-trust)를 넘긴다. v3.2~ 의 정보 훅(wf-context)이 있으면
-# 임시 홈 config.toml 에만 이 프로젝트 신뢰(trust_level)를 더해 훅이 실제로 읽히게 한다(프로젝트를 신뢰한 사용자 재현). 훅 파일이 없던 v3.1.0 은 둘 다 없다.
+# Codex: 프로젝트 훅 파일이 있을 때만 훅 신뢰 우회(--dangerously-bypass-hook-trust)를 넘긴다. v3.2~v3.4 의 Codex 정보 훅(wf-context)이 있으면
+# 임시 홈 config.toml 에만 이 프로젝트 신뢰(trust_level)를 더해 훅이 실제로 읽히게 한다(프로젝트를 신뢰한 사용자 재현).
+# v3.5~ 는 Codex 에 키트 훅을 두지 않으므로(v3.1.0 처럼) 둘 다 넘기지 않는다. 옛 커밋을 비교할 때의 신뢰 재현은 run.sh 가 그대로 맡는다.
 printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho "$*" >> "$FAKE_LOG"\ngrep -c trust_level "$CODEX_HOME/config.toml" >> "$FAKE_LOG" 2>/dev/null || echo 0 >> "$FAKE_LOG"\necho \x27{"type": "thread.started", "thread_id": "t"}\x27\nexit 0\n' > "$fake/codex"; chmod +x "$fake/codex"
 : > "$fake/log"; FAKE_LOG=$fake/log EVALS_RESULTS=$results/codex PATH="$fake:$PATH" bash "$here/run.sh" weight-disposable "$REF" codex >/dev/null 2>&1
 before_trust=$(grep -c trust_level ~/.codex/config.toml 2>/dev/null || echo 0)
-grep -q 'bypass-hook-trust' "$fake/log" && [ "$(tail -1 "$fake/log")" -gt "$before_trust" ] && grep -q '"codex_project_trusted": true' "$results"/codex/*.meta.json \
-  && ok "Codex: 정보 훅이 있으면 훅 신뢰 우회와 임시 홈의 프로젝트 신뢰를 넘기고 meta 에 남김" || ng "Codex 정보 훅 신뢰: $(cat "$fake/log")"
+! grep -q 'bypass-hook-trust' "$fake/log" && [ "$(tail -1 "$fake/log")" -le "$before_trust" ] && grep -q '"codex_project_trusted": false' "$results"/codex/*.meta.json \
+  && ok "Codex: 키트 훅이 없으면 훅 신뢰 우회·임시 홈 프로젝트 신뢰를 넘기지 않고 meta 에 남김" || ng "Codex 훅 신뢰(키트 훅 없음): $(cat "$fake/log")"
 if git -C "$kitdir" rev-parse -q --verify 'v3.1.0^{commit}' >/dev/null; then
   : > "$fake/log"; FAKE_LOG=$fake/log EVALS_RESULTS=$results/codex31 PATH="$fake:$PATH" bash "$here/run.sh" weight-disposable v3.1.0 codex >/dev/null 2>&1
   grep -q 'exec' "$fake/log" && ! grep -q 'bypass-hook-trust' "$fake/log" && [ "$(tail -1 "$fake/log")" = "$before_trust" ] \
