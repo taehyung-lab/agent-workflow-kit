@@ -23,7 +23,7 @@ prepare 가 읽은 원문·계획·조건·산출물 파일, 지도의 `## 기�
   incomplete(4)  재검토 한도에 닿았는데 마지막 판정도 RETURN 이다. 미완료로 보고한다. 한도(--rounds, 기본 2)는 그 시도의 첫 회차에
                  정해지고, 닿은 뒤에는 새 검토자를 띄우지 않는다. 요청 원문·기준 커밋이 다른 새 시도만 1회차부터 센다.
   unverified(5)  판정하지 못했다(빈 답·형식 오류·조건 누락·검토자 하네스 없음·오류·검토자가 대상 파일을 바꿈·요청 원문 없음·지도 기준 없음,
-                 근거 불완전: 기준 커밋을 읽지 못함·diff 실패·잘림, 검토하는 동안 제품 파일·지도 기준이 바뀜).
+                 근거 불완전: 기준 커밋을 읽지 못함·diff 실패·잘림, 검토하는 동안 제품 파일이나 prepare 가 읽은 근거(원문·산출물 등 전달 파일, 지도 기준·맥락, 비교 기준 폴더)가 바뀜, 근거 기록이 없는 옛 회차).
                  미확인은 완료가 아니다. 성공처럼 넘어가지 않고 사유와 재개 조건을 보고한다.
 전체 완료(completion)는 위 판정과 별개다: 직접 검사(--check)·작업 지도 요구 기록의 미정(사용자 답 대기 → waiting-user)·
 미확인 행까지 모두 확인됐을 때만 verified 다. 애매하면 완료가 아니다. 요구 기록 표의 형식 문제(상태 값, 확정인데 출처 없음,
@@ -411,10 +411,19 @@ def run(cmd, cwd=None, **kw):
     return subprocess.run(cmd, cwd=cwd, capture_output=True, **kw)
 
 
+def runtime_cache(f):
+    """파이썬이 실행하며 저절로 쓰는 캐시(__pycache__ 폴더, .pyc·.pyo). 소스가 아니라 검사 실행의 부산물이다."""
+    parts = f.split("/")
+    return "__pycache__" in parts[:-1] or parts[-1].endswith((".pyc", ".pyo"))
+
+
 def product_list(root):
-    """복사할 파일: git 이 아는 파일과 무시되지 않은 새 파일. 작업 지도(work/)는 뺀다(증거·자기평가를 검토자가 보지 않게)."""
-    out = run(["git", "-c", "core.fsmonitor=false", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=root).stdout
-    return sorted({os.fsdecode(f) for f in out.split(b"\0") if f and not f.startswith(b"work/")})
+    """복사할 파일: git 이 아는 파일과 무시되지 않은 새 파일. 작업 지도(work/)는 뺀다(증거·자기평가를 검토자가 보지 않게).
+    추적하지 않는 파이썬 캐시는 무시 목록이 없어도 뺀다: 구현자·검토자가 검사를 돌릴 때마다 바뀌어 대상·원본 변경으로 잘못 세지기 때문이다."""
+    git = ["git", "-c", "core.fsmonitor=false", "ls-files", "-z"]
+    tracked = run(git + ["--cached"], cwd=root).stdout.split(b"\0")
+    new = [f for f in run(git + ["--others", "--exclude-standard"], cwd=root).stdout.split(b"\0") if not runtime_cache(os.fsdecode(f))]
+    return sorted({os.fsdecode(f) for f in tracked + new if f and not f.startswith(b"work/")})
 
 
 def product_print(root):
