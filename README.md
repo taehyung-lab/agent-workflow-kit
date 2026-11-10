@@ -1,10 +1,10 @@
 # agent-workflow-kit
 
-**AI 코딩 에이전트가 "무엇을 확인해야 끝난 것인가"를 일하기 전에 정하고, 실제로 확인한 것만 완료라고 말하게 하는 작업 기준 키트.**
+**AI 코딩 에이전트가 요구를 이해하고, 정할 것만 먼저 묻고, 합의한 대로 만들고, 실제로 확인한 것만 완료라고 말하게 하는 짧은 작업 기준 키트.** grilling·tdd·review 같은 외부 스킬을 설치하지 않아도 그 스킬들이 맡던 책임(요구 분석, 중요한 선택만 먼저 질문, 요구에서 기대값을 정해 구현·시험, 원문 대비 결과 검토)을 작업에 맞는 깊이로 수행하는 것을 목표로 한다.
 
 Claude Code·Codex 가 함께 읽는 짧은 작업 기준([AGENTS.md](AGENTS.md) 키트 영역, 약 3.5KB), 필요할 때만 읽는 선택 안내([guide.md](.agents/skills/guide.md))와 검토 도구, 세션 시작 때 "지금 어느 저장소·버전에서 일하는가"를 알려 주는 정보 훅, 그리고 그 기준이 실제 결과를 바꾸는지 재는 측정 도구([evals/](evals/))로 되어 있다.
 
-> A thin work standard for AI coding agents (Claude Code, Codex): turn a request into observable conditions before building, close work only on observed results, and fix the cause instead of appending rules. Korean is canonical. No reuse license is currently specified.
+> A thin work standard for AI coding agents (Claude Code, Codex): carry out what requirement-grilling, TDD and review skills are for without installing them — ask only the open decisions before changing product files, build to what was agreed, close work only on observed results, and fix the cause instead of appending rules. Korean is canonical. No reuse license is currently specified.
 
 ## 이런 문제를 풀려고 만들었다
 
@@ -16,11 +16,11 @@ AI 에이전트에게 일을 맡기면 두 가지가 반복된다.
 이 키트의 답은 네 가지다.
 
 1. **완료 기준을 먼저 정한다**: 무엇을 어디서 관찰하면 끝난 것인지 일하기 전에 적는다.
-2. **무엇을 만들지는 요청과 사용자가 정한다**: 분명한 실행 요청은 그 자체가 승인이라 바로 하고, 결과가 갈리는데 근거로 정할 수 없는 선택만 추천과 함께 묻는다. 조사·설명·리뷰 요청으로는 고치지 않는다. 파일 쓰기·명령을 실제로 허용할지는 각 도구의 권한 설정이 맡고, 키트는 자기 확인 단계를 더하지 않는다.
+2. **무엇을 만들지는 요청과 사용자가 정한다**: 분명한 실행 요청은 그 자체가 승인이라 바로 하고, 결과가 갈리는데 근거로 정할 수 없는 선택만 추천과 함께 먼저 묻고 답을 받은 뒤 만든다. 조사·설명·리뷰 요청으로는 고치지 않는다. 파일 쓰기·명령을 실제로 허용할지는 각 도구의 권한 설정이 맡고, 키트는 자기 확인 단계를 더하지 않는다.
 3. **실패하면 덧붙이지 않고 원인 자리를 바꾼다**: 규칙을 더하는 대신, 실패를 만든 문장·코드·검사를 교체하거나 지운다.
 4. **바꾼 것이 정말 효과가 있었는지 잰다**: 문장을 고쳤다는 사실이 아니라 새 세션의 행동이 달라졌는지로 판단한다.
 
-이런 사람에게 맞다: 여러 저장소에서 AI 에이전트로 일하면서 "어디까지 확인했는지"를 믿을 수 있어야 하는 개발자·팀. 실무 스킬 묶음(TDD·리뷰 절차 등)이 아니라, 그 위에서 **언제 무엇을 확인해야 끝나는지**를 정하는 판단 층이다.
+이런 사람에게 맞다: 여러 저장소에서 AI 에이전트로 일하면서 "어디까지 확인했는지"를 믿을 수 있어야 하는 개발자·팀. 긴 절차 스킬을 다시 쓴 묶음이 아니라, 그 절차들이 지키려던 책임을 짧은 기준으로 수행하는 키트다. 전문 스킬은 원하면 함께 쓸 수 있지만 필수 설치 조건이 아니다. 같은 과제에서 스킬을 설치한 구성과 견준 결과와 한계는 아래 「미정이 남으면 먼저 묻고 만든다 (v3.4)」와 [docs/direction.md](docs/direction.md)에 있다.
 
 ## 구조
 
@@ -244,7 +244,7 @@ flowchart LR
 ## 5분 시작
 
 ```bash
-git clone --branch v3.4.0 https://github.com/taehyung-lab/agent-workflow-kit
+git clone --branch v3.4.1 https://github.com/taehyung-lab/agent-workflow-kit
 bash agent-workflow-kit/install.sh /path/to/my-project
 ```
 
@@ -329,12 +329,14 @@ AGENTS.md의 네 항목에는 저장소가 관리하는 근거의 위치와 한 
 키트가 관리하는 부분에 로컬 변경이 있으면 이미 같은 버전이어도 아무것도 쓰지 않고 그 경로를 알린다. 그 변경은 프로젝트 절·역할 스킬로 옮기거나 키트에 반영한 뒤 다시 실행한다. 키트가 쓰는 경로의 부모가 심링크이거나 폴더가 아니면 설치와 같이 쓰기 전에 거절한다.
 교체 결과를 diff로 검토하고, 아래 도입 확인 중 바뀐 것에 맞는 확인을 거친 뒤 반영한다. 확인을 마치지 못하면 남은 확인을 함께 남긴다.
 
+**v3.4.0 → v3.4.1.** 문서만 바뀐다(README 소개·docs/direction.md 의 목적과 v3.4 실측, evals/goalflow/criteria.md 의 Q3 판정 정정). 설치되는 파일은 v3.4.0 과 같다.
+
 **v3.3 → v3.4.** AGENTS.md 기본 2 가 바뀐다: 이번 작업에 사용자 결정이 남아 있으면 조사·재현까지만 하고 제품 파일은 답 뒤에 고친다(무관해 보이는 부분도 먼저 구현하지 않는다). 질문에는 근거가 정한 것과 남은 선택을 함께 보이고 독립 질문만 묶는다. guide.md 「질문」의 한 문장이 같은 뜻으로 바뀐다. 훅·설정 파일·`verify.py`·`context.py` 는 바뀌지 않으므로 Codex 훅 신뢰 확인은 다시 나오지 않는다.
 
 **v3.2 → v3.3.** AGENTS.md 는 그대로다. guide.md 「작업 지도」의 `## 기준` 이 요구 기록 표(`ID | 요구 | 출처·위치 | 의존 | 확인 방법 | 상태`: 확정·미정·미확인)로 바뀌고, 「독립 검토」 3단계가 `verify.py finish --round <kept> --check <직접 검사 결과 PASS|FAIL|REVIEW>` 로 바뀐다. 전체 완료(`completion`)는 검토 OK·직접 검사 PASS·미정·미확인 행 없음이 모두 맞을 때만 `verified` 다: `--check` 를 주지 않으면 통과로 가정하지 않고 `unverified`, 직접 검사 REVIEW 는 `needs-review`(전에는 `verified`), 미정 행이 남으면 `waiting-user`. 표의 형식 문제는 검토자 없이 `returned` 로 돌아온다. 표가 없는 기존 지도는 그대로 동작한다(형식 검사를 건너뛴다). 훅·설정 파일은 바뀌지 않는다.
 
 ```bash
-git -C /path/to/agent-workflow-kit fetch --tags && git -C /path/to/agent-workflow-kit checkout v3.4.0
+git -C /path/to/agent-workflow-kit fetch --tags && git -C /path/to/agent-workflow-kit checkout v3.4.1
 bash /path/to/agent-workflow-kit/install.sh --update /path/to/target-repository
 ```
 
