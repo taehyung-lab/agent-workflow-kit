@@ -11,7 +11,8 @@
   마지막 후보의 판정을 모르므로 unknown 이 되고 앞선 ok 를 이어 쓰지 않는다.
   실행기 경로를 언급했지만 결과 JSON 없이 0 으로 끝난 출력(cat 으로 스크립트를 읽음 등)과, 실행기 경로를 부르지 않고 저장된 결과를 읽은 것은
   실행이 아니다. 실행 흔적은 성공이 아니고, ok 는 검증자 판정이 모든 조건 충족이라는 뜻일 뿐 전체 완료가 아니다: 실행기가 함께 낸
-  completion(verified·waiting-user 등)은 verify_run_completion 에 따로 남긴다. 평가의 완료 판정(run.sh 의 completion)과도 따로 센다.
+  completion(verified·waiting-user 등)은 verify_run_completion, 미정·미확인 근거는 verify_run_inputs 에 남긴다.
+  목록이 없는 예전 실행 결과는 빈 목록으로 바꾸지 않는다. 평가의 완료 판정과도 따로 센다.
 - verifier_observed: 마지막 턴에 검증자를 만들거나 앞서 만든 검증자에게 일을 맡긴 흔적(입력이 있는 하위 에이전트 생성 호출이나 위 실행기 실행)이 있는가.
   Codex 의 exec 기록에는 생성 호출이 남지 않으므로, run.sh 가 남긴 원본 기록(<이름>.rollout.jsonl)의 spawn_agent 호출을 본다.
   Codex 의 수신자 없는 wait 나 Claude 의 입력 없는 호출은 흔적으로 치지 않는다. 검증자에게 넘긴 내용은 Codex 원본에서 암호화되어 볼 수 없다.
@@ -81,14 +82,16 @@ def edits(path, names):
 
 
 def verify_run(path):
-    """마지막 실행기 실행의 (상태, 사유, 실행기의 completion). 위 verify_run 설명의 값을 돌려준다."""
+    """마지막 실행기의 상태·사유·완료·완료 근거. 판정을 모르면 이전 근거도 버린다."""
     state, reason, done = "none", "", ""
+    inputs = None
     for c in commands(path):
         if not re.search(EXECUTOR, c["command"]):
             continue
         result, doubt = run_result(c["output"], c["exit_code"])
         if result and not doubt:
             state, reason, done = result["state"], str(result.get("reason") or ""), str(result.get("completion") or "")
+            inputs = {key: result.get(key) for key in ("open_decisions", "unconfirmed")}
         elif result:
             state, reason, done = "unknown", doubt, ""
         elif c["output"] is None and c["exit_code"] is None:
@@ -102,7 +105,9 @@ def verify_run(path):
             # 결과 없이 0 으로 끝난 출력(끊긴 JSON, 스크립트 읽기 등)은 실행인지 읽기인지 출력만으로 가를 수 없다.
             # 앞선 실행이 있으면 마지막 후보의 판정을 모르는 것이므로 그 결과를 이어 쓰지 않는다(앞선 실행이 없으면 실행 증거 없음 none 그대로).
             state, reason, done = "unknown", "마지막 실행기 명령이 판정 결과를 내지 않아 앞선 실행의 판정을 이어 쓰지 않는다", ""
-    return state, reason, done
+        if state not in ("ok", "returned", "incomplete", "unverified"):
+            inputs = None
+    return state, reason, done, inputs
 
 
 def subagent_observed(path):
@@ -164,7 +169,7 @@ def observe(log, names):
     claimed = bool(re.search(CLAIM, final, re.I))
     spawned = rollout_spawned_in_last_turn(log)
     subagent = subagent_observed(last) or bool(spawned)
-    run, run_reason, run_completion = verify_run(last)
+    run, run_reason, run_completion, run_inputs = verify_run(last)
     observed = subagent or run != "none"
     codex = codex_log(last)
     record = "observed" if observed else ("no-record" if codex and spawned is None else "none")
@@ -178,6 +183,7 @@ def observe(log, names):
         "verify_run": run,
         "verify_run_reason": run_reason,
         "verify_run_completion": run_completion,
+        "verify_run_inputs": run_inputs,
         "verifier_observed": observed,
         "verifier_record": record,
         "independent_claim_unverified": claimed and (record == "none" or run_failed),

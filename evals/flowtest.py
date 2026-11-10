@@ -96,6 +96,18 @@ exit 0
     prep = lambda *a: json.loads(sh(sys.executable, "-I", str(verifier), "prepare", *a, cwd=proj, env=base_env).stdout.strip().splitlines()[-1])
     fin = lambda kept, ans, *extra: sh(sys.executable, "-I", str(verifier), "finish", "--round", kept, *extra, cwd=proj, env=base_env, input=ans)
 
+    # 검토에 실제 사용한 원문은 work/ 아래에 있어도 현재성 확인 대상이다.
+    source = proj / "work/request.txt"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(REQ)
+    (proj / "ui.txt").write_text("button=로그인하기\nbutton_en=Login\n")
+    pending = prep("--request", str(source))
+    source.write_text("로그인 버튼 글자를 '시작하기'로 바꿔 주세요")
+    changed = json.loads(fin(pending["kept"], json.dumps(OK, ensure_ascii=False), "--check", "PASS").stdout.strip().splitlines()[-1])
+    check("work/ 원문이 검토 중 바뀌면 이전 판정은 현재 완료가 아니다",
+          changed.get("state") == "unverified" and changed.get("target_state") == "ok" and changed.get("completion") != "verified")
+    (proj / "ui.txt").write_text("button=로그인\nbutton_en=Login\n")
+
     # 4) 지도(요청 원문 포함) → 구현 → 검토. 작업 전 사용자 변경은 커밋해 두었으므로(기준 커밋 HEAD) diff 에 섞이지 않는다
     (proj / "notes.txt").write_text("사용자 메모(작업 전 변경)\n"); sh(*G, "commit", "-qam", "user", cwd=proj)
     mp = write_map("login", CRIT, "SELF-ASSESS-MARKER 전부 충족")
@@ -293,6 +305,116 @@ exit 0
     check("--log 방식도 같은 보장: 기존 .round 내용 보존, 실행마다 다른 새 폴더",
           (t / "ev" / "x.verify1.round" / "old.txt").read_text() == "앞 실행\n" and len({o.get("kept") for o in outs}) == 2
           and all(Path(o.get("kept", "/x")).is_dir() and Path(o["kept"]).parent == t / "ev" / "x.verify1.round" for o in outs))
+
+    # 두 입력 방식 회귀: 지도 `## 기준` 의 요청 원문 인용, --request 파일, 둘 다.
+    (proj / "ui.txt").write_text("button=로그인하기\nbutton_en=Login\nextra=changed\n")
+    quoted_only = write_map("quoted-only", CRIT)
+    rd = prep("--map", quoted_only)
+    qp = Path(rd.get("prompt_file", "/nonexistent")).read_text() if rd.get("prompt_file") else ""
+    check("지도 인용만으로 준비: 원문 인용이 검토 입력에 '옮겨 둔 요청 원문'으로 들어간다",
+          rd.get("state") == "ready" and "REQ-MARKER" in qp and "작업 지도 `## 기준` 에 옮겨 둔 요청 원문" in qp)
+    path = proj / quoted_only
+    path.write_text(path.read_text().replace("REQ-MARKER", "REQ-CHANGED"))
+    got = json.loads(fin(rd["kept"], json.dumps(OK), "--check", "PASS").stdout.strip().splitlines()[-1])
+    check("지도에 옮긴 요청 원문이 검토 중 바뀌면 미확인", got.get("state") == "unverified" and got.get("target_state") == "ok")
+    both = write_map("quoted-and-file", CRIT)
+    rd = prep("--map", both, "--request", req_file(REQ + " FOLLOWUP-MARKER"))
+    bp = Path(rd["prompt_file"]).read_text()
+    check("지도 인용과 --request 를 함께 주면 둘 다 원문으로 넘어간다", "REQ-MARKER" in bp and "FOLLOWUP-MARKER" in bp)
+    check("지도 자체를 --request 로 주면 원문으로 받지 않는다",
+          sh(sys.executable, "-I", str(verifier), "prepare", "--map", both, "--request", str(proj / both), cwd=proj, env=base_env).returncode != 0)
+
+    # 완료한 회차를 다시 읽는 명령도 현재 결과로 오인하게 해서는 안 된다.
+    current_source = req_file(REQ + " replay")
+    replay = prep("--request", current_source)
+    fin(replay["kept"], json.dumps(OK, ensure_ascii=False), "--check", "PASS")
+    saved = Path(replay["kept"], "result.json").read_bytes()
+    unchanged = json.loads(fin(replay["kept"], json.dumps(RET), "--check", "FAIL").stdout.strip().splitlines()[-1])
+    check("완료 회차 재조회는 원래 완료와 직접 검사 결과를 그대로 보존",
+          unchanged.get("completion") == "verified" and unchanged.get("direct_check") == "PASS"
+          and Path(replay["kept"], "result.json").read_bytes() == saved)
+    Path(current_source).write_text("요청이 바뀌었습니다")
+    stale = json.loads(fin(replay["kept"], json.dumps(OK), "--check", "PASS").stdout.strip().splitlines()[-1])
+    check("완료 회차 재조회는 원문 변경을 미확인으로 알리고 과거 기록은 보존",
+          stale.get("state") == "unverified" and stale.get("completion") != "verified"
+          and Path(replay["kept"], "result.json").read_bytes() == saved)
+
+    for role in ("plan", "conditions", "criteria", "output"):
+        evidence = req_file("B1 INPUT-BEFORE")  # 저장소 밖 파일도 실제 입력이면 같은 보장
+        args = ("--request", req_file(REQ + role), "--" + role, evidence)
+        rd = prep(*args)
+        Path(evidence).write_text("B1 INPUT-AFTER")
+        got = json.loads(fin(rd["kept"], json.dumps(OK), "--check", "PASS").stdout.strip().splitlines()[-1])
+        check(f"별도 {role} 입력 변경은 이전 검토를 현재 완료로 만들지 않는다",
+              got.get("state") == "unverified" and got.get("target_state") == "ok")
+
+    for section in ("설계", "맥락", "증거"):
+        definition = write_map("change-" + section, CRIT)
+        path = proj / definition
+        path.write_text(f"# 정의\n## 기준\n{CRIT}\n## 설계\nDESIGN-BEFORE\n## 맥락\nCONTEXT-BEFORE\n## 증거\nEVIDENCE-BEFORE\n")
+        rd = prep("--map", definition)
+        prompt = Path(rd["prompt_file"]).read_text()
+        before = {"설계": "DESIGN", "맥락": "CONTEXT", "증거": "EVIDENCE"}[section]
+        path.write_text(path.read_text().replace(before + "-BEFORE", before + "-AFTER"))
+        got = json.loads(fin(rd["kept"], json.dumps(OK), "--check", "PASS").stdout.strip().splitlines()[-1])
+        check(f"지도 {section} 변경은 " + ("검토 입력(맥락)이라 현재 검토를 무효화" if section == "맥락" else "검토자에게 넘기지 않은 절이라 판정을 유지"),
+              got.get("state") == ("unverified" if section == "맥락" else "ok")
+              and "CONTEXT-BEFORE" in prompt and "DESIGN-BEFORE" not in prompt and "EVIDENCE-BEFORE" not in prompt)
+
+    # 검토 후 보고서를 바꾼 경우, 한도에서 예전 OK를 재사용하지 않는다.
+    output = req_file("보고: 직접 확인")
+    reuse_args = ("--request", req_file(REQ + " reuse"), "--output", output, "--rounds", "1")
+    rd = prep(*reuse_args)
+    fin(rd["kept"], json.dumps(OK), "--check", "PASS")
+    check("한도에서 입력이 같으면 검토 OK만 재사용하고 직접 검사 PASS는 추정하지 않는다",
+          (reused := prep(*reuse_args)).get("state") == "ok" and reused.get("completion") == "unverified")
+    Path(output).write_text("다른 보고서")
+    check("한도에서 산출물이 달라지면 이전 OK를 재사용하지 않는다", prep(*reuse_args).get("state") == "incomplete")
+
+    # 비교 기준 폴더도 검토 입력이다. 같은 경로라도 내용이 바뀌면 다른 diff다.
+    mutable_base = t / "mutable-base"; mutable_base.mkdir()
+    (mutable_base / "ui.txt").write_text("button=기준 이전\n")
+    base_args = ("--request", req_file(REQ + " baseline"), "--base-dir", str(mutable_base), "--rounds", "1")
+    rd = prep(*base_args)
+    fin(rd["kept"], json.dumps(OK), "--check", "PASS")
+    (mutable_base / "ui.txt").write_text("button=바뀐 기준\n")
+    check("한도에서 비교 기준 폴더 내용이 바뀌면 이전 OK를 재사용하지 않는다",
+          prep(*base_args).get("state") == "incomplete")
+    for mutation in ("change", "delete"):
+        baseline = t / ("base-" + mutation); baseline.mkdir()
+        (baseline / "ui.txt").write_text("button=기준 이전\n")
+        args = ("--request", req_file(REQ + " base " + mutation), "--base-dir", str(baseline))
+        rd = prep(*args)
+        if mutation == "change":
+            (baseline / "ui.txt").write_text("button=기준 변경\n")
+        else:
+            shutil.rmtree(baseline)
+        got = json.loads(fin(rd["kept"], json.dumps(OK), "--check", "PASS").stdout.strip().splitlines()[-1])
+        check(f"검토 중 기준 폴더 {mutation}는 미확인",
+              got.get("state") == "unverified" and got.get("completion") == "unverified")
+        if mutation == "delete":
+            check("사라진 기준 폴더로 새 검토를 준비하면 미확인", prep(*args).get("state") == "unverified")
+
+    # 구 pending은 현재성 근거가 없으므로 통과로 변환하지 않는다.
+    rd = prep("--request", req_file(REQ + " legacy"))
+    pending_path = Path(rd["kept"], "pending.json")
+    old = json.loads(pending_path.read_text()); old.pop("inputs")
+    pending_path.write_text(json.dumps(old))
+    got = json.loads(fin(rd["kept"], json.dumps(OK), "--check", "PASS").stdout.strip().splitlines()[-1])
+    check("입력 지문 없는 구 회차는 미확인", got.get("state") == "unverified")
+
+    request = req_file(REQ + " deleted")
+    rd = prep("--request", request)
+    Path(request).unlink()
+    got = json.loads(fin(rd["kept"], json.dumps(OK), "--check", "PASS").stdout.strip().splitlines()[-1])
+    check("검토 중 원문 삭제도 미확인", got.get("state") == "unverified")
+
+    # 평가 경로에서 발견한 지도 목록 자체도 근거다. 새 지도가 생겨도 예전 것으로 닫지 않는다.
+    fixed = req_file("| B1 | 로그인하기 |")
+    rd = prep("--request", req_file(REQ + " maps"), "--criteria", fixed)
+    write_map("new-after-prepare", CRIT)
+    got = json.loads(fin(rd["kept"], json.dumps(OK), "--check", "PASS").stdout.strip().splitlines()[-1])
+    check("평가 입력 수집 뒤 지도가 추가되면 현재 검토는 미확인", got.get("state") == "unverified")
 
 print(f"{ok} passed, {failed} failed")
 sys.exit(1 if failed else 0)

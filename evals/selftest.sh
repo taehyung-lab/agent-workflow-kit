@@ -232,8 +232,9 @@ with tempfile.TemporaryDirectory() as d:
                     if output is not None:
                         events.append({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": str(i), "content": (f"Exit code {code}\n" if code else "") + output, "is_error": bool(code)}]}})
             path = Path(d) / "t.jsonl"; path.write_text("\n".join(map(json.dumps, events)))
-            state, _, completion = verify_run(path)
+            state, _, completion, inputs = verify_run(path)
             want = (state == "ok" and completion == ("waiting-user" if name == "waiting" else "verified")) if name in ("waiting", "current-ok") else (state != "ok" and completion != "verified")
+            want = want and (inputs == {"open_decisions": None, "unconfirmed": None} if state == "ok" else inputs is None)
             if not want:
                 bad.append(f"{harness}/{name}: {state}/{completion}")
 print("\n".join(bad)); sys.exit(1 if bad else 0)
@@ -337,6 +338,9 @@ EVALS_VERIFY=1 EVALS_RESULTS=$d/r PATH="$vf/bin:$PATH" bash "$here/run.sh" weigh
 [ "$(mget verifier)" = unverified ] && [ "$(mget verifier_exit_code)" = 9 ] && ok "검증(Codex): 검증자 종료 코드 9 가 정리 뒤에도 보존" || ng "Codex 검증 종료 코드: $(mget verifier) vrc=$(mget verifier_exit_code)"
 grep -q '"judge_version": "[0-9a-f]\{12\}"' "$meta" && grep -q '"stage": "original-input"' "$meta" && ok "meta 에 판정기 지문·단계가 남음" || ng "meta 판정기 지문·단계"
 rm -rf "${vf:?}"
+# 평가 결과의 저장·재판정: 미정·미확인과 구기록의 근거 부족을 보존한다.
+python3 -I "$here/resulttest.py" > "${TMPDIR:-/tmp}/resulttest.$$" 2>&1 && ok "평가 결과 저장·재판정 계약" || { ng "평가 결과 저장·재판정 계약"; cat "${TMPDIR:-/tmp}/resulttest.$$"; }
+rm -f "${TMPDIR:-/tmp}/resulttest.$$"
 # 일반 설치 흐름(모델 없음): 실제 install.sh 설치본의 독립 검토 실행기를 가짜 하네스로 호출(반환·교정·재검토·한도·미확인·입력 부족)
 python3 -I "$here/flowtest.py" > "${TMPDIR:-/tmp}/flowtest.$$" 2>&1 && ok "일반 설치 흐름 시험 $(tail -1 "${TMPDIR:-/tmp}/flowtest.$$")" || { ng "일반 설치 흐름 시험"; grep -v '^ok' "${TMPDIR:-/tmp}/flowtest.$$"; }
 rm -f "${TMPDIR:-/tmp}/flowtest.$$"

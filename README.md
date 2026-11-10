@@ -244,7 +244,7 @@ flowchart LR
 ## 5분 시작
 
 ```bash
-git clone --branch v3.4.1 https://github.com/taehyung-lab/agent-workflow-kit
+git clone --branch v3.4.2 https://github.com/taehyung-lab/agent-workflow-kit
 bash agent-workflow-kit/install.sh /path/to/my-project
 ```
 
@@ -329,6 +329,8 @@ AGENTS.md의 네 항목에는 저장소가 관리하는 근거의 위치와 한 
 키트가 관리하는 부분에 로컬 변경이 있으면 이미 같은 버전이어도 아무것도 쓰지 않고 그 경로를 알린다. 그 변경은 프로젝트 절·역할 스킬로 옮기거나 키트에 반영한 뒤 다시 실행한다. 키트가 쓰는 경로의 부모가 심링크이거나 폴더가 아니면 설치와 같이 쓰기 전에 거절한다.
 교체 결과를 diff로 검토하고, 아래 도입 확인 중 바뀐 것에 맞는 확인을 거친 뒤 반영한다. 확인을 마치지 못하면 남은 확인을 함께 남긴다.
 
+**v3.4.1 → v3.4.2.** AGENTS.md·guide.md·훅은 그대로다. 검토 도구(`verify.py`)가 `prepare` 에서 읽은 근거(원문·계획·조건·산출물 파일, 지도 `## 기준`·`## 맥락`, 비교 기준 폴더)를 한 기록으로 남기고 `finish`·끝난 회차 재조회·한도 뒤 재사용 때 현재와 대조한다. 전에는 제품 파일과 지도 `## 기준` 만 대조해, 예를 들어 `work/` 안 원문 파일을 검토 중에 바꿔도 이전 판정이 `ok`·`verified` 로 남았다. 근거 기록이 없는 옛 회차는 현재 결과로 인정하지 않고 `unverified` 로 낸다. 지도 `## 기준` 의 요청 원문 인용과 `--request` 두 입력 방식은 그대로 받는다. 저장소 안의 평가 도구는 재판정이 미정·미확인 근거를 잃어 답 대기를 완료로 바꾸던 문제를 고쳤다(`evals/result.py`).
+
 **v3.4.0 → v3.4.1.** 문서만 바뀐다(README 소개·docs/direction.md 의 목적과 v3.4 실측, evals/goalflow/criteria.md 의 Q3 판정 정정). 설치되는 파일은 v3.4.0 과 같다.
 
 **v3.3 → v3.4.** AGENTS.md 기본 2 가 바뀐다: 이번 작업에 사용자 결정이 남아 있으면 조사·재현까지만 하고 제품 파일은 답 뒤에 고친다(무관해 보이는 부분도 먼저 구현하지 않는다). 질문에는 근거가 정한 것과 남은 선택을 함께 보이고 독립 질문만 묶는다. guide.md 「질문」의 한 문장이 같은 뜻으로 바뀐다. 훅·설정 파일·`verify.py`·`context.py` 는 바뀌지 않으므로 Codex 훅 신뢰 확인은 다시 나오지 않는다.
@@ -336,7 +338,7 @@ AGENTS.md의 네 항목에는 저장소가 관리하는 근거의 위치와 한 
 **v3.2 → v3.3.** AGENTS.md 는 그대로다. guide.md 「작업 지도」의 `## 기준` 이 요구 기록 표(`ID | 요구 | 출처·위치 | 의존 | 확인 방법 | 상태`: 확정·미정·미확인)로 바뀌고, 「독립 검토」 3단계가 `verify.py finish --round <kept> --check <직접 검사 결과 PASS|FAIL|REVIEW>` 로 바뀐다. 전체 완료(`completion`)는 검토 OK·직접 검사 PASS·미정·미확인 행 없음이 모두 맞을 때만 `verified` 다: `--check` 를 주지 않으면 통과로 가정하지 않고 `unverified`, 직접 검사 REVIEW 는 `needs-review`(전에는 `verified`), 미정 행이 남으면 `waiting-user`. 표의 형식 문제는 검토자 없이 `returned` 로 돌아온다. 표가 없는 기존 지도는 그대로 동작한다(형식 검사를 건너뛴다). 훅·설정 파일은 바뀌지 않는다.
 
 ```bash
-git -C /path/to/agent-workflow-kit fetch --tags && git -C /path/to/agent-workflow-kit checkout v3.4.1
+git -C /path/to/agent-workflow-kit fetch --tags && git -C /path/to/agent-workflow-kit checkout v3.4.2
 bash /path/to/agent-workflow-kit/install.sh --update /path/to/target-repository
 ```
 

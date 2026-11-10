@@ -15,7 +15,7 @@ from pathlib import Path
 EVALS = Path(__file__).resolve().parent
 KIT = EVALS.parent
 # 모든 사례의 check.py 가 기대는 공용 판정 코드. 판정에 쓰는 파일을 새로 만들면 여기에 넣는다.
-JUDGE_FILES = ("evals/judge.py", "evals/observe.py", "evals/transcript.py", "evals/verdict.py",
+JUDGE_FILES = ("evals/judge.py", "evals/observe.py", "evals/transcript.py", "evals/verdict.py", "evals/result.py",
                "evals/fixtures/login_app.py", ".agents/skills/wf-verify/verify.py")
 
 
