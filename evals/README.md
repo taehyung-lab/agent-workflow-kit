@@ -106,7 +106,7 @@ GitHub CI 가 매 push 마다 `selftest.sh` 를 돌린다. 판정 검사를 고�
 | `EVALS_CODEX_NETWORK=1` | Codex 작업 공간에 네트워크를 허용한다 |
 | `EVALS_CLAUDE_SETTINGS=<JSON>` | 설치 뒤 프로젝트 `.claude/settings.json` 에 합친다(`enabledPlugins` 는 항목 단위). 실제 사용 조합 재현: `evals/profiles/real-plugins.json`(superpowers 를 프로젝트에서 끔, 사용자 설정의 compound-engineering 등은 그대로). 켜진 플러그인 목록 지문은 meta 의 `global_instructions.plugins`, 합친 내용은 `claude_project_settings` |
 
-v3.2 부터 설치기가 세션 시작 정보 훅을 두므로 두 하네스 모두 그 훅이 돈다. Codex 는 프로젝트를 신뢰해야 프로젝트 훅을 읽으므로, 실행기가 정보 훅(wf-context)이 있는 커밋에서만 임시 홈의 `config.toml` 에 그 프로젝트의 `trust_level = "trusted"` 를 더하고(meta 의 `codex_project_trusted`), 훅 신뢰는 `--dangerously-bypass-hook-trust` 로 대신한다. 사용자 전역 설정은 바꾸지 않는다.
+v3.2~v3.4 는 설치기가 두 하네스에 세션 시작 정보 훅을 두었고, v3.5 부터는 Claude 에만 둔다(Codex 에는 키트 훅이 없어 아래 신뢰 재현도 하지 않는다). Codex 는 프로젝트를 신뢰해야 프로젝트 훅을 읽으므로, 실행기가 정보 훅(wf-context)이 있는 커밋에서만 임시 홈의 `config.toml` 에 그 프로젝트의 `trust_level = "trusted"` 를 더하고(meta 의 `codex_project_trusted`), 훅 신뢰는 `--dangerously-bypass-hook-trust` 로 대신한다. 사용자 전역 설정은 바꾸지 않는다.
 
 `claude`·`codex` CLI 가 설치·로그인되어 있어야 하고, 실제 모델 세션을 임시 폴더에서 권한 확인 없이 실행한다. 사용자 전역 설정은 건드리지 않는다.
 
