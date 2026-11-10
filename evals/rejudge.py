@@ -2,8 +2,8 @@
 
 실행 결과 폴더의 원시 기록(.jsonl), 끝난 프로젝트(.files), 마지막 턴 직전 상태(.before-last)를 그대로 쓴다.
 하네스가 실패한 실행은 다시 판정하지 않는다. 바뀐 판정은 화면에 보여 주고, 이전 판정·이전 전체 완료(completion)는 meta 의
-rejudge_history 에 남기며 쓴 검사 파일의 지문(check_sha)을 함께 기록한다. 전체 완료는 최초 실행과 같은 규칙(verdict.completion)으로
-그때의 검증 상태(verifier)·관문 대기(gate_waiting)와 새 판정에서 다시 계산한다(검증자 OK 여도 새 판정이 FAIL 이면 check-failed).
+rejudge_history 에 남기며 쓴 검사 파일의 지문(check_sha)을 함께 기록한다. 전체 완료는 최초 실행이 보존한 completion_inputs와
+새 직접 검사 결과로 계산한다. 예전 기록에 입력이 없으면 없는 미정·미확인을 False로 추정하지 않고 근거 부족을 표시한다.
 
 사용: python3 -I evals/rejudge.py evals/results/<폴더> [...]
 """
@@ -11,7 +11,7 @@ import json, os, subprocess, sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from verdict import completion
+from result import check_verdict, rejudge_result
 from caseinfo import MissingJudgeFile, case_path, judge_version as judge_fingerprint  # 실행기(run.sh)와 같은 사례 위치·지문
 
 failed = []
@@ -42,7 +42,7 @@ for root in sys.argv[1:]:
         r = subprocess.run([sys.executable, "-I", str(case_path(m["case"]) / "check.py"), base + ".files", base + ".jsonl"],
                            capture_output=True, text=True, env=env)
         out = (r.stdout + r.stderr).strip()
-        old = "PASS" if m["check_passed"] else ("REVIEW" if m.get("check_needs_review") else ("UNVERIFIED" if m.get("check_unverified") else "FAIL"))
+        old = check_verdict(m)
         new = {0: "PASS", 2: "REVIEW", 1: "FAIL"}.get(r.returncode, "UNVERIFIED")
         if not out.startswith(new):  # 판정 검사 자체의 오류(예외 등)는 실패가 아니라 미확인이다
             new = "UNVERIFIED"
@@ -51,12 +51,11 @@ for root in sys.argv[1:]:
         import hashlib
         check_hash = hashlib.sha256((case_path(m["case"]) / "check.py").read_bytes()).hexdigest()[:12]
         # 원시 기록(.jsonl·.files)은 바꾸지 않는다. 이전 판정과 그때의 판정기 지문을 이력으로 남기고 새 지문을 기록한다.
-        m.setdefault("rejudge_history", []).append({"verdict": old, "check_output": m.get("check_output", ""), "completion": m.get("completion"),
-                                                    "judge_version": m.get("judge_version"), "check_sha": m.get("check_sha")})
-        if "verifier" in m:  # 검증 루프가 있던 실행만 완료를 다시 계산한다(예전 결과에는 검증 상태가 없다)
-            m["completion"] = completion(m.get("review_state", m["verifier"]), new, m.get("gate_waiting", False), m.get("review_required", False))  # 예전 결과에는 대기 기록이 없다(대기로 세지 않음)
-        m.update(check_passed=new == "PASS", check_needs_review=new == "REVIEW", check_unverified=new == "UNVERIFIED", check_output=out, rejudged=True, check_sha=check_hash,
-                 judge_version=judge_version)
+        previous_completion = m.get("completion")
+        m = rejudge_result(m, new, out, judge_version, check_hash)
+        if previous_completion != m["completion"]:
+            reason = " (완료 근거 부족)" if m["completion_inputs_missing"] else ""
+            print(f"{Path(base).name}: completion {previous_completion} -> {m['completion']}{reason}")
         meta_path.write_text(json.dumps(m, ensure_ascii=False, indent=1), encoding="utf-8")
 if failed:
     sys.exit(1)

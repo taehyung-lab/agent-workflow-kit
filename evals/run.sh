@@ -258,40 +258,7 @@ try:
 except OSError:
     pass
 print(n)' "$out.hook.log" "$sent") \
-  python3 -I -c '
-import json, os, sys
-e = os.environ
-sys.path.insert(0, e["E_HERE"])
-from verdict import completion
-def review_state(e):
-    if e["E_VSTATE"] != "off":
-        return e["E_VSTATE"]
-    run = json.loads(e["E_OBS"] or "{}").get("verify_run", "none")
-    return run if run in ("ok", "returned", "incomplete", "unverified") else "off"
-json.dump({"case": e["E_CASE"], "kit_ref": e["E_REF"], "kit_commit": e["E_COMMIT"], "harness": e["E_HARNESS"],
-  "run": int(e["E_RUN"]), "harness_version": e["E_VERSION"], "exit_code": int(e["E_RC"]), "seconds": int(e["E_SEC"]),
-  "agents_md_bytes": int(e["E_BYTES"]), "check_passed": e["E_CHECK_RC"] == "0", "check_needs_review": e["E_CHECK_RC"] == "2", "check_unverified": e["E_CHECK_RC"] == "3", "approval_gate": e["E_GATE"] == "true", "input": e["E_INPUT"], "user_turns": int(e["E_TURNS"]), "planned_turns": int(e["E_PLANNED"]), "unapproved_turns": int(e["E_WAIT"] or 0), "check_output": e["E_VERDICT"], "observed": json.loads(e["E_OBS"] or "{}"), "verifier": e["E_VSTATE"], "verify_reason": e["E_VREASON"], "verify_rounds": int(e["E_VROUNDS"]),
-  "verifier_exit_code": int(e["E_VRC"]) if e["E_VRC"] else None, "out_of_scope": json.loads(e["E_VJSON"] or "{}").get("out_of_scope", []),
-  "verifier_conditions": json.loads(e["E_VJSON"] or "{}").get("conditions", []), "lang": e["E_LANG"] or None, "judge_version": e["E_JUDGE"],
-  # 단계 판정(사례 check.py)과 전체 완료(독립 검증으로 닫힘)를 따로 센다. 승인 대기 단계의 통과는 구현 완료가 아니다.
-  "stage": "after-approval" if e["E_INPUT"] == "with-approval" else "original-input",
-  # 검증자가 OK 여도 사례의 결정적 행동 검사(check.py)가 실패·미확인이면 완료로 세지 않는다(검증자가 놓친 것으로 따로 남긴다).
-  # 판정 규칙은 verdict.completion 하나다(rejudge.py 도 같은 함수로 다시 계산한다).
-  # 사용자 답 대기(gate_waiting)는 구현 실패·검증 실패·미확인과 따로 센다(완료가 아니다).
-  # 독립 검토 상태: 실행기가 띄운 검토(EVALS_VERIFY)가 있으면 그것, 없으면 구현자가 스스로 돌린 검토(verify.py finish)의 결과.
-  # 독립 검토가 필수인 사례(review-required 파일)에서 검토가 없으면 review-missing 이다(필요 없어 0회인 것과 구별).
-  "review_state": review_state(e),
-  "review_required": e["E_REQUIRED"] == "true",
-  # 실행기 검토의 요구 기록 미정(사용자 답 대기)·미확인 행도 같은 규칙으로 완료를 막는다.
-  "completion": completion(review_state(e), {"0": "PASS", "1": "FAIL", "2": "REVIEW"}.get(e["E_CHECK_RC"], "UNVERIFIED"),
-                           e["E_WAITING"] == "true" or bool(json.loads(e["E_VJSON"] or "{}").get("open_decisions")),
-                           e["E_REQUIRED"] == "true", unresolved=bool(json.loads(e["E_VJSON"] or "{}").get("unconfirmed"))),
-  "gate_waiting": e["E_WAITING"] == "true", "verifier_tool": e["E_VTOOL"] or None,
-  "codex_project_trusted": e["E_CTRUST"] == "true",
-  "baseline_changed_after_approval": e["E_BCHANGED"] == "true",
-  "global_instructions": {"~/.claude/CLAUDE.md": e["E_G1"], "~/.agents/USER.md": e["E_G2"], "~/.codex/AGENTS.md": e["E_G3"], "global skills": e["E_G4"], "plugins": e["E_G5"]},
-  "claude_project_settings": e.get("E_CSET") or None},
-  open(sys.argv[1], "w"), ensure_ascii=False, indent=1)' "$out.meta.json"
+  python3 -I "$here/result.py" "$out.meta.json"
   shown=FAIL; [ "$check_rc" -ne 0 ] || shown=PASS; [ "$check_rc" -ne 2 ] || shown=REVIEW; [ "$check_rc" -ne 3 ] || shown=UNVERIFIED
   printf '%s exit=%s check=%s %s\n' "$name" "$rc" "$shown" "$(printf '%s' "$verdict" | head -1)"
   # 판정 검사를 고친 뒤 다시 판정할 수 있게, 끝난 프로젝트의 작업 파일(설치된 키트·git 제외)을 남긴다.

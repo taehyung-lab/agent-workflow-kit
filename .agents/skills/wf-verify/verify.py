@@ -14,6 +14,7 @@ prepare 가 넘기는 것(구현자가 고르지 않는다): 요청 원문(작�
 기준 커밋(--base, 기본 HEAD)부터의 변경(diff)과 판정 대상 고정 복사본, --output 으로 준 산출물. 구현자의 자기평가·`## 증거` 는 근거로 넘기지 않는다.
 --output 으로 준 완료 보고·실행 기록은 근거가 아니라 판정 대상이다(보고한 주장이 실행 기록·현재 동작과 맞는가).
 요청 원문을 확보하지 못하거나 지도의 기준이 비었거나, 바뀐 파일도 산출물도 없으면 입력 부족(미확인)이다. 요약한 계획으로 대신하지 않는다.
+prepare 가 읽은 원문·계획·조건·산출물 파일, 지도의 `## 기준`·`## 맥락`, 비교 기준 폴더는 검토 중 변경과 판정 재사용 때 대조한다(work/ 안 파일 포함). 맥락 도구의 관찰은 정보이며 자동 현재성 판정 대상은 아니다.
 회차 증거는 지도 옆 verify/ 또는 work/review/ 에 남고 지우거나 덮지 않는다.
 
 판정(state)과 종료 코드:
@@ -229,7 +230,7 @@ def final_answer(path):
 def run_result(output, exit_code=None):
     """명령 출력에서 이 실행기가 찍는 결과를 찾는다. 실행기의 출력은 표준 오류의 `[verify] ` 줄과, 맨 끝 한 줄의 결과 JSON
     (state 가 판정 상태이고 completion 이 있음, main·cli 의 마지막 print)뿐이고, 종료 코드는 그 state 의 EXIT 값이다.
-    저장된 result.json 은 completion 이 없어 결과가 아니다.
+    저장된 result.json도 같은 형식이므로, 실제 명령 실행인지의 구분은 호출 기록을 가진 평가 관찰이 맡는다.
     돌려줌: (결과 객체 또는 None, 이번 실행의 결과로 볼 수 없는 사유 또는 ""). 다른 글이 섞였거나(예: 스크립트와 저장해 둔 출력을 함께 cat)
     종료 코드가 결과의 state 와 맞지 않으면 그 결과를 이번 실행의 판정으로 쓰지 않는다. 평가 관찰(evals/observe.py)이 이 함수를 쓴다."""
     lines = [l for l in str(output or "").splitlines() if l.strip()]
@@ -261,15 +262,99 @@ def context_text(text):
     return m.group(1).strip() if m else ""
 
 
-def envelopes(project, map_rel=None):
-    """맥락 봉투: 지도를 주면 그 지도의 `## 맥락`, 아니면 work/*/work.md 전부의 `## 맥락`(평가 실행기)."""
-    files = [Path(project, map_rel)] if map_rel else sorted(Path(project).glob("work/*/work.md"))
-    parts = []
-    for f in files:
-        body = context_text(f.read_text(encoding="utf-8", errors="replace")) if f.is_file() else ""
-        if body:
-            parts.append(f"### {f.relative_to(project) if f.is_absolute() else f}\n{body}")
-    return "\n\n".join(parts)
+class ReviewInputs:
+    """제공된 근거 입력의 읽기와 현재성 확인을 함께 소유한다. 위치가 아니라 역할로 고정한다."""
+    VERSION = 2
+
+    def __init__(self, root, map_rel=None, all_maps=False):
+        self.root = Path(root)
+        self.cache = {}
+        self.snapshot = {"version": self.VERSION, "contract": hashlib.sha256(VERIFIER_PROMPT.encode()).hexdigest(),
+                         "files": [], "all_maps": all_maps, "base_dir": None}
+        paths = [str(self.root / map_rel)] if map_rel else self.map_paths(self.root) if all_maps else []
+        self.snapshot["maps"] = paths
+        self.maps = {os.path.relpath(p, self.root): self.read(p, "map", definition=True) for p in paths}
+
+    @staticmethod
+    def map_paths(root):
+        return [str(p) for p in sorted(Path(root).glob("work/*/work.md")) if p.is_file()]
+
+    @staticmethod
+    def definition(text):
+        """검토자에게 넘기는 지도 부분(`## 기준`·`## 맥락`)만. 설계·증거 절은 넘기지 않으므로 현재성 대조에도 넣지 않는다."""
+        return "\n\n".join(f"## {name}\n{body}" for name, body in (("기준", criteria_text(text)), ("맥락", context_text(text))) if body)
+
+    def read(self, path, role, definition=False):
+        path = os.path.abspath(path)
+        if path not in self.cache:
+            self.cache[path] = Path(path).read_text(encoding="utf-8")
+        text = self.definition(self.cache[path]) if definition else self.cache[path]
+        self.snapshot["files"].append({"path": path, "role": role, "definition": definition,
+                                       "sha256": hashlib.sha256(text.encode()).hexdigest()})
+        return text
+
+    @staticmethod
+    def directory_hash(path):
+        """copytree가 복사하는 파일·실행 비트·링크·경로 집합을 읽는다. 없거나 읽을 수 없으면 실패한다."""
+        root = Path(path)
+        if not root.is_dir():
+            raise OSError(f"기준 폴더를 읽을 수 없다: {root}")
+        h = hashlib.sha256()
+
+        def visit(folder):
+            for p in sorted(folder.iterdir()):
+                name = p.relative_to(root).as_posix()
+                if p.is_symlink():
+                    entry = [name, "link", os.readlink(p)]
+                elif p.is_dir():
+                    entry = [name, "directory"]
+                elif p.is_file():
+                    entry = [name, "file", p.stat().st_mode & 0o111, hashlib.sha256(p.read_bytes()).hexdigest()]
+                else:
+                    raise OSError(f"기준 폴더의 항목을 읽을 수 없다: {p}")
+                h.update(json.dumps(entry, ensure_ascii=False).encode() + b"\n")
+                if p.is_dir() and not p.is_symlink():
+                    visit(p)
+
+        visit(root)
+        return h.hexdigest()
+
+    def capture_base(self, path):
+        path = os.path.abspath(path)
+        self.snapshot["base_dir"] = {"path": path, "sha256": self.directory_hash(path)}
+
+    def copy_base(self, destination):
+        base = self.snapshot["base_dir"]
+        shutil.copytree(base["path"], destination, symlinks=True)
+        if self.directory_hash(destination) != base["sha256"]:
+            raise OSError("기준 폴더가 복사 중 바뀌었다. 현재 입력으로 다시 준비한다")
+
+    def criteria(self):
+        return "\n\n".join(f"### {p}\n{body}" for p, text in self.maps.items() if (body := criteria_text(text)))
+
+    def envelope(self):
+        return "\n\n".join(f"### {p}\n{body}" for p, text in self.maps.items() if (body := context_text(text)))
+
+    @classmethod
+    def current(cls, snapshot, root):
+        if (not isinstance(snapshot, dict) or snapshot.get("version") != cls.VERSION
+                or snapshot.get("contract") != hashlib.sha256(VERIFIER_PROMPT.encode()).hexdigest()):
+            return False
+        try:
+            base = snapshot["base_dir"]
+            if base and cls.directory_hash(base["path"]) != base["sha256"]:
+                return False
+            if snapshot["all_maps"] and cls.map_paths(root) != snapshot["maps"]:
+                return False
+            for item in snapshot["files"]:
+                text = Path(item["path"]).read_text(encoding="utf-8")
+                if item["definition"]:
+                    text = cls.definition(text)
+                if hashlib.sha256(text.encode()).hexdigest() != item["sha256"]:
+                    return False
+            return True
+        except (OSError, UnicodeError, KeyError, TypeError):
+            return False
 
 
 def observed_context(root):
@@ -456,12 +541,6 @@ def copy_kit_paths(vdir, base):
             shutil.copy2(src, dst)
 
 
-def map_criteria(root, map_rel):
-    """지금 지도의 `## 기준` 본문(지도가 없으면 None)."""
-    p = Path(root, map_rel) if map_rel else None
-    return criteria_text(p.read_text(encoding="utf-8", errors="replace")) if p and p.is_file() else None
-
-
 USAGE = ("사용: verify.py prepare --map work/<작업명>/work.md [--request <파일>]... [--base <커밋>] [--rounds N]\n"
          "      verify.py prepare --request <요청 원문 파일> [--request <파일>]... [--base <커밋>] [--rounds N] [--output <산출물 파일>]\n"
          "        → 검토 입력(prompt_file)과 판정 대상 폴더를 만든다. 요청 원문은 지도 `## 기준` 의 `요청 원문` 항목이나 --request 파일(사용자 글 그대로)\n"
@@ -486,13 +565,16 @@ def prepare(args):
     map_rel = opt(args, "--map")
     if map_rel:
         map_rel = os.path.relpath(os.path.realpath(Path(root, map_rel)), os.path.realpath(root))
-    requests = [Path(f).read_text(encoding="utf-8") for f in opt(args, "--request", True)]
-    plan = Path(opt(args, "--plan")).read_text(encoding="utf-8") if opt(args, "--plan") else None
     fixed = opt(args, "--criteria")  # 평가 실행기: 처음 고정한 기준을 파일로 넘긴다
+    inputs = ReviewInputs(root, map_rel, fixed is not None and not map_rel)
+    if any(Path(f).resolve() == Path(root, p).resolve() for f in opt(args, "--request", True) for p in inputs.maps):
+        raise ValueError("작업 지도는 해석과 설계이며 요청 원문 파일을 대신할 수 없다")
+    requests = [inputs.read(f, "request") for f in opt(args, "--request", True)]
+    plan = inputs.read(opt(args, "--plan"), "plan") if opt(args, "--plan") else None
     if fixed is not None:
-        criteria = Path(fixed).read_text(encoding="utf-8")
+        criteria = inputs.read(fixed, "criteria")
     elif map_rel:
-        body = map_criteria(root, map_rel)
+        body = criteria_text(inputs.maps[map_rel]) if map_rel in inputs.maps else None
         if body is None:
             problems.append(f"작업 지도 {map_rel} 가 없다")
         elif not body:
@@ -503,16 +585,18 @@ def prepare(args):
             requests = [f"(작업 지도 `## 기준` 에 옮겨 둔 요청 원문)\n{quoted}"] + requests
     else:
         criteria = ""
-    if not requests:
-        problems.append("요청 원문을 확보하지 못했다(입력 부족): 지도 `## 기준` 에 `요청 원문` 항목이 없고 --request 도 없다. 요약으로 대신하지 않는다")
-    output = Path(opt(args, "--output")).read_text(encoding="utf-8", errors="replace") if opt(args, "--output") else None
+    if not requests or any(not r.strip() for r in requests):
+        problems.append("요청 원문을 확보하지 못했다(입력 부족): 지도 `## 기준` 에 `요청 원문` 항목이 없고 --request 도 없다(또는 비었다). 요약으로 대신하지 않는다")
+    output = inputs.read(opt(args, "--output"), "output") if opt(args, "--output") else None
     if output is not None and not output.strip():
         problems.append("산출물(--output) 파일이 비었다")
-    envelope = envelopes(root, map_rel) if (map_rel or fixed is not None) else ""
-    conditions = Path(opt(args, "--conditions")).read_text(encoding="utf-8") if opt(args, "--conditions") else ""
+    envelope = inputs.envelope()
+    conditions = inputs.read(opt(args, "--conditions"), "conditions") if opt(args, "--conditions") else ""
     required = ids(conditions + "\n" + criteria)
     base_dir, base_rev, base_sha = opt(args, "--base-dir"), opt(args, "--base") or "HEAD", None
-    if not base_dir:
+    if base_dir:
+        inputs.capture_base(base_dir)
+    else:
         r = run(["git", "rev-parse", "--verify", "-q", base_rev + "^{commit}"], cwd=root)
         base_sha = r.stdout.decode().strip()
         if not base_sha:
@@ -531,14 +615,14 @@ def prepare(args):
     result = {"round": n, "max_rounds": rounds_max, "harness": harness, "required": required}
     if asked_max != rounds_max:
         result["note"] = f"재검토 한도는 이 시도의 첫 회차에 정한 {rounds_max} 회다(--rounds {asked_max} 는 쓰지 않았다)"
-    crit_fp = lambda: hashlib.sha256((map_criteria(root, map_rel) or "").encode()).hexdigest() if map_rel else None
-    start_print, start_crit = product_print(root), crit_fp()
+    start_print = product_print(root)
     first_criteria = vstate.get("first_criteria", criteria)
     if len(ran) >= rounds_max:
-        # 한도에 이미 닿았다: 새 검토자를 띄우지 않는다. 마지막 판정이 OK 이고 그 뒤 제품 파일·지도 기준이 그대로면 그 OK 를 그대로 낸다.
+        # 한도 뒤 재사용도 같은 근거에만 유효하다. 구기록은 입력이 없으므로 재사용하지 않는다.
         last = ran[-1]
-        if last.get("state") == "ok" and last.get("product") == start_print and last.get("map") == start_crit:
-            result.update(state="ok", reason="", target=last.get("target"), reused_round=last.get("round"))
+        if last.get("state") == "ok" and last.get("product") == start_print and last.get("inputs") == inputs.snapshot:
+            result.update(state="ok", reason="", target=last.get("target"), reused_round=last.get("round"),
+                          open_decisions=last.get("open_decisions", []), unconfirmed=last.get("unconfirmed", []))
         else:
             result.update(state="incomplete", reason=f"재검토 한도({rounds_max})에 이미 닿았다. 새 검토자를 띄우지 않는다(요청 원문이 다른 새 시도만 1회차부터)")
         rounds.append({"uid": os.urandom(8).hex(), "round": n, "state": result["state"], "reason": result["reason"], "ran": False, "at": time.time()})
@@ -551,7 +635,7 @@ def prepare(args):
     result["kept"] = str(keep)  # 이 회차의 고정 대상(git 저장소)·시작 상태·diff·입력·판정을 지우지 않고 남긴다
     note, changed = "", False
     if fixed is not None:  # 평가: 처음 고정한 기준만 판정 기준이다. 지금 지도가 다르면 그 사실만 알린다
-        current = baseline(root)
+        current = inputs.criteria()
         changed = current.strip() != criteria.strip()
         if changed:
             note = f"\n주의: 구현자가 처음 고정한 뒤 작업 지도의 기준을 바꿨다. 바뀐 기준은 판정 기준으로 쓰지 않는다. 지금 지도의 기준:\n{current or '(없음)'}\n"
@@ -569,7 +653,7 @@ def prepare(args):
         vdir.mkdir(parents=True, exist_ok=True)
     base = keep / "base"
     if base_dir:
-        shutil.copytree(base_dir, base, symlinks=True)
+        inputs.copy_base(base)
     elif base_sha:
         try:
             materialize_rev(root, base_sha, base)
@@ -600,18 +684,16 @@ def prepare(args):
     if problems:
         result.update(state="unverified", reason=" / ".join(problems))
         rounds.append({"uid": os.urandom(8).hex(), "round": n, "state": "unverified", "reason": result["reason"], "target": target, "ran": False, "kept": str(keep), "at": time.time()})
-        (keep / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
         return finalize(result, rounds, rounds_max, state_file, attempt, first_criteria)
     if record_problems:
         # 형식이 틀린 표의 미정·미확인 목록은 믿을 수 없다: 표를 고치는 것이 먼저다(완료 판정도 returned)
         result.update(state="returned", reason="작업 지도 요구 기록 형식: " + " / ".join(record_problems), open_decisions=[], unconfirmed=[])
         rounds.append({"uid": os.urandom(8).hex(), "round": n, "state": "returned", "reason": result["reason"], "target": target, "ran": False, "kept": str(keep), "at": time.time()})
-        (keep / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
         return finalize(result, rounds, rounds_max, state_file, attempt, first_criteria)
     prompt = prompt_text(requests, plan, conditions, criteria, note, target, change, vdir, base_label, envelope, observed_context(root), output)
     (keep / "prompt.txt").write_text(prompt, encoding="utf-8")
     pending = {"state_file": str(state_file), "attempt": attempt, "first_criteria": first_criteria, "required": required, "rounds_max": rounds_max,
-               "round": n, "ran_before": len(ran), "start_print": start_print, "start_crit": start_crit, "map": map_rel, "target": target,
+               "round": n, "ran_before": len(ran), "start_print": start_print, "inputs": inputs.snapshot, "map": map_rel, "target": target,
                "vdir": str(vdir), "harness": harness, "baseline_changed": changed, "root": str(root),
                "open_decisions": result["open_decisions"], "unconfirmed": result["unconfirmed"]}
     (keep / "pending.json").write_text(json.dumps(pending, ensure_ascii=False), encoding="utf-8")
@@ -634,6 +716,8 @@ def finalize(result, rounds, rounds_max, state_path, attempt, first_criteria, ch
     result["direct_check"] = check
     result["completion"] = completion(result["state"], check, bool(result.get("open_decisions")), required=True,
                                       unresolved=bool(result.get("unconfirmed")))
+    if result.get("kept"):
+        Path(result["kept"], "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
     msg = {"ok": "완료: 독립 검토가 모든 조건 충족을 냈다(직접 증거의 충족은 구현자가 따로 보고한다).",
            "returned": "돌려보냄: 사유를 사용자 원문·지도 기준과 대조한다. 근거로 정할 수 있는 결함이면 원인 자리를 고친 뒤 prepare 부터 다시, 사용자 결정이 필요한 미정이면 추천과 함께 사용자에게 묻는다.",
            "incomplete": "미완료: 재검토 한도에 닿았다. 남은 조건과 사유를 사용자에게 보고한다.",
@@ -651,17 +735,21 @@ def finalize(result, rounds, rounds_max, state_path, attempt, first_criteria, ch
 
 def finish(args):
     """검토자의 마지막 답을 판정한다. --answer 파일(평가는 하네스 기록 .jsonl)이나 표준 입력. 대상 폴더가 바뀌었거나 검토하는 동안
-    제품 파일·지도 기준이 바뀌었으면 미확인. --exit-code 는 평가 실행기가 넘기는 검토자 하네스 종료 코드(none = 하네스 없음)."""
+    제품 파일이나 제공된 근거 입력이 바뀌었으면 미확인. --exit-code 는 평가 실행기가 넘기는 검토자 하네스 종료 코드(none = 하네스 없음)."""
     keep = Path(opt(args, "--round") or "")
     if not (keep / "pending.json").is_file():
         print(USAGE, file=sys.stderr)
         return 2
     pd = json.loads((keep / "pending.json").read_text(encoding="utf-8"))
-    if (keep / "result.json").is_file():
-        print("[verify] 이 회차는 이미 판정했다. prepare 로 새 회차를 만든다.", file=sys.stderr)
-        print((keep / "result.json").read_text(encoding="utf-8").strip().replace("\n", " "))
-        return EXIT[json.loads((keep / "result.json").read_text(encoding="utf-8"))["state"]]
     root = Path(pd["root"])
+    if (keep / "result.json").is_file():
+        recorded = json.loads((keep / "result.json").read_text(encoding="utf-8"))
+        if product_print(root) != pd["start_print"] or not ReviewInputs.current(pd.get("inputs"), root):
+            recorded.update(target_state=recorded["state"], state="unverified", completion="unverified",
+                            reason="이 회차의 근거는 현재 입력과 다르거나 구기록이다. 과거 기록은 보존하고 prepare로 현재 입력을 검토한다")
+        print("[verify] 이 회차의 기록은 바꾸지 않는다. 새 회차는 prepare 로 만든다.", file=sys.stderr)
+        print(json.dumps(recorded, ensure_ascii=False))
+        return EXIT[recorded["state"]]
     src = opt(args, "--answer")
     raw = Path(src).read_text(encoding="utf-8", errors="replace") if src else sys.stdin.read()
     answer = final_answer(src) if src and src.endswith(".jsonl") else raw
@@ -690,18 +778,17 @@ def finish(args):
         result.update(state="incomplete", reason=f"재검토 한도({rounds_max})에 닿았다: 마지막 판정 RETURN")
     else:
         result.update(state=verdict["state"], reason=verdict.get("reason", ""))
-    end_crit = hashlib.sha256((map_criteria(root, pd["map"]) or "").encode()).hexdigest() if pd.get("map") else None
-    # 검토하는 동안 원본 제품 파일이나 지도 기준이 바뀌었으면, 고정한 대상의 판정은 지금 버전의 결과가 아니다
-    if rc is not None and (product_print(root) != pd["start_print"] or end_crit != pd["start_crit"]):
+    # 검토 입력을 만든 읽기와 같은 범위로 현재성을 확인한다. 구기록·삭제·읽기 실패도 미확인이다.
+    if product_print(root) != pd["start_print"] or not ReviewInputs.current(pd.get("inputs"), root):
         result.update(target_state=result["state"], state="unverified",
-                      reason="검토하는 동안 제품 파일·지도 기준이 바뀌었다. 고정 대상의 판정은 남겼지만 지금 버전의 결과가 아니다")
+                      reason="검토 근거를 현재와 대조할 수 없다(제품 파일·지도 기준·원문·산출물 변경 또는 구기록). 고정 대상의 판정은 현재 결과가 아니다")
     state_path = Path(pd["state_file"])
     vstate = json.loads(state_path.read_text()) if state_path.is_file() else {}
     rounds = list(vstate.get("rounds", [])) if vstate.get("attempt") == pd["attempt"] else []  # 다른 시도의 회차와 섞지 않는다
     rounds.append({"uid": os.urandom(8).hex(), "round": n, "state": result["state"], "target_state": result.get("target_state"), "reason": result.get("reason", ""),
-                   "target": pd["target"], "product": pd["start_print"], "map": pd["start_crit"], "verifier_exit_code": rc, "ran": rc is not None,
+                   "target": pd["target"], "product": pd["start_print"], "inputs": pd.get("inputs"),
+                   "open_decisions": result["open_decisions"], "unconfirmed": result["unconfirmed"], "verifier_exit_code": rc, "ran": rc is not None,
                    "kept": str(keep), "at": time.time()})
-    (keep / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
     return finalize(result, rounds, rounds_max, state_path, pd["attempt"], pd.get("first_criteria", ""), check)
 
 
