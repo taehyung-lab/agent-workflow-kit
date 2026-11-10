@@ -3,7 +3,7 @@
 지금 작업 트리의 키트를 임시 커밋으로 만들어 실제 install.sh 로 새 프로젝트에 설치하고, 설치된 독립 검토 실행기(verify.py)를
 가짜 검토 하네스로 실제 실행한다. 승인 관문은 없다(v3.1): 검토 입력은 작업 지도 `## 기준`(요청 원문 포함)이나 사용자가 준 요청 원문 파일이다.
 확인하는 것: 반환 → 교정 → 새 버전 재검토, 재검토 한도 = 미완료, 미확인(빈 답·하네스 없음·검토자 수정·요청 원문 없음·빈 기준·근거 불완전),
-검토자 입력의 독립성(요청 원문·지도 기준, 기준 커밋부터의 변경만, 자기평가 제외), 검토 중 원본·기준 변경 = 무효, 증거 폴더 보존.
+검토자 입력의 독립성(요청 원문·지도 기준, 기준 커밋부터의 변경만, 자기평가 제외), 검토 중 원본·기준·전달한 근거 파일 변경 = 무효, 파이썬 캐시는 제품 아님, 증거 폴더 보존.
 가짜 하네스는 정답을 받지 않고, 시험이 정한 판정 줄을 차례로 낸다.
 """
 import json, os, shutil, subprocess, sys, tempfile
@@ -415,6 +415,28 @@ exit 0
     write_map("new-after-prepare", CRIT)
     got = json.loads(fin(rd["kept"], json.dumps(OK), "--check", "PASS").stdout.strip().splitlines()[-1])
     check("평가 입력 수집 뒤 지도가 추가되면 현재 검토는 미확인", got.get("state") == "unverified")
+
+    # 실행이 저절로 만드는 파이썬 캐시(__pycache__·.pyc)는 제품이 아니다. 무시 목록이 없는 프로젝트에서도
+    # 구현자·검토자가 검사를 돌려 캐시가 바뀐 것을 대상·원본 변경으로 세지 않는다. 새 소스 파일은 그대로 대상이다.
+    (proj / "ui.txt").write_text("button=로그인하기\nbutton_en=Login\n")
+    cache = proj / "__pycache__"; cache.mkdir(exist_ok=True)
+    (cache / "m.cpython-314.pyc").write_bytes(b"\x00cache-before")
+    (proj / "extra.pyc").write_bytes(b"\x00loose")
+    (proj / "new_source.py").write_text("print('new')\n")
+    rd = prep("--request", req_file(REQ + " cache"))
+    target = Path(rd["target_dir"])
+    check("고정 대상에 파이썬 캐시는 복사하지 않고 새 소스 파일은 복사한다",
+          not (target / "__pycache__").exists() and not (target / "extra.pyc").exists() and (target / "new_source.py").is_file())
+    (target / "__pycache__").mkdir(exist_ok=True); (target / "__pycache__" / "m.cpython-314.pyc").write_bytes(b"\x00reviewer-run")
+    (cache / "m.cpython-314.pyc").write_bytes(b"\x00implementer-run")
+    got = json.loads(fin(rd["kept"], json.dumps(OK), "--check", "PASS").stdout.strip().splitlines()[-1])
+    check("검토자·구현자의 검사 실행이 만든 캐시 변경은 판정을 무효로 만들지 않는다",
+          got.get("state") == "ok" and got.get("completion") == "verified")
+    rd = prep("--request", req_file(REQ + " source"))
+    (Path(rd["target_dir"]) / "new_source.py").write_text("print('reviewer edit')\n")
+    got = json.loads(fin(rd["kept"], json.dumps(OK), "--check", "PASS").stdout.strip().splitlines()[-1])
+    check("검토자가 새 소스 파일을 바꾸면 여전히 unverified", got.get("state") == "unverified" and "추적 파일" in got.get("reason", ""))
+    shutil.rmtree(cache); (proj / "extra.pyc").unlink(); (proj / "new_source.py").unlink()
 
 print(f"{ok} passed, {failed} failed")
 sys.exit(1 if failed else 0)
