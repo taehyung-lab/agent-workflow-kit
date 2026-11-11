@@ -1,5 +1,6 @@
 """평가 실행기가 쓰는 판정 함수와 검토 세션. 판정 규칙(judge·completion)은 설치되는 검토 도구(.agents/skills/wf-verify/verify.py)의
-함수를 그대로 쓴다(일반 설치와 평가가 같은 규칙을 쓰게 하려는 것이다). 하네스 기록을 읽는 일과 검토자 세션을 띄우는 일은 평가만 하므로 여기에 있다.
+함수를 그대로 쓴다(일반 설치와 평가가 같은 규칙을 쓰게 하려는 것이다). 하네스 기록을 읽는 일과 검토 한 회차를 돌리는 일은 평가만 하므로 여기에 있다.
+검토자 세션을 띄우는 명령(두 하네스의 차이)은 session.py 의 어댑터가 맡는다.
 
 검증자는 답 끝에 JSON 하나를 쓴다(verify.py 의 VERIFIER_PROMPT 형식):
   {"verdict": "OK" 또는 "RETURN", "conditions": [{"id": "C1", "result": "충족|미충족|미확인", "evidence": "..."}],
@@ -14,6 +15,9 @@
 """
 import importlib.util, json, os, shutil, subprocess, sys, tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from session import HARNESSES
 
 _spec = importlib.util.spec_from_file_location("awk_verify", Path(__file__).resolve().parents[1] / ".agents/skills/wf-verify/verify.py")
 _verify = importlib.util.module_from_spec(_spec)
@@ -67,24 +71,6 @@ def run_result(output, exit_code=None):
     return None, ""
 
 
-def call_harness(harness, vdir, prompt, log):
-    """검토자 세션을 판정 대상 폴더에서 띄운다. 돌려줌: 종료 코드(하네스가 없으면 None)."""
-    exe = shutil.which(harness)
-    if not exe:
-        return None
-    env = {k: v for k, v in os.environ.items() if k not in ("AWK_GATE_PROMPT_FROM", "AWK_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")}
-    if harness == "claude":
-        cmd = [exe, "-p", prompt, "--output-format", "stream-json", "--verbose", "--allowedTools", "Read,Grep,Glob,Bash", "--max-turns", "30"]
-    else:
-        cmd = [exe, "exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", "-C", str(vdir), prompt]
-    with open(log, "wb") as out, open(str(log) + ".err", "ab") as err:
-        try:
-            return subprocess.run(cmd, cwd=vdir, stdout=out, stderr=err, stdin=subprocess.DEVNULL, env=env,
-                                  timeout=int(os.environ.get("AWK_VERIFY_TIMEOUT", "900"))).returncode
-        except subprocess.TimeoutExpired:
-            return 124
-
-
 def session(args):
     opt = lambda name: args[args.index(name) + 1] if name in args[:-1] else None
     tool, harness, log = opt("--tool"), opt("--harness"), opt("--log")
@@ -107,7 +93,8 @@ def session(args):
     if out.get("state") != "ready":  # 한도·근거 불완전 등으로 prepare 가 최종 결과를 냈다
         print(json.dumps(out, ensure_ascii=False)); return r.returncode
     keep = Path(out["kept"]); vlog = keep / "verify.jsonl"
-    rc = call_harness(harness, out["target_dir"], Path(out["prompt_file"]).read_text(encoding="utf-8"), vlog)
+    # 검토자 세션을 판정 대상 폴더에서 띄운다. 종료 코드, 하네스가 없으면 None.
+    rc = HARNESSES[harness]().review(out["target_dir"], Path(out["prompt_file"]).read_text(encoding="utf-8"), vlog) if harness in HARNESSES else None
     if log:  # --log 는 최신 회차 기록의 복사본(원시 기록은 회차 폴더에 그대로 있다)
         for src, dst in ((vlog, Path(log)), (Path(str(vlog) + ".err"), Path(log + ".err"))):
             if src.is_file():

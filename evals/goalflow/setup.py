@@ -3,21 +3,18 @@ import argparse
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 KIT = HERE.parents[1]
+sys.path.insert(0, str(HERE.parent))
+from session import build_project, kit_checkout  # 키트 커밋 설치는 평가 실행기와 같은 절차를 쓴다
 
 
 def run(*args, cwd=None):
     return subprocess.run(args, cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
-
-
-def commit(project, message):
-    run("git", "add", "-A", cwd=project)
-    run("git", "-c", "user.name=goalflow", "-c", "user.email=goalflow@invalid",
-        "-c", "commit.gpgsign=false", "commit", "-qm", message, cwd=project)
 
 
 def main():
@@ -31,22 +28,12 @@ def main():
     selected = run("git", "rev-parse", "--verify", args.kit_ref + "^{commit}", cwd=KIT)
     settings = json.loads(args.settings.read_text()) if args.settings else None
     target = args.target.resolve()
-    shutil.copytree(HERE / "fixture", target, ignore=shutil.ignore_patterns("__pycache__"))
-    run("git", "init", "-q", cwd=target)
-    commit(target, "goalflow fixture")
+    fixture = lambda project: shutil.copytree(HERE / "fixture", project, ignore=shutil.ignore_patterns("__pycache__"), dirs_exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="goalflow-kit-") as directory:
         kit = Path(directory) / "kit"
-        run("git", "clone", "-q", "--no-hardlinks", str(KIT), str(kit))
-        run("git", "checkout", "-q", "--detach", selected, cwd=kit)
-        run("bash", str(kit / "install.sh"), str(target))
-    if settings is not None:
-        path = target / ".claude/settings.json"
-        current = json.loads(path.read_text())
-        plugins = {**current.get("enabledPlugins", {}), **settings.get("enabledPlugins", {})}
-        current.update(settings)
-        current["enabledPlugins"] = plugins
-        path.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n")
-    commit(target, "pinned kit for goalflow")
+        kit_checkout(selected, kit)
+        build_project(target, kit, prepare=fixture, settings=settings,
+                      author=("goalflow", "goalflow@invalid"), messages=("goalflow fixture", "pinned kit for goalflow"))
     print(json.dumps({"project": str(target), "kit": selected,
                       "base": run("git", "rev-parse", "HEAD", cwd=target),
                       "map": "work/enrollment/work.md"}, ensure_ascii=False))

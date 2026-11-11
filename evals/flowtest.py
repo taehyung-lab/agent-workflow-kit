@@ -10,6 +10,8 @@ import json, os, shutil, subprocess, sys, tempfile
 from pathlib import Path
 
 KIT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(KIT / "evals"))
+from session import ProjectError, build_project, worktree_kit  # 키트 커밋·프로젝트 만들기·설치는 평가 실행기와 같은 절차를 쓴다
 ok = failed = 0
 
 
@@ -36,19 +38,22 @@ with tempfile.TemporaryDirectory() as t:
     t = Path(t)
     # 1) 지금 작업 트리의 키트를 커밋으로 만든다(설치기는 커밋된 키트만 설치한다)
     kit = t / "kit"
-    for rel in ["install.sh", "AGENTS.md", "CLAUDE.md"]:
-        (kit / rel).parent.mkdir(parents=True, exist_ok=True); shutil.copy2(KIT / rel, kit / rel)
-    shutil.copytree(KIT / ".agents" / "skills", kit / ".agents" / "skills", ignore=shutil.ignore_patterns("__pycache__"))
-    sh(*G, "init", "-q", cwd=kit); sh(*G, "add", "-A", cwd=kit); sh(*G, "commit", "-qm", "kit", cwd=kit)
-    # 2) 제품 프로젝트(언어와 무관한 셸 검사 하나)와 실제 설치
-    proj = t / "proj"; proj.mkdir()
-    (proj / "README.md").write_text("# 앱\n검사: bin/test\n")
-    (proj / "ui.txt").write_text("button=로그인\nbutton_en=Login\n")
-    (proj / "bin").mkdir(); (proj / "bin" / "test").write_text("#!/bin/sh\ngrep -q 'button=로그인하기' ui.txt\n"); (proj / "bin" / "test").chmod(0o755)
-    (proj / "notes.txt").write_text("사용자 메모\n")
-    sh(*G, "init", "-q", cwd=proj); sh(*G, "add", "-A", cwd=proj); sh(*G, "commit", "-qm", "app", cwd=proj)
-    r = sh("bash", str(kit / "install.sh"), str(proj))
-    check("실제 install.sh 설치가 성공하고 검토 실행기가 설치된다", r.returncode == 0 and (proj / ".agents/skills/wf-verify/verify.py").is_file())
+    worktree_kit(kit)
+    # 2) 제품 프로젝트(언어와 무관한 셸 검사 하나)와 실제 설치(설치 결과는 커밋해 둔다)
+    proj = t / "proj"
+
+    def app(proj):
+        (proj / "README.md").write_text("# 앱\n검사: bin/test\n")
+        (proj / "ui.txt").write_text("button=로그인\nbutton_en=Login\n")
+        (proj / "bin").mkdir(); (proj / "bin" / "test").write_text("#!/bin/sh\ngrep -q 'button=로그인하기' ui.txt\n"); (proj / "bin" / "test").chmod(0o755)
+        (proj / "notes.txt").write_text("사용자 메모\n")
+
+    try:
+        build_project(proj, kit, prepare=app)
+        installed = True
+    except ProjectError as e:
+        installed = False; print(e)
+    check("실제 install.sh 설치가 성공하고 검토 실행기가 설치된다", installed and (proj / ".agents/skills/wf-verify/verify.py").is_file())
     def kit_hooks(path):
         d = json.loads(path.read_text()) if path.is_file() else {}
         return {ev: [h.get("command", "") for g in gs for h in g.get("hooks", [])] for ev, gs in d.get("hooks", {}).items()}
@@ -56,7 +61,6 @@ with tempfile.TemporaryDirectory() as t:
     check("설치는 승인 관문을 두지 않고, 훅은 Claude 세션 시작 정보 훅(wf-context) 하나뿐이다(Codex 에는 키트 훅 없음)", not (proj / ".agents/skills/wf-design").exists()
           and list(hc) == ["SessionStart"] and len(hc["SessionStart"]) == 1 and "wf-context/context.py" in hc["SessionStart"][0]
           and hx == {} and not (proj / ".codex/hooks.json").exists())
-    sh(*G, "add", "-A", cwd=proj); sh(*G, "commit", "-qm", "kit", cwd=proj)
     verifier = proj / ".agents/skills/wf-verify/verify.py"
 
     def write_map(name, crit, evidence=""):

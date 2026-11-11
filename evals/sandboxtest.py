@@ -10,6 +10,8 @@ import hashlib, json, os, shutil, subprocess, sys, tempfile
 from pathlib import Path
 
 KIT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(KIT / "evals"))
+from session import ProjectError, build_project, worktree_kit  # 키트 커밋·프로젝트 만들기·설치는 평가 실행기와 같은 절차를 쓴다
 ok = failed = 0
 
 
@@ -32,7 +34,6 @@ def tree_print(d):
     return h.hexdigest()
 
 
-G = ["git", "-c", "user.name=t", "-c", "user.email=t@invalid", "-c", "commit.gpgsign=false"]
 OK = {"verdict": "OK", "conditions": [{"id": "B1", "result": "충족", "evidence": "python3 price.py 1000 3 10 → 2700"}], "out_of_scope": []}
 RET = {"verdict": "RETURN", "conditions": [{"id": "B1", "result": "미충족", "evidence": "아직 3000"}], "return_reason": "B1 미충족."}
 PLAN = "계획입니다.\n\n## 기준\n\n- 요청 원문: 할인 계산이 틀린 것 같아요, 고쳐 주세요\n| B1 | 1000원 3개 10% 할인 → 2700 | price.py | python3 price.py 1000 3 10 |\n\n## 질문\n\n진행할까요?"
@@ -41,18 +42,17 @@ codex = shutil.which("codex")
 with tempfile.TemporaryDirectory() as t:
     t = Path(t)
     kit = t / "kit"
-    for rel in ["install.sh", "AGENTS.md", "CLAUDE.md"]:
-        (kit / rel).parent.mkdir(parents=True, exist_ok=True); shutil.copy2(KIT / rel, kit / rel)
-    shutil.copytree(KIT / ".agents" / "skills", kit / ".agents" / "skills", ignore=shutil.ignore_patterns("__pycache__"))
-    sh(*G, "init", "-q", cwd=kit); sh(*G, "add", "-A", cwd=kit); sh(*G, "commit", "-qm", "kit", cwd=kit)
-    proj = t / "proj"; proj.mkdir()
-    (proj / "README.md").write_text("# 가격\n검사: python3 price.py 1000 3 10\n")
-    (proj / "price.py").write_text("import sys\np, n, d = map(int, sys.argv[1:4])\nprint(p * n)\n")
-    sh(*G, "init", "-q", cwd=proj); sh(*G, "add", "-A", cwd=proj); sh(*G, "commit", "-qm", "app", cwd=proj)
-    r = sh("bash", str(kit / "install.sh"), str(proj))
-    if r.returncode != 0:
-        check("install.sh 설치", False); print(r.stderr); print(f"{ok} passed, {failed} failed"); sys.exit(1)
-    sh(*G, "add", "-A", cwd=proj); sh(*G, "commit", "-qm", "kit", cwd=proj)
+    worktree_kit(kit)
+    proj = t / "proj"
+
+    def app(proj):
+        (proj / "README.md").write_text("# 가격\n검사: python3 price.py 1000 3 10\n")
+        (proj / "price.py").write_text("import sys\np, n, d = map(int, sys.argv[1:4])\nprint(p * n)\n")
+
+    try:
+        build_project(proj, kit, prepare=app)
+    except ProjectError as e:
+        check("install.sh 설치", False); print(e); print(f"{ok} passed, {failed} failed"); sys.exit(1)
     env = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")}
     box = [codex or "codex", "sandbox", "-P", ":workspace", "-C", str(proj)]  # 절대 경로: 시험의 PATH 에 가짜 codex 가 있다
     probe = sh(*box, "sh", "-c", "touch work-probe && rm work-probe && ! touch .git/probe 2>/dev/null", cwd=proj, env=env) if codex else None

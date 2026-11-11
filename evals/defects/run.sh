@@ -5,20 +5,18 @@
 set -uo pipefail
 here=$(cd -- "$(dirname -- "$0")" && pwd -P); ev=$(cd "$here/.." && pwd -P); kit=$(cd "$ev/.." && pwd -P)
 name=$1 arm=$2 ref=$3 out=$4; mkdir -p "$out"; tag="$name-$arm-$(git -C "$kit" rev-parse --short=7 "$ref")"
-w=$(mktemp -d); git clone -q "$kit" "$w/kit" && git -C "$w/kit" checkout -q "$ref"
-mkdir "$w/p" && (cd "$w/p" && git init -q && printf '# 샘플\n' > README.md && EVALS_LANG=python bash "$ev/cases/archive-after-correction/setup.sh" && git add -A && git -c user.name=e -c user.email=e@i commit -qm base)
-bash "$w/kit/install.sh" "$w/p" > /dev/null 2>&1; (cd "$w/p" && git add -A && git -c user.name=e -c user.email=e@i commit -qm kit)
+# 프로젝트 만들기(키트 커밋 설치)와 Codex 세션은 evals/session.py 가 맡는다(임시 홈·훅 신뢰는 그 안에서 실행기와 같은 규칙으로 정한다).
+w=$(mktemp -d)
+EVALS_LANG=python python3 -I "$ev/session.py" project "$w/p" "$ref" --setup "$ev/cases/archive-after-correction/setup.sh" --author e e@i --messages base kit
 base=$(python3 -I "$ev/verdict.py" snapshot "$w/p")  # 결함을 심기 전 상태(검토의 기준 커밋)
 python3 -I "$here/scenarios.py" apply "$name" "$w/p"
 python3 -I "$here/scenarios.py" text "$name" request > "$w/req.txt"; python3 -I "$here/scenarios.py" text "$name" plan > "$w/plan.txt"
-ch=$(mktemp -d); cp ~/.codex/auth.json ~/.codex/config.toml "$ch/" 2>/dev/null; [ ! -f ~/.codex/AGENTS.md ] || cp ~/.codex/AGENTS.md "$ch/"
 impl() {  # 구현자 세션 1회(승인 말 포함: v3.0 이하 커밋은 관문이 쓰기를 연다)
-  (cd "$w/p" && CODEX_HOME=$ch AWK_GATE_LOG="$out/$tag.hook.log" perl -e 'alarm shift; exec @ARGV' 1200 codex exec --json --skip-git-repo-check --sandbox workspace-write \
-    --dangerously-bypass-hook-trust -C "$w/p" "$1" > "$out/$tag.impl$2.jsonl" 2> "$out/$tag.impl$2.err" < /dev/null)
+  (cd "$w/p" && AWK_GATE_LOG="$out/$tag.hook.log" python3 -I "$ev/session.py" start codex "$w/p" "$1" "$out/$tag.impl$2")
 }
 review() {  # 독립 검토 1회(고정 입력, 평가 실행기가 검토자 세션을 띄운다). 승인된 계획은 검토하는 동안만 작업 지도의 기준으로 둔다(구현자 세션에는 없다)
   mkdir -p "$w/p/work/defect" && { printf '# 결함 사례\n\n## 기준\n\n'; cat "$w/plan.txt"; printf '\n'; } > "$w/p/work/defect/work.md"
-  (cd "$w/p" && CODEX_HOME=$ch python3 -I "$ev/verdict.py" session --tool "$w/p/.agents/skills/wf-verify/verify.py" --harness codex \
+  (cd "$w/p" && python3 -I "$ev/verdict.py" session --tool "$w/p/.agents/skills/wf-verify/verify.py" --harness codex \
     --request "$w/req.txt" --map work/defect/work.md --base "$base" --rounds 2 --log "$out/$tag.review$1.jsonl" 2>> "$out/$tag.err" | tail -1)
   rm -f "$w/p/work/defect/work.md"
 }
@@ -48,5 +46,5 @@ kind = subprocess.run(["python3", f"{here}/scenarios.py", "kind", name], capture
 json.dump({"case": name, "kind": kind, "arm": arm, "kit": ref, "review1": st("r1.json"), "review2": st("r2.json"), "returned": returned == "1",
            "final_pass": vrc == "0", "verdict": Path(w, "verdict.txt").read_text(), "seconds": int(secs)}, open(o, "w"), ensure_ascii=False)
 PY
-cp -R "$w/p" "$out/$tag.files" 2>/dev/null; rm -rf "${ch:?}"
+cp -R "$w/p" "$out/$tag.files" 2>/dev/null
 echo "$tag $verdict"

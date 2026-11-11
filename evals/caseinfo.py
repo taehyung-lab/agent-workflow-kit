@@ -1,4 +1,4 @@
-"""평가 사례의 위치와 판정기 지문을 한 곳에서 정한다. 실행기(run.sh)와 재판정(rejudge.py)이 같이 쓴다.
+"""평가 사례의 위치와 판정기 지문을 한 곳에서 정한다. 실행기(run.py)와 재판정(rejudge.py)이 같이 쓴다.
 
 사례 위치: evals/cases/<이름> 이 있으면 그것, 없으면 evals/holdout/<이름>(숨겨 둔 평가 사례).
 판정기 지문(judge_version): 판정 결과를 바꿀 수 있는 파일(사례의 check.py 와 JUDGE_FILES)의 경로와 내용으로 만든 12자리 값.
@@ -15,7 +15,7 @@ from pathlib import Path
 EVALS = Path(__file__).resolve().parent
 KIT = EVALS.parent
 # 모든 사례의 check.py 가 기대는 공용 판정 코드. 판정에 쓰는 파일을 새로 만들면 여기에 넣는다.
-JUDGE_FILES = ("evals/case.py", "evals/judge.py", "evals/observe.py", "evals/transcript.py", "evals/verdict.py", "evals/result.py",
+JUDGE_FILES = ("evals/case.py", "evals/judge.py", "evals/observe.py", "evals/transcript.py", "evals/verdict.py", "evals/session.py", "evals/result.py",
                "evals/fixtures/login_app.py", ".agents/skills/wf-verify/verify.py")
 
 

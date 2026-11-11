@@ -18,6 +18,15 @@ python3 -I evals/report.py evals/results   # 사례·하네스·키트 커밋·�
 bash evals/run.sh question-order 7c39b22..HEAD codex 10   # 두 커밋 비교: 전후 표와 회귀 후보·재발·비교 불가 표시(후보일 뿐, 판정은 사람)
 ```
 
+실행기의 파일 역할:
+
+| 파일 | 맡는 일 |
+| --- | --- |
+| `run.sh` → `run.py` | `run.sh` 는 진입점이고 본체는 `run.py` 다: 턴 보내기, 독립 검증 루프, 외부 장애 분류, 결과 파일 남기기 |
+| `session.py` | 키트 커밋을 설치한 새 프로젝트 만들기와 하네스 세션(첫 턴·이어 가기·검토자 세션). Claude·Codex 의 차이(명령줄, Codex 임시 홈·훅/프로젝트 신뢰·네트워크 옵션, 제한 시간, 세션 id)는 이 파일의 두 어댑터에만 있다. `verdict.py session`·`defects/run.sh`·`goalflow/setup.py`·`flowtest.py`·`sandboxtest.py` 도 이것을 쓴다 |
+| `result.py` | 한 번의 실행에서 관찰한 사실을 받아 `meta.json` 을 만들고, 판정 검사의 종료 코드·첫 낱말로 PASS·FAIL·REVIEW·UNVERIFIED 를 정한다(`run.py` 와 `rejudge.py` 가 같은 함수를 쓴다) |
+| `transcript.py` · `observe.py` | 두 하네스의 기록 형식은 `transcript.py` 만 읽고, `observe.py` 는 그 호출 목록에서 무엇을 관찰 사실로 셀지 정한다 |
+
 ## 사례 (cases/)
 
 사례 하나는 **반복되면 안 되는 실패 한 종류**다. 실패가 나올 때마다 사례를 늘리지 않고, 같은 종류는 기존 사례의 변형·표본으로 둔다.
@@ -113,7 +122,7 @@ v3.2~v3.4 는 설치기가 두 하네스에 세션 시작 정보 훅을 두었�
 
 `claude`·`codex` CLI 가 설치·로그인되어 있어야 하고, 실제 모델 세션을 임시 폴더에서 권한 확인 없이 실행한다. 사용자 전역 설정은 건드리지 않는다.
 
-실행 환경은 두 하네스가 다르다. **Claude** 는 사용자 홈(`~/.claude`)을 그대로 쓰므로 전역 지침·사용자 설정의 플러그인(예: superpowers·compound-engineering)·전역 훅이 함께 돈다(깨끗한 환경이 아니다). **Codex** 는 `auth.json`·`config.toml`·`AGENTS.md` 만 복사한 임시 홈을 쓴다. 프로젝트에 `.codex/hooks.json` 이 있을 때(관문이 있던 v3.0 이하 커밋)만 `--dangerously-bypass-hook-trust` 로 사용자의 훅 신뢰를 대신한다.
+실행 환경은 두 하네스가 다르다. **Claude** 는 사용자 홈(`~/.claude`)을 그대로 쓰므로 전역 지침·사용자 설정의 플러그인(예: superpowers·compound-engineering)·전역 훅이 함께 돈다(깨끗한 환경이 아니다). **Codex** 는 `auth.json`·`config.toml`·`AGENTS.md` 만 복사한 임시 홈을 쓴다(구현자 세션 하나에 하나, 검토자 세션은 회차마다 따로. `verdict.py session` 을 직접 불러도 같다). 프로젝트에 `.codex/hooks.json` 이 있을 때(관문이 있던 v3.0 이하 커밋)만 `--dangerously-bypass-hook-trust` 로 사용자의 훅 신뢰를 대신한다.
 
 v3.0 이하(관문 있음)와 v3.1(관문 없음)을 비교하면 보고서가 "비교 불가: 관문" 을 표시한다. 기존 사례의 check.py 는 관문이 있으면 "승인 전에는 묻고 멈춤"을, 없으면 "만들고 확인"을 통과로 보므로 통과율을 그대로 비교하지 말고 원시 기록을 함께 본다.
 
