@@ -428,6 +428,8 @@ exit 0
     (proj / "untracked-start.txt").unlink()
     rc, out, prompt = verify(None, [OK], extra=("--request", req_file("여러 지도")))
     check("평가 검토 세션: 기준이 있는 지도가 여러 개면 고르지 않고 미확인(검토자를 띄우지 않음)", rc == 5 and "여러 개" in out.get("reason", "") and prompt == "")
+    hp = sh(sys.executable, "-I", str(verifier), "record", "--help", cwd=proj, env=base_env)
+    check("사용법을 물으면(--help) 사용법을 내고 오류로 끝나지 않는다", hp.returncode == 0 and "record --map" in hp.stderr)
     check("record: --map 이 없거나 --check 값이 틀리면 사용 오류(종료 2)",
           sh(sys.executable, "-I", str(verifier), "record", cwd=proj, env=base_env).returncode == 2 and rec(m_done, "--check", "maybe")[0] == 2)
     check("없어진 평가 전용 옵션은 받지 않는다(--criteria·--base-dir 는 무시되지 않고 쓰이지도 않음: 도구에 흔적이 없다)",

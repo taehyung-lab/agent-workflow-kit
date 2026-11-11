@@ -254,7 +254,7 @@ assert log("echo x > todo.py") == ["todo.py"] and log("ls 2>/dev/null; echo y >>
 PY
 # 문서 예산: 매 세션 읽는 키트 영역과 설치되는 키트 문서가 정해 둔 크기를 넘으면 실패한다(늘리려면 다른 문장을 교체·삭제한다).
 # 예산은 증가를 막는 장치일 뿐 원인 교정의 증거가 아니다(교정은 실패 표본으로 확인). 상한을 올리는 것은 기준 변경이라 별도 검토를 받는다.
-python3 -I - "$here/.." <<'PY' && ok "문서 예산: 키트 영역 ≤6000B, 안내·스킬 각 ≤4500B, 설치 문서 전체 ≤32000B" || ng "문서 예산 초과"
+python3 -I - "$here/.." <<'PY' && ok "문서 예산: 키트 영역 ≤6000B, 안내·스킬 각 ≤4500B, 설치 문서 전체(검토자 지시문 포함) ≤32000B" || ng "문서 예산 초과"
 import sys
 from pathlib import Path
 kit = Path(sys.argv[1]); bad = []
@@ -266,9 +266,13 @@ for f in skills:
     n = len(f.read_bytes())
     if n > 4500: bad.append(f"{f.relative_to(kit)} {n}B > 4500B")
 docs = [f for f in (kit / ".agents/skills").rglob("*") if f.is_file() and f.suffix in (".md", ".txt")]
-total = len(region) + sum(len(f.read_bytes()) for f in docs)
+# 검토자에게 주는 지시문도 모델이 읽는 설치 글이다(.py 안에 있어 전에는 세지 않았고, v3.0 이후 가장 많이 늘었다)
+import importlib.util
+spec = importlib.util.spec_from_file_location("awk_verify", kit / ".agents/skills/wf-verify/verify.py"); verify = importlib.util.module_from_spec(spec); spec.loader.exec_module(verify)
+prompt = len(verify.VERIFIER_PROMPT.encode())
+total = len(region) + sum(len(f.read_bytes()) for f in docs) + prompt
 if total > 32000: bad.append(f"설치 문서 전체 {total}B > 32000B")
-print("\n".join(bad) or f"키트 영역 {len(region)}B, 설치 문서 전체 {total}B"); sys.exit(1 if bad else 0)
+print("\n".join(bad) or f"키트 영역 {len(region)}B, 검토자 지시문 {prompt}B, 설치 문서 전체 {total}B"); sys.exit(1 if bad else 0)
 PY
 # 비교 보고(report.py --compare): 회귀 후보·재발·비교 불가를 표시하고, 검토 필요는 실패로 세지 않는다
 python3 -I - "$here" <<'PY' && ok "비교 보고: 회귀 후보·재발·비교 불가 표시, 검토 필요는 재발로 세지 않음" || ng "비교 보고"

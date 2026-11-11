@@ -448,9 +448,9 @@ CHECKS = (None, "PASS", "FAIL", "REVIEW")
 
 def main(args):
     commands = {"record": record, "prepare": prepare, "finish": finish}
-    if not args or args[0] not in commands:
+    if not args or args[0] not in commands or "--help" in args or "-h" in args:
         print(USAGE, file=sys.stderr)
-        return 2
+        return 0 if args and args[-1] in ("--help", "-h") else 2  # 사용법을 물은 것은 오류가 아니다
     return commands[args[0]](args[1:])
 
 
