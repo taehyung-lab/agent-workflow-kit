@@ -18,6 +18,8 @@
 
 "형식이 맞는 지도"는 두 커밋의 결과물을 fa8e43f 의 `record_rows`·`quoted_request` 로 똑같이 쟀다(상태 값이 확정·미정·미확인, 확정 행에 출처, 의존 ID 존재). v3.5.0 의 Codex 는 상태 칸에 `미정(사용자 답)` 같은 글을 적어 도구가 미정 행을 하나도 읽지 못했다(그대로 검토·완료 판정에 가면 사용자 답 대기가 나오지 않는다). fa8e43f 의 Codex 는 goalflow 3회 모두 처음에 "요청 원문 없음"으로 돌려보내진 뒤 지도를 고쳐 `completion=waiting-user` 로 끝났다.
 
+실행기를 run.py·session.py 로 옮긴 뒤(63aa150) 실제 세션 확인: answer-proceeds(2턴, 같은 세션 이어 가기) Claude·Codex 1회씩 통과, `EVALS_VERIFY=1` weight-disposable Claude·Codex 1회씩 2회차에 검토 ok·completion=verified. 옛·새 실행기의 결과 차이는 가짜 하네스 32개 시나리오에서 0건이었다.
+
 세지 않은 것: 남은 미정 행이 정말 물어야 할 질문인지(goal-context 는 양쪽 모두 검토 필요로, rubric.md 판정을 하지 않았다), 구현 단계 결과, `evals/defects/run.sh`(고쳤지만 실행하지 않음). 사례 둘·구성당 2~3회의 작은 측정이며 요구 분석 전반의 개선으로 세지 않는다.
 
 같은 날 조사하고 채택하지 않은 것:
