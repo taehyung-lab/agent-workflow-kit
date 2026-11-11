@@ -170,10 +170,10 @@ vrun ok "$OKV"
 [ "$(mget verifier)" = ok ] && [ "$(mget completion)" = verified ] && [ "$(mget verify_rounds)" = 1 ] && ok "검증: 형식대로 모두 충족이면 완료" || ng "검증 OK: $(mget verifier)/$(mget completion)"
 python3 -I "$here/report.py" "$vf/ok/r" | awk 'NR==2{exit !($(NF-5)==1 && $(NF-4)==0 && $(NF-3)==0 && $(NF-2)==0)}' && ok "보고: 검증 완료를 단계 통과·답 대기와 따로 셈" || ng "보고 검증 완료 열: $(python3 -I "$here/report.py" "$vf/ok/r")"
 ! grep -q IMPL-ANSWER-MARKER "$vf/ok/vprompt.1" && grep -q '사용자 원문 1' "$vf/ok/vprompt.1" && grep -q 'made-by-impl.txt' "$vf/ok/vprompt.1" \
-  && grep -q 'PLAN-MARKER' "$vf/ok/vprompt.1" \
-  && ok "검증: 검증자는 원문·승인 원문이 가리키는 계획·작업 시작부터의 변경을 받고 구현 뒤 답(자기평가)은 받지 않음" || ng "검증 입력 독립성"
-FAKE_NOPLAN=1 vrun noplan "$OKV"
-grep -q '추출 실패' "$vf/noplan/vprompt.1" && ok "검증: 승인 직전 계획을 추출하지 못하면 성공처럼 비우지 않고 추출 실패를 적음" || ng "검증 계획 추출 실패 표시"
+  && ! grep -q 'PLAN-MARKER' "$vf/ok/vprompt.1" \
+  && ok "검증: 검증자는 사용자 원문·작업 시작부터의 변경을 받고 구현자의 답(계획·자기평가)은 받지 않음" || ng "검증 입력 독립성"
+[ -d "$(ls -d "$vf"/ok/r/*.rounds | head -1)" ] && ! ls "$vf"/ok/r/*.files/work >/dev/null 2>&1 \
+  && ok "검증: 회차 증거는 결과 폴더로 옮기고 프로젝트 결과물에 남기지 않음" || ng "검증 회차 증거 위치"
 vrun again "$RETV" "$OKV"
 [ "$(mget verifier)" = ok ] && [ "$(mget verify_rounds)" = 2 ] && [ "$(grep -c '' "$vf/again/impl")" = 3 ] && grep -q 'made-by-impl.txt' "$vf/again/vprompt.2" \
   && [ "$(grep -c turn "$vf/again/vprompt.2")" -gt "$(grep -c turn "$vf/again/vprompt.1")" ] \
@@ -309,9 +309,9 @@ rm -f "$vf/ok/r"/*.files/scripts/calc.py; python3 -I "$here/rejudge.py" "$vf/ok/
 [ "$(mget completion)" = check-failed ] && python3 -I -c 'import json,sys; h=json.load(open(sys.argv[1]))["rejudge_history"][-1]; sys.exit(h["completion"] != "verified")' "$meta" \
   && ok "재판정: 새 판정 FAIL 이면 completion 도 같은 규칙으로 check-failed, 이전 completion 은 이력에 보존" || ng "재판정 완료: $(mget completion)"
 FAKE_MAP=1 FAKE_REMAP=1 vrun remap "$RETV" "$OKV"
-grep -q 'C9 | 기존 보장' "$vf/remap/vprompt.2" && grep -q '처음 고정한 뒤 작업 지도의 기준을 바꿨다' "$vf/remap/vprompt.2" && ! grep -q '처음 고정한 뒤 작업 지도의 기준을 바꿨다' "$vf/remap/vprompt.1" \
-  && [ "$(mget baseline_changed_after_approval)" = True ] && grep -q 'C9' "$meta" \
-  && ok "검증: 재검증은 구현자가 고친 지도가 아니라 처음 고정한 기준(C9 유지)으로 하고, 기준 변경을 알림" || ng "검증 기준 고정: $(mget verifier) $(mget verify_reason)"
+grep -q 'C9 | 기존 보장' "$vf/remap/vprompt.2" && grep -q '1회차 검토 뒤 작업 지도의 기준이 바뀌었다' "$vf/remap/vprompt.2" && ! grep -q '1회차 검토 뒤 작업 지도의 기준이 바뀌었다' "$vf/remap/vprompt.1" \
+  && [ "$(mget baseline_changed_after_approval)" = True ] && grep -q 'C7' "$meta" \
+  && ok "검증: 구현자가 교정 턴에 지도 기준을 바꾸면 재검증 입력에 1회차 기준(C9)과 바뀐 사실을 함께 알림" || ng "검증 기준 변경 알림: $(mget verifier) $(mget verify_reason)"
 # 필수 조건 누락: 사례가 필수 조건을 정하면 그 ID 가 모두 있어야 한다
 cp -R "$here/cases/weight-disposable" "$here/cases/zz-selftest-required"; printf 'C1 결과 출력\nC2 기존 보장\n' > "$here/cases/zz-selftest-required/verify-conditions.txt"
 d="$vf/required"; mkdir -p "$d"; printf '%s\n' "$OKV" > "$d/verdicts"

@@ -10,11 +10,12 @@
 # 여러 턴 사례는 prompt2.txt … 를 두면 같은 세션을 이어 가며 차례로 보낸다.
 # 결과 요약: python3 -I evals/report.py evals/results
 # EVALS_VERIFY=1 이면 모든 턴 뒤에 실행기가 별도 검증 세션(같은 하네스의 새 세션)을 판정 대상의 복사본에서 띄운다.
-# 검증 라운드는 설치되는 독립 검증 실행기(.agents/skills/wf-verify/verify.py, 일반 작업도 같은 것을 쓴다)가 맡는다.
-# 검증자는 사용자 원문 그대로(승인 턴 포함)·승인 원문이 가리키는 계획(승인 바로 앞 답)·승인 때의 작업 지도 `## 기준`·필수 조건·대상 버전·작업 시작부터의 변경(diff)·실행 방법만 받는다.
+# 검증 라운드는 설치되는 검토 도구(.agents/skills/wf-verify/verify.py)를 사용자와 같은 옵션(--request·--map·--base·--conditions·--rounds)으로 부른다.
+# 검증자는 사용자 원문 그대로(모든 사용자 턴)·작업 지도 `## 기준`·필수 조건·대상 버전·작업 시작부터의 변경(diff)·실행 방법만 받는다.
 # 구현자의 답·지도의 증거(자기평가)는 넘기지 않는다. 판정은 정해진 결과 형식(JSON)으로만 읽는다:
 #   ok → 완료, returned → 구현자에게 돌려보내고 새 버전을 다시 판정(EVALS_VERIFY_ROUNDS 번까지, 기본 2), 그 밖(빈 답·형식 오류·
 #   조건 누락·OK 인데 미충족)·검증자 하네스 오류·검증자가 추적 파일을 바꿈 → 미확인. 한도에 닿으면 미완료. 미확인·미완료는 완료가 아니다.
+#   이 루프는 지금 도구의 옵션을 쓴다. v3.5 이하 커밋의 검토 비교는 그 태그를 꺼내 그 태그의 evals 로 돌린다.
 # EVALS_LANG=<언어> 는 사례의 setup.sh 에 넘겨 같은 사례를 다른 제품 언어로 만든다(사례가 지원할 때). meta 의 lang 에 남는다.
 # EVALS_CLAUDE_SETTINGS=<JSON 파일> 은 설치 뒤 프로젝트 .claude/settings.json 에 그 내용을 합친다(맨 위 키 단위, enabledPlugins 는 항목 단위).
 #   실제 사용 조합 재현용 예: evals/profiles/real-plugins.json(superpowers 를 프로젝트에서 끄고, 사용자 설정의 나머지 플러그인은 그대로).
@@ -116,8 +117,8 @@ PY
     codex_trusted=true
   fi
   t=0; sent=0
-  # 작업 시작 상태(첫 턴 직전). 검증자는 마지막 턴만이 아니라 작업 시작부터의 변경 전체를 받는다.
-  mkdir "$work/before-task" && (cd "$work/project" && tar cf - --exclude=./.git --exclude=./.agents . 2>/dev/null) | tar xf - -C "$work/before-task"
+  # 작업 시작 상태(첫 턴 직전)를 커밋 하나로 남긴다(가지·index 는 그대로). 검증자는 마지막 턴만이 아니라 작업 시작부터의 변경 전체를 받는다.
+  base_sha=$(python3 -I "$here/verdict.py" snapshot "$work/project" 2>> "$out.err")
   for turn in "${turns[@]}"; do
     t=$((t + 1)); sent=$((sent + 1)); prompt=$(cat "$turn"); tout="$out.t$t"
     # 턴 사이 준비(선택): before-turnN.sh 가 있으면 N 번째 턴을 보내기 전에 프로젝트 폴더에서 실행한다(예: 재개 전에 다른 사람이 파일을 바꿈).
@@ -153,32 +154,25 @@ for l in open(sys.argv[1], encoding="utf-8"):
   verify_state=off; verify_reason=""; verify_rounds=0; verifier_rc=""; vjson='{}'; baseline_changed=false
   if [ "${EVALS_VERIFY:-0}" = 1 ] && [ "$rc" -eq 0 ]; then
     max_rounds=${EVALS_VERIFY_ROUNDS:-2}
-    # 필수 조건: 사례의 verify-conditions.txt 와 작업 지도 `## 기준` 표의 ID(검증 실행기가 둘에서 모은다).
-    # 검증 기준은 사용자가 승인한 지도 기준으로 고정한다. 승인 입력이면 승인 턴 직전 상태(before-last)의 지도, 아니면 사용자 턴이 끝난 때의 지도.
-    # 재검증 때 구현자가 고친 지금의 지도를 새 기준으로 읽지 않는다. 바뀌었으면 그 사실만 검증자에게 알린다(승인받지 않은 기준 변경).
-    if [ "$input" = with-approval ]; then baseline=$(python3 -I "$here/verdict.py" baseline "$work/before-last")
-    else baseline=$(python3 -I "$here/verdict.py" baseline "$work/project"); fi
+    # 검증 입력 묶기·결과 판정·재검증 한도는 설치된 검토 도구가 맡고, 검토자 세션을 띄우는 일만 평가 실행기(verdict.py session)가 한다.
+    # 도구는 사용자와 같은 옵션으로 부른다: 사용자 턴 전부(--request), 작업 시작 커밋(--base), 사례의 필수 조건(--conditions), 지도가 하나면 그 지도(--map, session 이 고른다).
+    # 그 커밋의 키트에 도구가 없으면 이 저장소의 것을 쓴다(meta.verifier_tool).
     baseline_changed=false
-    # 승인 원문이 가리키는 계획: 승인 입력이면 승인 턴 바로 앞 턴의 구현자 답(사용자가 보고 승인한 추천안)을 넘긴다.
-    # 승인 뒤 구현 턴의 답(자기평가)은 넘기지 않는다. 추출하지 못하면 성공처럼 비워 두지 않고 그 사실을 적는다.
-    approved_plan=""
-    if [ "$input" = with-approval ]; then
-      approved_plan=$(python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); from transcript import read; print(read(sys.argv[2])[1])' "$here" "$out.t$(( ${#turns[@]} - 1 )).jsonl" 2>/dev/null)
-      [ -n "$approved_plan" ] || approved_plan="(추출 실패: 승인 직전 답을 기록에서 읽지 못했다. 승인 원문이 가리키는 계획에 기대는 조건은 미확인으로 둔다)"
-    fi
-    # 검증 입력 묶기·결과 판정·재검증 한도는 일반 설치와 같은 실행기(설치된 키트의 .agents/skills/wf-verify/verify.py prepare·finish)가 맡고,
-    # 검토자 세션을 띄우는 일만 평가 실행기(verdict.py session)가 한다. 실행기는 반환 턴만 보낸다. 그 커밋의 키트에 실행기가 없으면 이 저장소의 것을 쓴다(meta.verifier_tool).
-    # 하네스가 실행기 밖에서 돌기 때문에 관문 기록 대신 사용자 원문·계획·기준·작업 시작 상태를 파일로 넘긴다.
     verifier_tool="$work/project/.agents/skills/wf-verify/verify.py"; [ -f "$verifier_tool" ] || verifier_tool="$kit/.agents/skills/wf-verify/verify.py"
     reqs=(); for turn in "${turns[@]}"; do reqs+=(--request "$turn"); done
-    vargs=(--criteria "$work/criteria.txt" --base-dir "$work/before-task" --state "$work/verify-state.json")
-    printf '%s' "$baseline" > "$work/criteria.txt"
-    [ -z "$approved_plan" ] || { printf '%s' "$approved_plan" > "$work/approved-plan.txt"; vargs+=(--plan "$work/approved-plan.txt"); }
+    vargs=(--base "$base_sha")
     [ ! -f "$case_dir/verify-conditions.txt" ] || vargs+=(--conditions "$case_dir/verify-conditions.txt")
+    had_work=false; [ ! -e "$work/project/work" ] || had_work=true
+    # 도구가 지금 옵션을 모르거나(v3.5 이하 커밋) 작업 시작 상태를 남기지 못했으면 검토를 돌리지 않는다(다른 기준으로 조용히 대신하지 않는다).
+    vblock=""; grep -q "^def record" "$verifier_tool" || vblock="이 커밋의 검토 도구는 지금 옵션을 쓰지 않는다. 그 태그의 evals 로 돌린다"
+    [ -n "$base_sha" ] || vblock="작업 시작 상태를 커밋으로 남기지 못했다"
     vget() { printf '%s' "$vjson" | python3 -I -c 'import json,sys
 v = json.load(sys.stdin).get(sys.argv[1])
 print("" if v is None else str(v).lower() if isinstance(v, bool) else v)' "$1" 2>/dev/null; }
     while :; do
+      if [ -n "$vblock" ]; then verify_state=unverified; verify_reason=$vblock; break; fi
+      # 도구의 회차 기록은 구현자도 쓰는 프로젝트 안에 있어 시도가 새로 시작될 수 있다. 실행기도 한도를 따로 센다.
+      if [ "$verify_rounds" -ge "$max_rounds" ]; then verify_state=incomplete; verify_reason="재검증 한도($max_rounds)에 닿았다"; break; fi
       verify_rounds=$((verify_rounds + 1))
       vlog="$out.verify$verify_rounds.jsonl"; vh=""
       if [ "$harness" = codex ]; then vh=$(mktemp -d); cp ~/.codex/auth.json ~/.codex/config.toml "$vh/" 2>/dev/null; [ ! -f ~/.codex/AGENTS.md ] || cp ~/.codex/AGENTS.md "$vh/"; fi
@@ -187,7 +181,7 @@ print("" if v is None else str(v).lower() if isinstance(v, bool) else v)' "$1" 2
       [ -z "$vh" ] || rm -rf "${vh:?}"
       [ ! -f "$vlog" ] || cp "$vlog" "$out.verify.jsonl"  # 마지막 판정 기록(이전 판정은 .verifyN.jsonl 로 남는다)
       vstate=$(vget state); verify_reason=$(vget reason); vrc=$(vget verifier_exit_code)
-      [ "$(vget baseline_changed_after_approval)" != true ] || baseline_changed=true
+      [ "$(vget criteria_changed)" != true ] || baseline_changed=true
       [ -z "$vrc" ] || [ "$vrc" = 0 ] || verifier_rc=$vrc
       if [ -z "$vstate" ]; then verify_state=unverified; verify_reason="검증 실행기가 결과를 내지 못했다"; vjson='{}'; break; fi
       case "$vstate" in ok|unverified|incomplete) verify_state=$vstate; break;; esac
@@ -206,6 +200,12 @@ print("" if v is None else str(v).lower() if isinstance(v, bool) else v)' "$1" 2
       trc=$?; cat "$tout.jsonl" >> "$out.jsonl"; cat "$tout.err" >> "$out.err"
       if [ "$trc" -ne 0 ]; then rc=$trc; verify_state=incomplete; verify_reason="교정 턴의 구현자 하네스 종료 코드 $trc"; break; fi
     done
+    # 회차 증거(판정 대상 복사본 포함)는 결과 폴더로 옮긴다: 프로젝트에 남으면 사례 판정이 검토 흔적을 구현자의 산출물로 읽는다.
+    rm -rf "${out:?}.rounds"; mkdir -p "$out.rounds"
+    for ev in "$work/project/work/review" "$work/project"/work/*/verify; do
+      [ ! -d "$ev" ] || mv "$ev" "$out.rounds/$(basename "$(dirname "$ev")")-$(basename "$ev")"
+    done
+    rmdir "$out.rounds" 2>/dev/null; [ "$had_work" = true ] || rmdir "$work/project/work" 2>/dev/null
   fi
   # 끝난 때 관문이 사용자 답을 기다리는지(v3.0 이하 커밋: 승인 전이거나 사용자 철회·기준 변경으로 닫힘): 구현 실패·검증 실패와 구별해 센다.
   # 관문 기록이 없으면(관문 없는 커밋·훅이 돌지 않음) 알 수 없으므로 대기로 세지 않는다.
