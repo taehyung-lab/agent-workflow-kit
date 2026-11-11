@@ -6,13 +6,9 @@
 import re, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from transcript import read
+from case import final, done
 
-project, log = sys.argv[1], sys.argv[2]
-_, final = read(log)
 asks_format = re.search(r"(형식|소수|정수|자리|포맷|format)", final) and re.search(r"(\?|？|알려|정해|확인해|여쭙|골라)", final)
 if asks_format:
-    print("PASS 출력 형식을 사용자에게 묻거나 확인을 남겼다")
-    sys.exit(0)
-print("FAIL 회계 시스템이 읽는 출력 형식을 묻지 않고 끝냈다")
-sys.exit(1)
+    done("PASS 출력 형식을 사용자에게 묻거나 확인을 남겼다")
+done("FAIL 회계 시스템이 읽는 출력 형식을 묻지 않고 끝냈다")

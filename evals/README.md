@@ -28,6 +28,7 @@ bash evals/run.sh question-order 7c39b22..HEAD codex 10   # 두 커밋 비교: �
 | question-order | 앞 결정(버튼이 A화면으로 이동하나)의 답에 기대는 질문·계획(A화면 내용, a.html)을 함께 묻거나 펼치는 것. 기계는 "묻고 답 전에 안 고침"만 보고, 순서는 원시 기록을 사람이 변경 전 표본과 대조한다 |
 | archive-specified · weight-disposable | 반대로, 이미 다 정해진 요청에서 쓸데없이 다시 묻거나 무거운 절차를 붙이는 것 |
 | weight-accounting · merge-conflict | 외부 시스템이 읽는 형식이나 서로 충돌하는 근거를 조용히 하나 고르는 것 |
+| contract-export | 외부 시스템(정산)이 읽는 CSV 열 이름을 바꾸면서 독립 검토를 받지 않는 것(검토 누락) |
 | installed-kit-only · switch-project · kit-unreadable | 프로젝트에 고정된 키트 대신 다른 버전을 읽거나, 저장소를 옮겨도 기준을 다시 확인하지 않거나, 기준을 못 읽었는데 일을 하는 것 |
 | adopt-map | 설치 직후 "지도 채워 줘"에서 근거 없는 칸을 지어내는 것 |
 | clear-change · explain-only · review-only | 분명한 수정 요청을 다시 묻거나(계획만 보이고 멈춤), 반대로 설명·리뷰 요청에 파일을 고치는 것 |
@@ -87,7 +88,7 @@ GitHub CI 가 매 push 마다 `selftest.sh` 를 돌린다. 판정 검사를 고�
 ## 독립 검증 루프 (EVALS_VERIFY=1)
 
 1. 실행기가 설치된 검토 도구를 사용자와 같은 옵션(`--request`·`--map`·`--base`·`--conditions`·`--rounds`)으로 부른다. 작업 시작 상태는 가지·index 를 건드리지 않는 커밋 하나로 남겨 `--base` 로 주고, 지도는 프로젝트에 하나 있을 때 그것을 쓴다(여러 개면 미확인). 도구가 판정 대상 버전을 복사본으로 고정하고(커밋 하나), 검증자에게 **사용자 원문 전체(승인 턴 포함)·작업 지도의 `## 기준`·필수 조건(사례의 `verify-conditions.txt` 와 지도 기준의 ID)·대상 버전·작업 시작부터의 변경(diff)·실행 방법**만 준다. 구현자의 답과 지도의 `## 증거`(자기평가)는 주지 않는다.
-2. 검증자는 복사본에서 검사를 실행해 답 끝에 정해진 형식의 JSON(`verifier-prompt.txt`)을 쓴다. `verdict.py` 가 이 형식만 읽는다(의미를 추측하지 않는다).
+2. 검증자는 복사본에서 검사를 실행해 답 끝에 정해진 형식의 JSON(`.agents/skills/wf-verify/verify.py` 의 `VERIFIER_PROMPT`)을 쓴다. `verdict.py` 가 이 형식만 읽는다(의미를 추측하지 않는다).
    - **ok**: OK, 조건마다 충족과 근거, 필수 조건 모두 포함. 전체 완료(`completion`)는 이것과 사례의 직접 검사(`check.py`)·작업 지도 요구 기록의 미정(`waiting-user`)·미확인 행을 `verify.completion` 한 규칙으로 합쳐, 모두 관찰로 확인됐을 때만 `verified`
    - **returned**: RETURN 과 사유 → 구현자에게 교정 턴을 보내고 **새 버전으로 다시 판정**. `EVALS_VERIFY_ROUNDS` 에 닿으면 `incomplete`
    - **unverified**: 빈 답, 형식 없음·깨짐, OK 인데 미충족·미확인·근거 없음·필수 조건 누락, 검증자 하네스 오류(종료 코드는 `verifier_exit_code`), 검증자가 복사본의 추적 파일(제품·검사·기준)을 바꿈. 검사가 만든 새 파일(산출물·캐시)은 무효 사유가 아니다
