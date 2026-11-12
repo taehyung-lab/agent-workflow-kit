@@ -1,6 +1,6 @@
 """키트 커밋을 설치한 새 프로젝트를 만들고, 그 안에서 하네스 세션을 띄우고 이어 가는 일을 한 곳에서 맡는다.
 
-평가 실행기(run.py)·결함 사례(defects/run.sh)·goalflow·설치 흐름 시험이 같이 쓴다. Claude 와 Codex 의 차이(명령줄, 임시 홈,
+평가 실행기(run.py)·goalflow·설치 흐름 시험이 같이 쓴다. Claude 와 Codex 의 차이(명령줄, 임시 홈,
 훅·프로젝트 신뢰, 네트워크 옵션, 제한 시간, 세션 id 읽기)는 두 어댑터(Claude·Codex) 안에만 둔다. 부르는 쪽은 하네스 이름으로 가르지 않는다.
 
 프로젝트:
@@ -15,10 +15,6 @@
   review(directory, prompt, log)  검토자 세션 한 번(구현자와 다른 새 세션). 종료 코드, 하네스가 없으면 None
   version()                 하네스 버전 한 줄
   close(rollout)            임시 홈 정리. Codex 는 그 전에 세션 원본 기록을 rollout 에 남긴다
-
-셸에서 쓰는 호출자용:
-  python3 -I evals/session.py project <새 폴더> <키트 커밋> [--setup <setup.sh>] [--author <이름> <메일>] [--messages <준비 커밋> <설치 커밋>]
-  python3 -I evals/session.py start <claude|codex> <프로젝트> <프롬프트> <기록 앞부분>   (종료 코드는 하네스의 것)
 """
 import fnmatch, json, os, re, shutil, subprocess, sys, tempfile
 from collections import namedtuple
@@ -260,25 +256,3 @@ class Codex(Harness):
 
 
 HARNESSES = {"claude": Claude, "codex": Codex}
-
-
-def main(argv):
-    if argv[:1] == ["project"] and len(argv) >= 3:
-        opt = lambda name, n: argv[argv.index(name) + 1: argv.index(name) + 1 + n] if name in argv else None
-        setup, author, messages = opt("--setup", 1), opt("--author", 2), opt("--messages", 2)
-        with tempfile.TemporaryDirectory() as tmp:
-            kit_checkout(argv[2], Path(tmp) / "kit")
-            build_project(argv[1], Path(tmp) / "kit", prepare=case_fixture(setup and setup[0]),
-                          **({"author": tuple(author)} if author else {}), **({"messages": tuple(messages)} if messages else {}))
-        return 0
-    if argv[:1] == ["start"] and len(argv) == 5 and argv[1] in HARNESSES:
-        harness = HARNESSES[argv[1]](argv[2])
-        try:
-            return harness.start(argv[3], argv[4]).exit_code
-        finally:
-            harness.close()
-    sys.exit(__doc__.split("셸에서 쓰는 호출자용:", 1)[1])
-
-
-if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))

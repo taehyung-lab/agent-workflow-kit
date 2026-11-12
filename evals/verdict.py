@@ -129,5 +129,3 @@ if __name__ == "__main__":
     cmd = sys.argv[1]
     if cmd == "session":
         sys.exit(session(sys.argv[2:]))
-    if cmd == "snapshot":
-        print(snapshot(sys.argv[2]))
