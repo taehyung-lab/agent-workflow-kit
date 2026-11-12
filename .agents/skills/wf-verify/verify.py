@@ -1,7 +1,8 @@
 """요구 기록 검사와 독립 검토 도구. 검토자는 띄우지 않는다(하네스의 하위 에이전트가 검토자다).
 
-  python3 .agents/skills/wf-verify/verify.py record --map work/<작업명>/work.md [--check <PASS|FAIL|REVIEW>]
+  python3 .agents/skills/wf-verify/verify.py record --map work/<작업명>/work.md [--check <PASS|FAIL|REVIEW>] [--review-required]
         작업 지도 `## 기준` 의 요청 원문·요구 기록 표를 검사하고 전체 완료를 판정한다(검토 없이). 지도를 쓰거나 고친 뒤, 완료라고 말하기 전에 쓴다.
+        --review-required: 독립 검토가 필수인 작업(사용자 요구·검사 약화). 검토 없이는 완료가 review-missing 이다(검토 통과는 finish 가 판정한다).
   python3 .agents/skills/wf-verify/verify.py prepare --map work/<작업명>/work.md [--request <파일>]... [--base <커밋>] [--output <산출물 파일>] [--conditions <파일>] [--rounds 2]
   python3 .agents/skills/wf-verify/verify.py prepare --request <요청 원문 파일> [--request <뒤 메시지 파일>]... [--base <커밋>] [--output <산출물 파일>] [--conditions <파일>] [--rounds 2]
         독립 검토 입력을 고정해 묶는다. --conditions: 사용자·평가자가 따로 정한 필수 조건 파일(줄 머리·표 첫 칸의 ID 가 필수 조건이 된다). --output: 답·보고서·실행 기록을 판정 대상으로(분석·설계·질문만 한 작업, 또는 기준이 구현자의 실행·보고를 묻는 작업)
@@ -437,7 +438,7 @@ def copy_kit_paths(vdir, base):
             shutil.copy2(src, dst)
 
 
-USAGE = ("사용: verify.py record --map work/<작업명>/work.md [--check PASS|FAIL|REVIEW]\n"
+USAGE = ("사용: verify.py record --map work/<작업명>/work.md [--check PASS|FAIL|REVIEW] [--review-required]\n"
          "        → 지도 `## 기준` 의 요청 원문·요구 기록 표를 검사하고 전체 완료를 판정한다(검토 없이)\n"
          "      verify.py prepare --map work/<작업명>/work.md [--request <파일>]... [--base <커밋>] [--output <산출물 파일>] [--conditions <파일>] [--rounds N]\n"
          "      verify.py prepare --request <요청 원문 파일> [--request <파일>]... [--base <커밋>] [--output <산출물 파일>] [--rounds N]\n"
@@ -470,12 +471,12 @@ def open_rows(criteria):
             problems, rows is not None)
 
 
-def report(result, check=None):
+def report(result, check=None, required=False):
     """전체 완료를 한 규칙(completion)으로 합쳐 결과를 낸다. record·prepare 의 조기 종료·finish 가 같은 함수를 쓴다.
     check: 구현자가 직접 실행한 검사의 결과. 받지 않았으면 가정하지 않는다(전체 완료는 미확인)."""
     result["direct_check"] = check
     result["completion"] = completion("off" if result.get("review") == "off" and result["state"] == "ok" else result["state"], check, bool(result.get("open_decisions")),
-                                      unresolved=bool(result.get("unconfirmed")))
+                                      required=required, unresolved=bool(result.get("unconfirmed")))
     if result.get("kept"):
         Path(result["kept"], "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
     if result.get("open_decisions"):
@@ -491,8 +492,10 @@ def report(result, check=None):
 def record(args):
     """작업 지도의 요청 원문·요구 기록 표를 검사하고, 독립 검토 없이 전체 완료를 판정한다. 결과의 review 는 늘 off 다(검토 결과가 아니다).
     형식 문제는 returned(지도를 고친다), 지도·기준이 없으면 unverified. 미정 행은 waiting-user, 미확인 행은 unverified 로 완료를 막는다.
-    독립 검토가 필수인 작업(사용자 요구·검사 약화)의 완료는 이 명령이 아니라 prepare·finish 가 판정한다."""
+    독립 검토가 필수인 작업(사용자 요구·검사 약화)은 --review-required 를 붙인다: 이 명령은 검토를 하지 않으므로 완료가 review-missing 이 되고,
+    완료는 prepare·finish 가 판정한다."""
     check = opt(args, "--check")
+    required = "--review-required" in args
     root = project_root()
     map_rel = map_path(root, opt(args, "--map"))
     if not map_rel or check not in CHECKS:
@@ -504,7 +507,7 @@ def record(args):
     if not body:
         result.update(state="unverified", reason=f"작업 지도 {map_rel} 가 없다" if body is None else "작업 지도의 `## 기준` 이 비었다")
         print(f"[verify] 미확인: {result['reason']}", file=sys.stderr)
-        return report(result, check)
+        return report(result, check, required)
     pending, unknown, problems, has_table = open_rows(body)
     if not quoted_request(body):
         problems.insert(0, "`요청 원문` 항목이 없거나 비었다(사용자 글 그대로 옮긴다)")
@@ -513,10 +516,10 @@ def record(args):
     if problems:  # 형식이 틀린 표의 미정·미확인 목록은 믿을 수 없다: 표를 고치는 것이 먼저다
         result.update(state="returned", reason="작업 지도 요구 기록 형식: " + " / ".join(problems))
         print(f"[verify] 돌려보냄: {result['reason']}", file=sys.stderr)
-        return report(result, check)
+        return report(result, check, required)
     result.update(open_decisions=pending, unconfirmed=unknown)
-    print("[verify] 요청 원문과 요구 기록 표의 형식이 맞다. 독립 검토가 필수인 작업(사용자 요구·검사 약화)은 prepare 로 검토를 받는다.", file=sys.stderr)
-    return report(result, check)
+    print("[verify] 요청 원문과 요구 기록 표의 형식이 맞다." + (" 독립 검토가 필수라 검토 전에는 완료가 아니다: prepare 로 검토를 받는다." if required else ""), file=sys.stderr)
+    return report(result, check, required)
 
 
 def prepare(args):

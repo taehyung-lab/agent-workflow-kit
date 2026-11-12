@@ -409,6 +409,8 @@ exit 0
     check("record: 지도가 없으면 unverified(종료 5), 완료가 아님", rc == 5 and o.get("completion") == "unverified")
     rc, o = rec(write_map("rec-empty", f"- 요청 원문: {REQ}\n\n" + HEAD), "--check", "PASS")
     check("record: 행이 없는 표는 완료로 세지 않는다(returned)", rc == 3 and o.get("completion") == "returned")
+    check("record --review-required: 필수 검토 없이는 직접 검사 PASS 여도 완료가 아니다(review-missing)",
+          rec(m_done, "--check", "PASS", "--review-required")[1].get("completion") == "review-missing")
     check("record 결과에는 review=off 가 붙어 검토 결과와 구별된다", rec(m_done, "--check", "PASS")[1].get("review") == "off")
     # 평가 관찰: 세션이 record 만 실행했으면 독립 검토를 한 것으로 세지 않는다
     sys.path.insert(0, str(KIT / "evals"))

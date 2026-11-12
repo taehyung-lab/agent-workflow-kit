@@ -11,7 +11,7 @@ description: 완료라고 말하기 전에 요청 원문과 실제 결과를 대
 
 1. **원문과 대조한다.** 요청 원문과 사용자 답을 다시 읽고, 요구마다 실행한 명령과 실제 출력으로 확인한다. 바꾼 코드가 지키던 기존 보장도 같다. 확인하지 못한 것은 사유·재개 조건과 함께 미확인으로 남긴다(빼거나 낮추는 것은 사용자가 정한다).
 2. **확인받지 않은 결정을 찾는다.** 결과에 들어간 동작 가운데 `wf-ask` 에서 사용자에게 보이지 않은 읽기·선택이 있으면 완료가 아니다. `wf-ask` 로 돌아가 묻는다.
-3. **지도가 있으면 판정을 받는다.** `python3 .agents/skills/wf-verify/verify.py record --map <지도> --check <직접 검사 PASS|FAIL|REVIEW>`. 완료는 completion=verified 뿐이다(waiting-user 면 묻는다).
+3. **지도가 있으면 판정을 받는다.** `python3 .agents/skills/wf-verify/verify.py record --map <지도> --check <직접 검사 PASS|FAIL|REVIEW>`. 완료는 completion=verified 뿐이다(waiting-user 면 묻는다). 독립 검토가 필수인 작업은 `--review-required` 를 붙인다(검토 전에는 review-missing).
 4. **독립 검토가 필요하면 받는다.** 사용자가 요구하거나 검사를 지우·건너뛰·약화할 때는 반드시, 어떤 보장이 깨질 수 있는데 직접 확인만으로 확인하기 어려울 때는 골라서 받는다(그 이유를 한 줄로 밝힌다).
    1. `verify.py prepare --map <지도>` (지도가 없으면 사용자 글 그대로를 `--request <파일>`, 작업 전 커밋이 HEAD 가 아니면 `--base <커밋>`, 분석·설계 산출물이나 구현자 보고·명령·출력은 `--output <파일>`). 입력이 모자라면 미확인이다(요약으로 대신하지 않는다).
    2. `prompt_file` 을 그대로 하위 에이전트(검토자)에게 맡긴다.
