@@ -1,10 +1,11 @@
-"""실행 기록에서 판정과 따로 관찰할 사실을 뽑아 JSON 으로 낸다(run.sh 가 meta 의 observed 에 넣는다).
+"""실행 기록에서 판정과 따로 관찰할 사실을 뽑아 JSON 으로 낸다(실행기 run.py 가 meta 의 observed 에 넣는다).
+사건 형식은 transcript.py 가 읽고, 이 파일은 그 호출 목록에서 무엇을 사실로 셀지만 정한다.
 
 - final_question: 마지막 답에 질문 표지가 있는가(후보일 뿐, 의미 판정은 사람이 한다)
 - last_turn_edits: 마지막 턴 기록에 남은 편집 대상 파일(편집 뒤 되돌려 최종 파일이 같아도 남는다)
 - claims_independent_verification: 마지막 답이 독립·별도 검증을 통과했다고 주장하는가
 - verify_run: 마지막 턴에 독립 검증 실행기(wf-verify/verify.py, 옛 verify.sh)를 실행한 마지막 결과. 실행기가 출력 끝에 찍는 결과 JSON 을
-  실행기 자신의 함수(verify.run_result)로 읽는다. "ok"·"returned"·"incomplete"·"unverified"(하네스 없음·빈 답 등, 사유는 verify_run_reason)는
+  평가 쪽 함수(verdict.run_result)로 읽는다. 요구 기록 검사(record, 결과의 review=off)는 검토가 아니므로 세지 않는다. "ok"·"returned"·"incomplete"·"unverified"(하네스 없음·빈 답 등, 사유는 verify_run_reason)는
   실행기의 판정이고, "error" 는 실행기 경로를 부른 명령이 결과 JSON 없이 0 이 아닌 코드로 끝난 것(실행 실패), "unknown" 은 그 명령의
   결과가 기록에 없거나 출력이 비었거나, 결과 JSON 이 다른 출력과 섞이거나 종료 코드와 맞지 않아 이번 실행의 판정으로 쓸 수 없는 것,
   "none" 은 실행 증거가 없는 것이다. 앞선 실행 뒤에 실행기 경로를 부른 명령이 쓸 수 있는 결과를 내지 않으면(빈 출력·끊긴 JSON·읽기 포함)
@@ -14,7 +15,7 @@
   completion(verified·waiting-user 등)은 verify_run_completion, 미정·미확인 근거는 verify_run_inputs 에 남긴다.
   목록이 없는 예전 실행 결과는 빈 목록으로 바꾸지 않는다. 평가의 완료 판정과도 따로 센다.
 - verifier_observed: 마지막 턴에 검증자를 만들거나 앞서 만든 검증자에게 일을 맡긴 흔적(입력이 있는 하위 에이전트 생성 호출이나 위 실행기 실행)이 있는가.
-  Codex 의 exec 기록에는 생성 호출이 남지 않으므로, run.sh 가 남긴 원본 기록(<이름>.rollout.jsonl)의 spawn_agent 호출을 본다.
+  Codex 의 exec 기록에는 생성 호출이 남지 않으므로, 실행기가 남긴 원본 기록(<이름>.rollout.jsonl)의 spawn_agent 호출을 본다.
   Codex 의 수신자 없는 wait 나 Claude 의 입력 없는 호출은 흔적으로 치지 않는다. 검증자에게 넘긴 내용은 Codex 원본에서 암호화되어 볼 수 없다.
 - verifier_record: 검증자 생성을 볼 수 있는 기록이 있었는가. "observed"(생성 흔적 있음)·"none"(볼 수 있는 기록에 없음)·
   "no-record"(Codex 원본 기록이 없어 생성 여부를 볼 수 없음). 생성 흔적은 검증 통과의 증거가 아니다(무엇을 넘겼고 어떻게 판정했는지는 따로 본다).
@@ -30,7 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from judge import QUESTION
-from transcript import commands, read
+from transcript import calls, commands, is_codex, read, rollout_calls
 from verdict import run_result
 
 # 검증을 마쳤다는 주장만 센다. "별도 검토를 받겠습니다" 같은 계획 문장은 주장이 아니다.
@@ -50,34 +51,16 @@ def last_turn_log(log):
 
 def edits(path, names):
     found = set()
-    for line in open(path, encoding="utf-8"):
-        try:
-            e = json.loads(line)
-        except ValueError:
-            continue
-        if e.get("type") == "assistant":
-            for part in e.get("message", {}).get("content", []):
-                if part.get("type") != "tool_use":
-                    continue
-                inp = part.get("input") or {}
-                target = str(inp.get("file_path") or "")
-                cmd = re.sub(NOT_WRITE_REDIRECT, "", str(inp.get("command") or ""))
-                for n in names:
-                    if part.get("name") in ("Write", "Edit", "MultiEdit", "NotebookEdit") and target.endswith(n):
-                        found.add(n)
-                    elif n in cmd and re.search(WRITES, cmd):
-                        found.add(n)
-        item = e.get("item") or {}
-        if e.get("type") == "item.completed" and item.get("type") == "file_change":
-            for c in item.get("changes", []):
-                for n in names:
-                    if str(c.get("path", "")).endswith(n) or f"/{n}/" in str(c.get("path", "")):
-                        found.add(n)
-        if e.get("type") == "item.completed" and item.get("type") == "command_execution":
-            cmd = re.sub(NOT_WRITE_REDIRECT, "", item.get("command", ""))
-            for n in names:
-                if n in cmd and re.search(WRITES, cmd):
-                    found.add(n)
+    for c in calls(path):
+        inp = c["input"]
+        cmd = re.sub(NOT_WRITE_REDIRECT, "", str(inp.get("command") or "")) if c["kind"] in ("tool", "command") else ""
+        for n in names:
+            if c["kind"] == "tool" and c["name"] in ("Write", "Edit", "MultiEdit", "NotebookEdit") and str(inp.get("file_path") or "").endswith(n):
+                found.add(n)
+            elif c["kind"] == "edit" and any(p.endswith(n) or f"/{n}/" in p for p in inp["paths"]):
+                found.add(n)
+            elif n in cmd and re.search(WRITES, cmd):
+                found.add(n)
     return sorted(found)
 
 
@@ -89,6 +72,8 @@ def verify_run(path):
         if not re.search(EXECUTOR, c["command"]):
             continue
         result, doubt = run_result(c["output"], c["exit_code"])
+        if result and result.get("review") == "off":
+            continue  # 요구 기록 검사는 독립 검토 결과가 아니다
         if result and not doubt:
             state, reason, done = result["state"], str(result.get("reason") or ""), str(result.get("completion") or "")
             inputs = {key: result.get(key) for key in ("open_decisions", "unconfirmed")}
@@ -111,19 +96,13 @@ def verify_run(path):
 
 
 def subagent_observed(path):
-    for line in open(path, encoding="utf-8"):
-        try:
-            e = json.loads(line)
-        except ValueError:
-            continue
-        item = e.get("item") or {}
-        if item.get("type") == "collab_tool_call" and item.get("tool") != "wait" and (item.get("prompt") or item.get("receiver_thread_ids")):
+    """하위 에이전트에게 일을 맡긴 호출이 있는가. Codex 의 수신자 없는 wait 나 입력 없는 호출은 흔적으로 치지 않는다."""
+    for c in calls(path):
+        inp = c["input"]
+        if c["kind"] == "agent" and c["name"] != "wait" and (inp.get("prompt") or inp.get("receiver_thread_ids")):
             return True
-        if e.get("type") == "assistant":
-            for part in e.get("message", {}).get("content", []):
-                inp = part.get("input") or {} if part.get("type") == "tool_use" else {}
-                if part.get("name") in ("Agent", "Task") and inp.get("prompt"):
-                    return True
+        if c["kind"] == "tool" and c["name"] in ("Agent", "Task") and inp.get("prompt"):
+            return True
     return False
 
 
@@ -132,35 +111,13 @@ SUBAGENT_WORK = ("spawn_agent", "followup_task")
 
 
 def rollout_spawned_in_last_turn(log):
-    """Codex 원본 기록에서 마지막 사용자 턴 뒤에 하위 에이전트를 만들었는가. 원본이 없으면 None."""
+    """Codex 원본 기록에서 마지막 사용자 턴 뒤에 하위 에이전트를 만들었는가. 원본이 없거나 비었거나 읽을 수 없으면(기록 부족) None."""
     path = Path(str(log)[: -len(".jsonl")] + ".rollout.jsonl")
-    if not path.is_file():
+    made = rollout_calls(path) if path.is_file() else None
+    if made is None:
         return None
-    spawned, events = False, 0
-    for line in open(path, encoding="utf-8"):
-        try:
-            e = json.loads(line)
-        except ValueError:
-            continue
-        events += 1
-        p = e.get("payload") or {}
-        if e.get("type") == "event_msg" and p.get("type") in ("user_message", "task_started"):
-            spawned = False  # 새 사용자 턴이 시작되면 다시 센다(원본 형식에 따라 둘 중 하나로 표시된다)
-        elif e.get("type") == "response_item" and p.get("type") == "function_call" and p.get("name") in SUBAGENT_WORK:
-            spawned = True
-        elif e.get("type") == "response_item" and p.get("type") == "custom_tool_call" and any(f"{n}(" in str(p.get("input", "")) for n in SUBAGENT_WORK):
-            spawned = True  # 코드 실행 도구(exec) 안에서 tools.spawn_agent(...) 처럼 부른 경우
-    return spawned if events else None  # 비었거나 읽을 수 없는 원본은 기록 부족이다
-
-
-def codex_log(path):
-    """Codex exec 기록인가(첫 사건이 thread.started 등 Codex 형식)."""
-    for line in open(path, encoding="utf-8"):
-        try:
-            return json.loads(line).get("type", "").startswith(("thread.", "turn.", "item."))
-        except ValueError:
-            continue
-    return False
+    # 코드 실행 도구(exec) 안에서 tools.spawn_agent(...) 처럼 부른 경우도 센다
+    return any(c["name"] in SUBAGENT_WORK or any(f"{n}(" in c["code"] for n in SUBAGENT_WORK) for c in made)
 
 
 def observe(log, names):
@@ -171,7 +128,7 @@ def observe(log, names):
     subagent = subagent_observed(last) or bool(spawned)
     run, run_reason, run_completion, run_inputs = verify_run(last)
     observed = subagent or run != "none"
-    codex = codex_log(last)
+    codex = is_codex(last)
     record = "observed" if observed else ("no-record" if codex and spawned is None else "none")
     run_failed = run in ("returned", "incomplete", "unverified", "error") and not subagent
     first = Path(str(log).replace(".jsonl", ".t1.jsonl"))

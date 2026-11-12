@@ -10,6 +10,8 @@ import json, os, shutil, subprocess, sys, tempfile
 from pathlib import Path
 
 KIT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(KIT / "evals"))
+from session import ProjectError, build_project, worktree_kit  # 키트 커밋·프로젝트 만들기·설치는 평가 실행기와 같은 절차를 쓴다
 ok = failed = 0
 
 
@@ -36,19 +38,22 @@ with tempfile.TemporaryDirectory() as t:
     t = Path(t)
     # 1) 지금 작업 트리의 키트를 커밋으로 만든다(설치기는 커밋된 키트만 설치한다)
     kit = t / "kit"
-    for rel in ["install.sh", "AGENTS.md", "CLAUDE.md"]:
-        (kit / rel).parent.mkdir(parents=True, exist_ok=True); shutil.copy2(KIT / rel, kit / rel)
-    shutil.copytree(KIT / ".agents" / "skills", kit / ".agents" / "skills", ignore=shutil.ignore_patterns("__pycache__"))
-    sh(*G, "init", "-q", cwd=kit); sh(*G, "add", "-A", cwd=kit); sh(*G, "commit", "-qm", "kit", cwd=kit)
-    # 2) 제품 프로젝트(언어와 무관한 셸 검사 하나)와 실제 설치
-    proj = t / "proj"; proj.mkdir()
-    (proj / "README.md").write_text("# 앱\n검사: bin/test\n")
-    (proj / "ui.txt").write_text("button=로그인\nbutton_en=Login\n")
-    (proj / "bin").mkdir(); (proj / "bin" / "test").write_text("#!/bin/sh\ngrep -q 'button=로그인하기' ui.txt\n"); (proj / "bin" / "test").chmod(0o755)
-    (proj / "notes.txt").write_text("사용자 메모\n")
-    sh(*G, "init", "-q", cwd=proj); sh(*G, "add", "-A", cwd=proj); sh(*G, "commit", "-qm", "app", cwd=proj)
-    r = sh("bash", str(kit / "install.sh"), str(proj))
-    check("실제 install.sh 설치가 성공하고 검토 실행기가 설치된다", r.returncode == 0 and (proj / ".agents/skills/wf-verify/verify.py").is_file())
+    worktree_kit(kit)
+    # 2) 제품 프로젝트(언어와 무관한 셸 검사 하나)와 실제 설치(설치 결과는 커밋해 둔다)
+    proj = t / "proj"
+
+    def app(proj):
+        (proj / "README.md").write_text("# 앱\n검사: bin/test\n")
+        (proj / "ui.txt").write_text("button=로그인\nbutton_en=Login\n")
+        (proj / "bin").mkdir(); (proj / "bin" / "test").write_text("#!/bin/sh\ngrep -q 'button=로그인하기' ui.txt\n"); (proj / "bin" / "test").chmod(0o755)
+        (proj / "notes.txt").write_text("사용자 메모\n")
+
+    try:
+        build_project(proj, kit, prepare=app)
+        installed = True
+    except ProjectError as e:
+        installed = False; print(e)
+    check("실제 install.sh 설치가 성공하고 검토 실행기가 설치된다", installed and (proj / ".agents/skills/wf-verify/verify.py").is_file())
     def kit_hooks(path):
         d = json.loads(path.read_text()) if path.is_file() else {}
         return {ev: [h.get("command", "") for g in gs for h in g.get("hooks", [])] for ev, gs in d.get("hooks", {}).items()}
@@ -56,7 +61,6 @@ with tempfile.TemporaryDirectory() as t:
     check("설치는 승인 관문을 두지 않고, 훅은 Claude 세션 시작 정보 훅(wf-context) 하나뿐이다(Codex 에는 키트 훅 없음)", not (proj / ".agents/skills/wf-design").exists()
           and list(hc) == ["SessionStart"] and len(hc["SessionStart"]) == 1 and "wf-context/context.py" in hc["SessionStart"][0]
           and hx == {} and not (proj / ".codex/hooks.json").exists())
-    sh(*G, "add", "-A", cwd=proj); sh(*G, "commit", "-qm", "kit", cwd=proj)
     verifier = proj / ".agents/skills/wf-verify/verify.py"
 
     def write_map(name, crit, evidence=""):
@@ -223,9 +227,9 @@ exit 0
     # 1회차 뒤 기준이 바뀌면: 검토자에게 1회차 기준과 함께 알리고 원문과 대조하게 한다
     mpg = write_map("g", f"- 요청 원문: {REQ}\n| B1 | 원래 기준 |")
     a = verify(mpg, [RET]); write_map("g", f"- 요청 원문: {REQ}\n| B1 | 바뀐 기준 |"); rc, out, prompt = verify(mpg, [OK])
-    check("1회차 뒤 지도 기준이 바뀌면 2회차 검토자에게 1회차 기준과 바뀐 사실을 알린다(baseline_changed)",
+    check("1회차 뒤 지도 기준이 바뀌면 2회차 검토자에게 1회차 기준과 바뀐 사실을 알린다(criteria_changed)",
           out.get("round") == 2 and "1회차 검토 뒤 작업 지도의 기준이 바뀌었다" in prompt and "원래 기준" in prompt and "바뀐 기준" in prompt
-          and "1회차 검토 뒤" not in a[2] and out.get("baseline_changed_after_approval") is True)
+          and "1회차 검토 뒤" not in a[2] and out.get("criteria_changed") is True)
     # 맥락 봉투: 지도의 `## 맥락`과 맥락 도구가 관찰한 대상 저장소 정보가 검토 입력에 들어간다(증거·자기평가는 여전히 제외)
     mpc = proj / "work" / "ctx" / "work.md"; mpc.parent.mkdir(parents=True, exist_ok=True)
     mpc.write_text(f"# ctx\n\n## 기준\n\n- 요청 원문: {REQ}\n| B1 | 한국어 화면 버튼이 '로그인하기' |\n\n## 맥락\n\n- 대상: 이 저장소 ENVELOPE-MARKER\n- 근거: ../old-app (과거 비교만)\n\n## 증거\n\nSELF-ASSESS-MARKER\n")
@@ -285,26 +289,16 @@ exit 0
           out2.get("round") == 1 and k2 != k1 and k2.is_dir() and r1 is not None and (k1 / "result.json").read_text() == r1
           and (k1 / "diff.txt").is_file() and sh("git", "cat-file", "-e", f"{out1.get('target')}^{{commit}}", cwd=k1 / "target").returncode == 0)
     check("증거 폴더는 제품 파일 목록에 섞이지 않는다(work/ 아래)", Path(os.path.realpath(proj / "work")) in Path(os.path.realpath(k1)).parents)
-    user_dir = t / "my-keep"; user_dir.mkdir(); (user_dir / "note.txt").write_text("사용자 파일\n")
-    rc, out3, _ = verify(mp, [OK], extra=("--keep", str(user_dir), "--request", req_file("keep 시도")))
-    check("--keep 에 준 기존 폴더의 파일은 지우지 않고 그 안에 새 하위 폴더를 만든다",
-          (user_dir / "note.txt").read_text() == "사용자 파일\n" and Path(out3.get("kept", "/x")).parent == user_dir)
-    # 평가 실행기 방식(--request·--base-dir·--log): --log 옆 .round 폴더의 기존 내용도 보존한다
-    req = t / "req.txt"; req.write_text("로그인 버튼 글자를 바꿔 주세요\n"); basedir = t / "base-dir"; basedir.mkdir()
-    logp = t / "ev" / "x.verify1.jsonl"; (t / "ev" / "x.verify1.round").mkdir(parents=True); (t / "ev" / "x.verify1.round" / "old.txt").write_text("앞 실행\n")
-    outs = []
-    for i in range(2):
-        d = Path(tempfile.mkdtemp(dir=t)); (d / "verdicts").write_text(json.dumps(json.dumps(OK, ensure_ascii=False), ensure_ascii=False) + "\n")
-        r = sh(sys.executable, "-I", str(KIT / "evals/verdict.py"), "session", "--tool", str(verifier), "--harness", "claude", "--request", str(req), "--base-dir", str(basedir),
-               "--state", str(t / f"ev-state-{i}.json"), "--log", str(logp), cwd=proj, env={**base_env, "FAKE_DIR": str(d), "PATH": f"{fake}:/usr/bin:/bin"})
-        outs.append(json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {})
+    # 평가 실행기의 검토 세션(verdict.py session --log): 회차의 원시 기록은 회차 폴더에, --log 는 최신 복사본
+    logp = t / "ev" / "x.verify1.jsonl"
+    lreq = req_file("기록 위치 시도")
+    (proj / "log-change.txt").write_text("검토할 변경\n")
+    outs = [verify(mp, [OK], extra=("--request", lreq, "--log", str(logp)))[1] for _ in range(2)]
     first_raw = Path(outs[0].get("kept", "/x")) / "verify.jsonl"
     check("같은 --log 를 두 번 써도 첫 회차의 원시 기록은 그 회차의 고유 폴더에 그대로 있다(--log 는 최신 복사본)",
-          first_raw.is_file() and "verdict" in first_raw.read_text() and Path(outs[1].get("kept", "/x"), "verify.jsonl").is_file()
-          and logp.read_text() == Path(outs[1]["kept"], "verify.jsonl").read_text())
-    check("--log 방식도 같은 보장: 기존 .round 내용 보존, 실행마다 다른 새 폴더",
-          (t / "ev" / "x.verify1.round" / "old.txt").read_text() == "앞 실행\n" and len({o.get("kept") for o in outs}) == 2
-          and all(Path(o.get("kept", "/x")).is_dir() and Path(o["kept"]).parent == t / "ev" / "x.verify1.round" for o in outs))
+          first_raw.is_file() and "verdict" in first_raw.read_text() and outs[0].get("kept") != outs[1].get("kept")
+          and logp.read_text() == Path(outs[1].get("kept", "/x"), "verify.jsonl").read_text())
+    (proj / "log-change.txt").unlink()
 
     # 두 입력 방식 회귀: 지도 `## 기준` 의 요청 원문 인용, --request 파일, 둘 다.
     (proj / "ui.txt").write_text("button=로그인하기\nbutton_en=Login\nextra=changed\n")
@@ -339,7 +333,7 @@ exit 0
           stale.get("state") == "unverified" and stale.get("completion") != "verified"
           and Path(replay["kept"], "result.json").read_bytes() == saved)
 
-    for role in ("plan", "conditions", "criteria", "output"):
+    for role in ("conditions", "output"):
         evidence = req_file("B1 INPUT-BEFORE")  # 저장소 밖 파일도 실제 입력이면 같은 보장
         args = ("--request", req_file(REQ + role), "--" + role, evidence)
         rd = prep(*args)
@@ -371,30 +365,6 @@ exit 0
     Path(output).write_text("다른 보고서")
     check("한도에서 산출물이 달라지면 이전 OK를 재사용하지 않는다", prep(*reuse_args).get("state") == "incomplete")
 
-    # 비교 기준 폴더도 검토 입력이다. 같은 경로라도 내용이 바뀌면 다른 diff다.
-    mutable_base = t / "mutable-base"; mutable_base.mkdir()
-    (mutable_base / "ui.txt").write_text("button=기준 이전\n")
-    base_args = ("--request", req_file(REQ + " baseline"), "--base-dir", str(mutable_base), "--rounds", "1")
-    rd = prep(*base_args)
-    fin(rd["kept"], json.dumps(OK), "--check", "PASS")
-    (mutable_base / "ui.txt").write_text("button=바뀐 기준\n")
-    check("한도에서 비교 기준 폴더 내용이 바뀌면 이전 OK를 재사용하지 않는다",
-          prep(*base_args).get("state") == "incomplete")
-    for mutation in ("change", "delete"):
-        baseline = t / ("base-" + mutation); baseline.mkdir()
-        (baseline / "ui.txt").write_text("button=기준 이전\n")
-        args = ("--request", req_file(REQ + " base " + mutation), "--base-dir", str(baseline))
-        rd = prep(*args)
-        if mutation == "change":
-            (baseline / "ui.txt").write_text("button=기준 변경\n")
-        else:
-            shutil.rmtree(baseline)
-        got = json.loads(fin(rd["kept"], json.dumps(OK), "--check", "PASS").stdout.strip().splitlines()[-1])
-        check(f"검토 중 기준 폴더 {mutation}는 미확인",
-              got.get("state") == "unverified" and got.get("completion") == "unverified")
-        if mutation == "delete":
-            check("사라진 기준 폴더로 새 검토를 준비하면 미확인", prep(*args).get("state") == "unverified")
-
     # 구 pending은 현재성 근거가 없으므로 통과로 변환하지 않는다.
     rd = prep("--request", req_file(REQ + " legacy"))
     pending_path = Path(rd["kept"], "pending.json")
@@ -409,12 +379,65 @@ exit 0
     got = json.loads(fin(rd["kept"], json.dumps(OK), "--check", "PASS").stdout.strip().splitlines()[-1])
     check("검토 중 원문 삭제도 미확인", got.get("state") == "unverified")
 
-    # 평가 경로에서 발견한 지도 목록 자체도 근거다. 새 지도가 생겨도 예전 것으로 닫지 않는다.
-    fixed = req_file("| B1 | 로그인하기 |")
-    rd = prep("--request", req_file(REQ + " maps"), "--criteria", fixed)
-    write_map("new-after-prepare", CRIT)
-    got = json.loads(fin(rd["kept"], json.dumps(OK), "--check", "PASS").stdout.strip().splitlines()[-1])
-    check("평가 입력 수집 뒤 지도가 추가되면 현재 검토는 미확인", got.get("state") == "unverified")
+    # 요구 기록 검사(record): 검토 없이 지도의 요청 원문·표 형식을 보고 전체 완료를 판정한다
+    def rec(mp_, *extra):
+        r = sh(sys.executable, "-I", str(verifier), "record", "--map", mp_, *extra, cwd=proj, env=base_env)
+        return r.returncode, (json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {})
+    m_done = rec_map("rec-done", "| R1 | 한국어 버튼 → 화면 → 로그인하기 | 원문 | - | bin/test | 확정 |\n")
+    before = sorted(str(f) for f in (proj / "work").rglob("*"))
+    rc, o = rec(m_done, "--check", "PASS")
+    check("record: 요청 원문·표 형식이 맞고 미정·미확인이 없고 직접 검사 PASS 면 검토 없이 completion=verified(종료 0)",
+          rc == 0 and o.get("state") == "ok" and o.get("completion") == "verified" and o.get("direct_check") == "PASS")
+    check("record 는 파일을 만들거나 바꾸지 않는다(회차·증거 폴더 없음)", sorted(str(f) for f in (proj / "work").rglob("*")) == before)
+    rc, o = rec(m_done)
+    check("record: 직접 검사 결과를 받지 않으면 통과로 가정하지 않는다(unverified)", rc == 0 and o.get("completion") == "unverified")
+    for chk, want in (("FAIL", "check-failed"), ("REVIEW", "needs-review")):
+        check(f"record: 직접 검사 {chk} 면 completion={want}", rec(m_done, "--check", chk)[1].get("completion") == want)
+    rc, o = rec(m_open, "--check", "PASS")
+    check("record: 미정 행이 남으면 직접 검사 PASS 여도 waiting-user", rc == 0 and o.get("completion") == "waiting-user" and o.get("open_decisions") == ["Q1"])
+    check("record: 미정이 남아도 직접 검사 실패는 감추지 않는다", rec(m_open, "--check", "FAIL")[1].get("completion") == "check-failed")
+    rc, o = rec(m_unk, "--check", "PASS")
+    check("record: 미확인 행이 남으면 unverified", o.get("completion") == "unverified" and o.get("unconfirmed") == ["F1"])
+    rc, o = rec("work/rec-dep/work.md", "--check", "PASS")
+    check("record: 표 형식 문제는 returned(종료 3), 미정 목록을 믿지 않는다",
+          rc == 3 and o.get("state") == "returned" and o.get("completion") == "returned" and "의존" in o.get("reason", "") and o.get("open_decisions") == [])
+    rc, o = rec(write_map("rec-noreq", HEAD + "| R1 | 한국어 버튼 → 화면 → 로그인하기 | 원문 | - | bin/test | 확정 |\n"), "--check", "PASS")
+    check("record: 지도에 요청 원문이 없으면 returned", rc == 3 and "요청 원문" in o.get("reason", ""))
+    rc, o = rec(write_map("rec-notable", f"- 요청 원문: {REQ}\n\n버튼 문구를 바꾼다\n"), "--check", "PASS")
+    check("record: 요구 기록 표가 없으면 returned", rc == 3 and "요구 기록 표" in o.get("reason", ""))
+    rc, o = rec("work/no-such/work.md", "--check", "PASS")
+    check("record: 지도가 없으면 unverified(종료 5), 완료가 아님", rc == 5 and o.get("completion") == "unverified")
+    rc, o = rec(write_map("rec-empty", f"- 요청 원문: {REQ}\n\n" + HEAD), "--check", "PASS")
+    check("record: 행이 없는 표는 완료로 세지 않는다(returned)", rc == 3 and o.get("completion") == "returned")
+    check("record 결과에는 review=off 가 붙어 검토 결과와 구별된다", rec(m_done, "--check", "PASS")[1].get("review") == "off")
+    # 평가 관찰: 세션이 record 만 실행했으면 독립 검토를 한 것으로 세지 않는다
+    sys.path.insert(0, str(KIT / "evals"))
+    import observe, verdict
+    def seen(result, rc_):
+        log = t / "obs.jsonl"
+        log.write_text(json.dumps({"type": "item.completed", "item": {"type": "command_execution", "command": "python3 .agents/skills/wf-verify/verify.py x",
+                                                                      "aggregated_output": json.dumps(result, ensure_ascii=False), "exit_code": rc_}}, ensure_ascii=False) + "\n")
+        return observe.verify_run(str(log))[0]
+    check("평가 관찰: record 의 ok 는 검토 통과로 읽지 않고, finish 의 ok 는 읽는다",
+          seen(rec(m_done, "--check", "PASS")[1], 0) == "none" and seen({"state": "ok", "completion": "verified"}, 0) == "ok")
+    ghost = prep("--map", "work/ghost/work.md", "--request", req_file(REQ))
+    check("prepare: 없는 지도는 미확인이고 그 옆에 증거 폴더를 만들지 않는다", ghost.get("state") == "unverified" and not (proj / "work/ghost").exists())
+    # 평가 실행기의 보조: 작업 시작 상태 커밋은 가지·index·작업 트리를 바꾸지 않고, 지도가 여러 개면 고르지 않는다
+    (proj / "untracked-start.txt").write_text("시작 상태\n")
+    head_before, status_before = sh(*G, "rev-parse", "HEAD", cwd=proj).stdout, sh(*G, "status", "--porcelain", cwd=proj).stdout
+    snap = verdict.snapshot(str(proj))
+    check("snapshot: 추적하지 않는 새 파일까지 커밋 하나로 남기고 가지·index 는 그대로다",
+          "untracked-start.txt" in sh(*G, "ls-tree", "-r", "--name-only", snap, cwd=proj).stdout
+          and sh(*G, "rev-parse", "HEAD", cwd=proj).stdout == head_before and sh(*G, "status", "--porcelain", cwd=proj).stdout == status_before)
+    (proj / "untracked-start.txt").unlink()
+    rc, out, prompt = verify(None, [OK], extra=("--request", req_file("여러 지도")))
+    check("평가 검토 세션: 기준이 있는 지도가 여러 개면 고르지 않고 미확인(검토자를 띄우지 않음)", rc == 5 and "여러 개" in out.get("reason", "") and prompt == "")
+    hp = sh(sys.executable, "-I", str(verifier), "record", "--help", cwd=proj, env=base_env)
+    check("사용법을 물으면(--help) 사용법을 내고 오류로 끝나지 않는다", hp.returncode == 0 and "record --map" in hp.stderr)
+    check("record: --map 이 없거나 --check 값이 틀리면 사용 오류(종료 2)",
+          sh(sys.executable, "-I", str(verifier), "record", cwd=proj, env=base_env).returncode == 2 and rec(m_done, "--check", "maybe")[0] == 2)
+    check("없어진 평가 전용 옵션은 받지 않는다(--criteria·--base-dir 는 무시되지 않고 쓰이지도 않음: 도구에 흔적이 없다)",
+          all(w not in src for w in ("--criteria", "--base-dir", "--plan", "--state", "--keep", "--reviewer", "--answer", "--exit-code", "def final_answer", "def run_result", "def baseline")))
 
     # 실행이 저절로 만드는 파이썬 캐시(__pycache__·.pyc)는 제품이 아니다. 무시 목록이 없는 프로젝트에서도
     # 구현자·검토자가 검사를 돌려 캐시가 바뀐 것을 대상·원본 변경으로 세지 않는다. 새 소스 파일은 그대로 대상이다.

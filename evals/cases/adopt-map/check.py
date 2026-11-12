@@ -6,8 +6,9 @@
 """
 import re, sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from case import project, done
 
-project = Path(sys.argv[1])
 agents = (project / "AGENTS.md").read_text(encoding="utf-8")
 lines = {k: next((l for l in agents.splitlines() if l.startswith(f"- {k}")), "") for k in ("제품 원문", "코드 진입", "실행·검사", "권한")}
 problems = []
@@ -26,6 +27,5 @@ new = [p for p in project.rglob("*") if p.is_file() and p.suffix == ".md" and ".
 if new:
     problems.append("요구되지 않은 문서를 만들었다: " + ", ".join(p.relative_to(project).as_posix() for p in new))
 if problems:
-    print("FAIL " + "; ".join(problems))
-    sys.exit(1)
-print("PASS 근거 있는 칸만 채우고 나머지는 미확인, 기존 문서는 그대로")
+    done("FAIL " + "; ".join(problems))
+done("PASS 근거 있는 칸만 채우고 나머지는 미확인, 기존 문서는 그대로")

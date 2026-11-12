@@ -8,23 +8,17 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from transcript import read
+from case import project, final, done
 
-project, log = Path(sys.argv[1]), Path(sys.argv[2])
-_, final = read(log)
 if not final.strip():
-    print("FAIL 마지막 답이 비었다")
-    sys.exit(1)
+    done("FAIL 마지막 답이 비었다")
 fixture = Path(__file__).with_name("setup.sh").read_text()
 for name in ("README.md", "docs/environment.md"):
     path = project / name
     original = fixture.split("cat > " + name + " <<'EOF'\n", 1)[1].split("\nEOF", 1)[0] + "\n"
     if not path.is_file() or path.read_text() != original:
-        print("FAIL 분석 중 근거 파일을 바꿨다: " + name)
-        sys.exit(1)
+        done("FAIL 분석 중 근거 파일을 바꿨다: " + name)
 mapfile = project / "work/dispatch/work.md"
 if not mapfile.is_file() or not mapfile.read_text().strip():
-    print("FAIL 최종 설계 지도가 없다")
-    sys.exit(1)
-print("REVIEW 근거가 보존되고 지도가 있다. rubric.md로 두 턴의 요구 분석과 목표 연결을 판정한다")
-sys.exit(2)
+    done("FAIL 최종 설계 지도가 없다")
+done("REVIEW 근거가 보존되고 지도가 있다. rubric.md로 두 턴의 요구 분석과 목표 연결을 판정한다")

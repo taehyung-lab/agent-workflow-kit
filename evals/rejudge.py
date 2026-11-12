@@ -11,8 +11,8 @@ import json, os, subprocess, sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from result import check_verdict, rejudge_result
-from caseinfo import MissingJudgeFile, case_path, judge_version as judge_fingerprint  # 실행기(run.sh)와 같은 사례 위치·지문
+from result import check_verdict, check_word, rejudge_result
+from caseinfo import MissingJudgeFile, case_path, judge_version as judge_fingerprint  # 실행기(run.py)와 같은 사례 위치·지문
 
 failed = []
 for root in sys.argv[1:]:
@@ -43,9 +43,7 @@ for root in sys.argv[1:]:
                            capture_output=True, text=True, env=env)
         out = (r.stdout + r.stderr).strip()
         old = check_verdict(m)
-        new = {0: "PASS", 2: "REVIEW", 1: "FAIL"}.get(r.returncode, "UNVERIFIED")
-        if not out.startswith(new):  # 판정 검사 자체의 오류(예외 등)는 실패가 아니라 미확인이다
-            new = "UNVERIFIED"
+        new = check_word(r.returncode, out)  # 판정 검사 자체의 오류(예외 등)는 실패가 아니라 미확인이다
         if old != new:
             print(f"{Path(base).name}: {old} -> {new}  {out[:120]}")
         import hashlib

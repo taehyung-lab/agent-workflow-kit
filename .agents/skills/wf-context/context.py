@@ -1,7 +1,7 @@
 """맥락 확인 도구(읽기 전용): 지금 작업하는 저장소가 어디·어느 버전인지 도구가 관찰한 값만 낸다. 요청의 뜻·범위·승인은 판단하지 않는다.
 
   python3 .agents/skills/wf-context/context.py inspect [폴더]   사람·에이전트가 직접 볼 때(기본 폴더: 지금 폴더)
-  python3 .agents/skills/wf-context/context.py hook            세션 시작 훅(Claude Code·Codex SessionStart)이 부른다
+  python3 .agents/skills/wf-context/context.py hook            세션 시작 훅(Claude Code SessionStart)이 부른다
 
 내는 것: 실경로, 저장소 맨 위, 브랜치·해소한 커밋, 로컬 추적 브랜치와의 차이(마지막 fetch 기준), 작업 트리 변경(파일 이름만),
 설치된 키트·버전 기록(`*.version` 첫 줄, package.json 의 name@version), 같은 저장소의 다른 worktree(진단용), work/*/work.md 지도 제목.

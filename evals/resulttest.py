@@ -1,6 +1,5 @@
 """실행 결과의 저장·재판정 계약을 공개 명령으로 확인한다(모델 없음)."""
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -18,18 +17,17 @@ class ResultTest(unittest.TestCase):
         (root / "sample.jsonl").write_text("")
 
     def initial(self, root, review=None, observed=None, **overrides):
-        env = dict(os.environ)
-        names = "CASE REF COMMIT HARNESS RUN VERSION RC SEC BYTES CHECK_RC VERDICT G1 G2 G3 G4 G5 OBS VSTATE BCHANGED VREASON VROUNDS VRC VJSON LANG CSET JUDGE GATE WAITING VTOOL CTRUST INPUT TURNS PLANNED WAIT REQUIRED"
-        env.update({"E_" + name: "" for name in names.split()})
-        env.update(E_CASE="weight-disposable", E_REF="fixture", E_COMMIT="fixture", E_HARNESS="fake",
-                   E_RUN="1", E_RC="0", E_SEC="1", E_BYTES="1", E_CHECK_RC="0", E_VERDICT="PASS fixture",
-                   E_VSTATE="ok" if review is not None else "off", E_VROUNDS="1", E_TURNS="1", E_PLANNED="1",
-                   E_WAIT="0", E_INPUT="original", E_VJSON=json.dumps(review or {}), E_OBS=json.dumps(observed or {}),
-                   E_REQUIRED="false", E_WAITING="false")
-        env.update(overrides)
+        run = {"case": "weight-disposable", "kit_ref": "fixture", "kit_commit": "fixture", "harness": "fake", "run": 1,
+               "harness_version": "", "exit_code": 0, "seconds": 1, "agents_md_bytes": 1, "check": "PASS", "check_output": "PASS fixture",
+               "approval_gate": False, "gate_waiting": False, "input": "original", "user_turns": 1, "planned_turns": 1,
+               "unapproved_turns": 0, "observed": observed or {}, "verifier": "ok" if review is not None else "off",
+               "verify_reason": "", "verify_rounds": 1, "verifier_exit_code": None, "review": review or {},
+               "baseline_changed": False, "verifier_tool": "", "review_required": False, "lang": "", "judge_version": "",
+               "codex_project_trusted": False, "claude_project_settings": "", "global_instructions": {}}
+        run.update(overrides)
         path = root / "sample.meta.json"
         result = subprocess.run([sys.executable, "-I", str(HERE / "result.py"), str(path)],
-                                env=env, capture_output=True, text=True)
+                                input=json.dumps(run), capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(path.read_text())
 
@@ -70,12 +68,12 @@ class ResultTest(unittest.TestCase):
     def test_known_results_keep_their_reason_after_rejudge(self):
         cases = [
             (None, {}, "verified"),
-            (None, {"E_REQUIRED": "true"}, "review-missing"),
+            (None, {"review_required": True}, "review-missing"),
             ({"open_decisions": [], "unconfirmed": []}, {}, "verified"),
             ({"open_decisions": [], "unconfirmed": ["F1"]}, {}, "unverified"),
-            ({"open_decisions": [], "unconfirmed": []}, {"E_WAITING": "true"}, "waiting-user"),
-            ({"open_decisions": [], "unconfirmed": []}, {"E_VSTATE": "returned"}, "returned"),
-            ({"open_decisions": [], "unconfirmed": []}, {"E_VSTATE": "incomplete"}, "incomplete"),
+            ({"open_decisions": [], "unconfirmed": []}, {"gate_waiting": True}, "waiting-user"),
+            ({"open_decisions": [], "unconfirmed": []}, {"verifier": "returned"}, "returned"),
+            ({"open_decisions": [], "unconfirmed": []}, {"verifier": "incomplete"}, "incomplete"),
         ]
         for review, overrides, expected in cases:
             with self.subTest(expected=expected, overrides=overrides), tempfile.TemporaryDirectory() as d:

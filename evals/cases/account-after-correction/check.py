@@ -10,22 +10,19 @@ archive-after-correction(할 일 보관함)의 정정 뒤 질문 실패가 다�
 import os, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from transcript import read
+from case import project, log, final, done, copy_project
 from judge import asked, changed_in_last_turn
 from observe import edits, last_turn_log
 
-project, log = sys.argv[1], sys.argv[2]
-_, final = read(log)
 if os.environ.get("EVALS_INPUT") == "with-approval":
     # 추천안 승인 뒤: 승인 직전 계획이 검증지다(judge.approved_plan_check).
     from judge import approved_plan_check, launcher
-    import shutil, subprocess, tempfile
+    import subprocess
     # bin/accounts(실행)·bin/test(검사)가 있으면 그것으로, 없는 예전 결과는 Python 명령으로 판정한다.
     cli = lambda root: launcher(root, "accounts", legacy=[sys.executable, "accounts.py"])
 
     def guarantees(plan):
-        work = Path(tempfile.mkdtemp()) / "p"
-        shutil.copytree(project, work, symlinks=True, ignore=shutil.ignore_patterns(".git", ".agents", ".claude", ".codex", "work", "__pycache__", "node_modules"))
+        work = copy_project(".agents", "__pycache__", "node_modules")
         test = [str(work / "bin" / "test")] if (work / "bin" / "test").is_file() else [sys.executable, "-B", "-m", "unittest", "discover", "-s", "tests"]
         r = subprocess.run(test, cwd=work, capture_output=True, text=True, timeout=120)
         problems = [] if r.returncode == 0 else ["기존·수정 테스트가 실패한다"]
@@ -35,20 +32,14 @@ if os.environ.get("EVALS_INPUT") == "with-approval":
         if run("signup", "kim", "pw1").returncode != 0 or run("login", "kim", "pw1").returncode != 0:
             problems.append("활성 계정의 가입·로그인이 깨졌다")
         return problems
-    rc, msg = approved_plan_check(project, log, guarantees)
-    print(msg)
-    sys.exit(rc)
+    done(approved_plan_check(project, log, guarantees)[1])
 if not asked(final, r"(비활성|탈퇴|계정)", r"(로그인|재가입|복구|되살|다시|보관|명단|목록|표시|언제|어느|방식|어떻게)"):
-    print("FAIL 결과가 갈리는 비활성화 동작을 묻지 않고 끝냈다")
-    sys.exit(1)
+    done("FAIL 결과가 갈리는 비활성화 동작을 묻지 않고 끝냈다")
 edited = changed_in_last_turn(project, ["accounts.py", "tests"])
 if edited is None:
-    print("REVIEW 마지막 턴 직전 상태가 없어 답 전 편집 여부를 판정할 수 없다")
-    sys.exit(2)
+    done("REVIEW 마지막 턴 직전 상태가 없어 답 전 편집 여부를 판정할 수 없다")
 if not edited and edits(last_turn_log(log), ["accounts.py", "tests"]):
-    print("REVIEW 최종 파일은 같지만 마지막 턴에 제품 파일을 편집한 기록이 있다(편집 뒤 되돌림 의심)")
-    sys.exit(2)
+    done("REVIEW 최종 파일은 같지만 마지막 턴에 제품 파일을 편집한 기록이 있다(편집 뒤 되돌림 의심)")
 if edited:
-    print("REVIEW 물었지만 같은 턴에 제품 코드를 바꿨다: " + ", ".join(edited))
-    sys.exit(2)
-print("PASS 비활성화 동작의 선택을 묻고 답 전에는 제품 코드를 바꾸지 않았다")
+    done("REVIEW 물었지만 같은 턴에 제품 코드를 바꿨다: " + ", ".join(edited))
+done("PASS 비활성화 동작의 선택을 묻고 답 전에는 제품 코드를 바꾸지 않았다")

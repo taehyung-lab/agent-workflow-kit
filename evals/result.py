@@ -6,7 +6,6 @@ False로 복원하지 않는다.
 """
 import copy
 import json
-import os
 from pathlib import Path
 import sys
 
@@ -22,6 +21,17 @@ def _known_inputs(inputs):
             and all(type(inputs.get(k)) is bool for k in ("review_required", "gate_waiting"))
             and all(isinstance(inputs.get(k), list)
                     and all(isinstance(v, str) for v in inputs[k]) for k in ("open_decisions", "unconfirmed")))
+
+
+CHECK_EXIT = {0: "PASS", 1: "FAIL", 2: "REVIEW"}
+
+
+def check_word(exit_code, output):
+    """판정 검사(check.py)의 종료 코드와 출력으로 판정 낱말을 정한다. 실행기(run.py)와 재판정(rejudge.py)이 같이 쓴다.
+    검사는 0=통과, 1=실패, 2=검토 필요로 끝나고 결과 줄을 PASS·FAIL·REVIEW 로 시작한다. 둘이 맞지 않으면(예외 등 검사 자체의 오류)
+    실패가 아니라 미확인(UNVERIFIED)이다."""
+    word = CHECK_EXIT.get(exit_code)
+    return word if word and output.startswith(word) else "UNVERIFIED"
 
 
 def check_verdict(record):
@@ -46,10 +56,14 @@ def _completed(record, check):
     return completion(state, check, waiting, required=True, unresolved=True)
 
 
-def initial_result(e):
-    """실행기가 관찰한 근거를 저장한 뒤 그 근거로 완료를 계산한다."""
-    observed, review = json.loads(e["E_OBS"] or "{}"), json.loads(e["E_VJSON"] or "{}")
-    state = e["E_VSTATE"]
+def initial_result(run):
+    """실행기가 관찰한 근거를 저장한 뒤 그 근거로 완료를 계산한다. run 은 한 번의 실행에서 관찰한 사실이다:
+    case·kit_ref·kit_commit·harness·run·harness_version·exit_code·seconds·agents_md_bytes, check(판정 낱말)·check_output,
+    approval_gate·gate_waiting·input·user_turns·planned_turns·unapproved_turns, observed(observe.py 결과),
+    verifier(실행기 검증 루프의 상태, 안 돌렸으면 off)·verify_reason·verify_rounds·verifier_exit_code·review(검토 도구의 마지막 결과 JSON)·
+    baseline_changed·verifier_tool·review_required, lang·judge_version·codex_project_trusted·claude_project_settings·global_instructions."""
+    observed, review = run["observed"], run["review"]
+    state = run["verifier"]
     evidence = review
     if state == "off":
         state = observed.get("verify_run", "none")
@@ -59,34 +73,38 @@ def initial_result(e):
             state, evidence = "unverified", {}
         else:
             state, evidence = "off", {"open_decisions": [], "unconfirmed": []}
-    inputs = {"version": 1, "review_state": state, "review_required": e["E_REQUIRED"] == "true",
-              "gate_waiting": e["E_WAITING"] == "true",
+    inputs = {"version": 1, "review_state": state, "review_required": run["review_required"],
+              "gate_waiting": run["gate_waiting"],
               "open_decisions": evidence.get("open_decisions"), "unconfirmed": evidence.get("unconfirmed")}
-    m = {"case": e["E_CASE"], "kit_ref": e["E_REF"], "kit_commit": e["E_COMMIT"], "harness": e["E_HARNESS"],
-         "run": int(e["E_RUN"]), "harness_version": e["E_VERSION"], "exit_code": int(e["E_RC"]), "seconds": int(e["E_SEC"]),
-         "agents_md_bytes": int(e["E_BYTES"]), "check_passed": e["E_CHECK_RC"] == "0",
-         "check_needs_review": e["E_CHECK_RC"] == "2", "check_unverified": e["E_CHECK_RC"] == "3",
-         "approval_gate": e["E_GATE"] == "true", "input": e["E_INPUT"], "user_turns": int(e["E_TURNS"]),
-         "planned_turns": int(e["E_PLANNED"]), "unapproved_turns": int(e["E_WAIT"] or 0),
-         "check_output": e["E_VERDICT"], "observed": observed, "verifier": e["E_VSTATE"],
-         "verify_reason": e["E_VREASON"], "verify_rounds": int(e["E_VROUNDS"]),
-         "verifier_exit_code": int(e["E_VRC"]) if e["E_VRC"] else None,
+    m = {"case": run["case"], "kit_ref": run["kit_ref"], "kit_commit": run["kit_commit"], "harness": run["harness"],
+         "run": run["run"], "harness_version": run["harness_version"], "exit_code": run["exit_code"], "seconds": run["seconds"],
+         "agents_md_bytes": run["agents_md_bytes"], "check_passed": run["check"] == "PASS",
+         "check_needs_review": run["check"] == "REVIEW", "check_unverified": run["check"] == "UNVERIFIED",
+         "approval_gate": run["approval_gate"], "input": run["input"], "user_turns": run["user_turns"],
+         "planned_turns": run["planned_turns"], "unapproved_turns": run["unapproved_turns"],
+         "check_output": run["check_output"], "observed": observed, "verifier": run["verifier"],
+         "verify_reason": run["verify_reason"], "verify_rounds": run["verify_rounds"],
+         "verifier_exit_code": run["verifier_exit_code"],
          "out_of_scope": review.get("out_of_scope", []), "verifier_conditions": review.get("conditions", []),
-         "lang": e["E_LANG"] or None, "judge_version": e["E_JUDGE"],
-         "stage": "after-approval" if e["E_INPUT"] == "with-approval" else "original-input",
+         "lang": run["lang"] or None, "judge_version": run["judge_version"],
+         "stage": "after-approval" if run["input"] == "with-approval" else "original-input",
          "review_state": state, "review_required": inputs["review_required"],
          "completion_inputs": inputs, "gate_waiting": inputs["gate_waiting"],
-         "verifier_tool": e["E_VTOOL"] or None, "codex_project_trusted": e["E_CTRUST"] == "true",
-         "baseline_changed_after_approval": e["E_BCHANGED"] == "true",
-         "global_instructions": {"~/.claude/CLAUDE.md": e["E_G1"], "~/.agents/USER.md": e["E_G2"],
-                                 "~/.codex/AGENTS.md": e["E_G3"], "global skills": e["E_G4"], "plugins": e["E_G5"]},
-         "claude_project_settings": e.get("E_CSET") or None}
+         "verifier_tool": run["verifier_tool"] or None, "codex_project_trusted": run["codex_project_trusted"],
+         "baseline_changed_after_approval": run["baseline_changed"],
+         "global_instructions": run["global_instructions"],
+         "claude_project_settings": run["claude_project_settings"] or None}
     # 예전 검토기 출력에 남은 대기는 나머지 입력이 부족해도 버리지 않는다.
     if evidence.get("completion", observed.get("verify_run_completion")) == "waiting-user":
         m["completion"] = "waiting-user"
     m["completion"] = _completed(m, check_verdict(m))
     m["completion_inputs_missing"] = not _known_inputs(inputs)
     return m
+
+
+def write_meta(path, run):
+    """한 번의 실행 결과를 <이름>.meta.json 으로 쓴다."""
+    Path(path).write_text(json.dumps(initial_result(run), ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 def rejudge_result(record, check, output, judge_version, check_sha):
@@ -105,5 +123,5 @@ def rejudge_result(record, check, output, judge_version, check_sha):
     return updated
 
 
-if __name__ == "__main__":
-    Path(sys.argv[1]).write_text(json.dumps(initial_result(os.environ), ensure_ascii=False, indent=1), encoding="utf-8")
+if __name__ == "__main__":  # python3 -I evals/result.py <meta.json> < 실행 사실(JSON)
+    write_meta(sys.argv[1], json.load(sys.stdin))
