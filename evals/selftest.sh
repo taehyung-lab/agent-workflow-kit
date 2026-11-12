@@ -297,6 +297,34 @@ assert c("ok", "PASS", unresolved=True) == "unverified"                         
 assert c("unverified", "PASS", required=True) == "unverified" and c("returned", "PASS") == "returned" and c("incomplete", "PASS") == "incomplete"
 assert c("ok", "PASS", True) == "waiting-user" and c("off", "FAIL", True) == "check-failed"
 PY
+# 검토 도구의 종료 코드는 완료 판정을 따른다: 0 은 completion=verified 뿐, state 가 준 코드(3·4·5)는 그대로, 판정은 났지만 완료가 아니면 6.
+# 평가 관찰은 그 코드로 실행 결과를 읽고(종료 코드가 state 만 따르던 예전 기록의 0 도 받는다), record 결과(recorded, 예전 ok+review off)는 검토로 세지 않는다.
+python3 -I - "$here" <<'PY' && ok "검토 도구 종료 코드: verified 만 0, 완료 아닌 recorded·ok 는 6, returned 3·incomplete 4·unverified 5 유지, 평가 관찰이 같은 규칙으로 읽음" || ng "검토 도구 종료 코드"
+import json, sys, tempfile
+from pathlib import Path
+sys.path.insert(0, sys.argv[1]); import verdict; from observe import verify_run
+code = verdict._verify.exit_code
+assert code({"state": "ok", "completion": "verified"}) == 0 and code({"state": "recorded", "completion": "verified"}) == 0
+for done in ("waiting-user", "needs-review", "check-failed", "review-missing", "unverified"):
+    assert code({"state": "ok", "completion": done}) == 6 and code({"state": "recorded", "completion": done}) == 6, done
+assert code({"state": "ok"}) == 6  # 완료 판정이 없는 결과도 0 이 아니다
+assert [code({"state": s, "completion": s}) for s in ("returned", "incomplete", "unverified")] == [3, 4, 5]
+r = verdict.run_result
+waiting = json.dumps({"state": "ok", "completion": "waiting-user"})
+assert r(waiting, 6)[1] == "" and r(waiting, 0)[1] == "" and r(waiting, 3)[1] != ""
+assert r(json.dumps({"state": "ok", "completion": "verified"}), 6)[1] != ""
+assert r(json.dumps({"state": "recorded", "review": "off", "completion": "review-missing"}), 6)[1] == ""
+with tempfile.TemporaryDirectory() as d:
+    def seen(result, rc):
+        path = Path(d) / "t.jsonl"
+        path.write_text(json.dumps({"type": "item.completed", "item": {"id": "0", "type": "command_execution", "command": "python3 .agents/skills/wf-verify/verify.py record",
+                                                                       "aggregated_output": json.dumps(result), "exit_code": rc}}))
+        return verify_run(path)[:3:2]
+    assert seen({"state": "recorded", "review": "off", "completion": "verified"}, 0) == ("none", "")
+    assert seen({"state": "recorded", "review": "off", "completion": "waiting-user"}, 6) == ("none", "")
+    assert seen({"state": "ok", "review": "off", "completion": "verified"}, 0) == ("none", "")  # 예전 기록의 record 결과
+    assert seen({"state": "ok", "completion": "waiting-user"}, 6) == ("ok", "waiting-user")
+PY
 FAKE_BREAK=1 vrun checkfail "$OKV"
 [ "$(mget verifier)" = ok ] && [ "$(mget completion)" = check-failed ] && [ "$(mget check_passed)" = False ] \
   && ok "검증: 검증자가 OK 여도 결정적 행동 검사가 실패하면 완료(verified)로 세지 않음" || ng "검증 OK+검사 실패: $(mget verifier)/$(mget completion)"

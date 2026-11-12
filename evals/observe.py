@@ -5,7 +5,7 @@
 - last_turn_edits: 마지막 턴 기록에 남은 편집 대상 파일(편집 뒤 되돌려 최종 파일이 같아도 남는다)
 - claims_independent_verification: 마지막 답이 독립·별도 검증을 통과했다고 주장하는가
 - verify_run: 마지막 턴에 독립 검증 실행기(wf-verify/verify.py, 옛 verify.sh)를 실행한 마지막 결과. 실행기가 출력 끝에 찍는 결과 JSON 을
-  평가 쪽 함수(verdict.run_result)로 읽는다. 요구 기록 검사(record, 결과의 review=off)는 검토가 아니므로 세지 않는다. "ok"·"returned"·"incomplete"·"unverified"(하네스 없음·빈 답 등, 사유는 verify_run_reason)는
+  평가 쪽 함수(verdict.run_result)로 읽는다. 요구 기록 검사(record, 결과의 state=recorded·review=off. 예전 기록은 state=ok·review=off)는 검토가 아니므로 세지 않는다. "ok"·"returned"·"incomplete"·"unverified"(하네스 없음·빈 답 등, 사유는 verify_run_reason)는
   실행기의 판정이고, "error" 는 실행기 경로를 부른 명령이 결과 JSON 없이 0 이 아닌 코드로 끝난 것(실행 실패), "unknown" 은 그 명령의
   결과가 기록에 없거나 출력이 비었거나, 결과 JSON 이 다른 출력과 섞이거나 종료 코드와 맞지 않아 이번 실행의 판정으로 쓸 수 없는 것,
   "none" 은 실행 증거가 없는 것이다. 앞선 실행 뒤에 실행기 경로를 부른 명령이 쓸 수 있는 결과를 내지 않으면(빈 출력·끊긴 JSON·읽기 포함)
@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from judge import QUESTION
 from transcript import calls, commands, is_codex, last_turn_log, read, rollout_calls, rollout_log, turn_log  # last_turn_log 는 사례 판정도 여기서 가져간다
-from verdict import run_result
+from verdict import REVIEW_OFF, run_result
 
 # 검증을 마쳤다는 주장만 센다. "별도 검토를 받겠습니다" 같은 계획 문장은 주장이 아니다.
 CLAIM = (r"((독립|별도)\s*(검증|판정|검토)(자|자가|자의)?[^.\n?]{0,40}(통과|마쳤|완료|확인했|판정했|받았|거쳤|이상\s*없)"
@@ -66,8 +66,8 @@ def verify_run(path):
         if not re.search(EXECUTOR, c["command"]):
             continue
         result, doubt = run_result(c["output"], c["exit_code"])
-        if result and result.get("review") == "off":
-            continue  # 요구 기록 검사는 독립 검토 결과가 아니다
+        if result and (result.get("review") == "off" or result["state"] == REVIEW_OFF):
+            continue  # 요구 기록 검사(state recorded, 예전 기록은 state ok 에 review off)는 독립 검토 결과가 아니다
         if result and not doubt:
             state, reason, done = result["state"], str(result.get("reason") or ""), str(result.get("completion") or "")
             inputs = {key: result.get(key) for key in ("open_decisions", "unconfirmed")}
