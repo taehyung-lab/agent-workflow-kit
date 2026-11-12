@@ -70,11 +70,11 @@ import json, os, sys
 mode, want_any = sys.argv[1], os.environ.get("AWK_WANT") == "1"
 script = ".agents/skills/wf-context/context.py"
 # 훅 명령: 키트 파일이나 python3·git 이 없어도 아무것도 내지 않고 0 으로 끝난다(정보만 주는 훅이라 세션을 막지 않는다).
-# Claude Code 는 프로젝트 폴더를 CLAUDE_PROJECT_DIR 로 주고, Codex 는 세션 폴더의 저장소 맨 위(없으면 지금 폴더)에서 찾는다.
+# Claude Code 는 프로젝트 폴더를 CLAUDE_PROJECT_DIR 로 준다.
 tail = f'f="$p/{script}"; [ -f "$f" ] && command -v python3 >/dev/null 2>&1 && python3 -I "$f" hook 2>/dev/null; exit 0'
 want_hook = {
     ".claude/settings.json": {"type": "command", "command": 'p="$CLAUDE_PROJECT_DIR"; ' + tail, "timeout": 10},
-    ".codex/hooks.json": {"type": "command", "command": 'p="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"; ' + tail, "timeout": 10},
+    ".codex/hooks.json": None,  # 더하지 않는다: 예전 키트 항목을 지우려고만 읽는다
 }
 def kit_entry(h):
     return isinstance(h, dict) and any(k in str(h.get("command", "")) for k in ("approval-gate.py", "wf-context/context.py"))
