@@ -6,7 +6,7 @@
 내는 것: 실경로, 저장소 맨 위, 브랜치·해소한 커밋, 로컬 추적 브랜치와의 차이(마지막 fetch 기준), 작업 트리 변경(파일 이름만),
 설치된 키트·버전 기록(`*.version` 첫 줄, package.json 의 name@version), 같은 저장소의 다른 worktree(진단용), work/*/work.md 지도 제목.
 내지 않는 것: 파일 내용(env·비밀 파일 포함), diff, 원격 URL. 어떤 실패도 막지 않는다: 늘 종료 코드 0 이고, git 이 없거나 저장소가 아니면 그 사실만 적는다.
-대상과 근거를 구별하는 판단은 AGENTS.md 기본 1, 기록 방법은 wf-ask/SKILL.md 「작업 지도」가 맡는다.
+대상과 근거를 구별하는 판단은 AGENTS.md 기본 1, 기록 방법은 wf-ask/map.md가 맡는다.
 """
 import json, os, re, subprocess, sys, time
 from pathlib import Path
