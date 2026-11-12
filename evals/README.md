@@ -8,10 +8,10 @@
 bash evals/run.sh archive-after-correction HEAD codex 3
 ```
 
-1. 지정한 키트 커밋을 새로 clone 해서, 사례의 `setup.sh` 가 만든 작은 임시 프로젝트에 `install.sh` 로 설치한다(v3.0 이하 커밋이면 그때의 설치기가 승인 관문 훅도 등록한다. v3.1 부터는 훅이 없다).
+1. 지정한 키트 커밋을 새로 clone 해서, 사례의 `setup.sh` 가 만든 작은 임시 프로젝트에 `install.sh` 로 설치한다.
 2. Claude Code(`claude -p`) 또는 Codex(`codex exec`) 새 세션에 `prompt.txt` 를 보낸다. `prompt2.txt`·`prompt3.txt` 가 있으면 같은 세션을 이어 다음 턴으로 보낸다. 예상 답은 주지 않는다.
 3. 끝나면 사례의 `check.py` 가 결과 파일과 기록을 보고 **통과·실패·검토 필요** 중 하나로 판정한다. 하네스가 모델 용량 부족 같은 외부 장애로 끝나면 **미확인**으로 따로 센다.
-4. `evals/results/` 에 원시 기록(턴별 `.tN.jsonl`, Codex 원본 `.rollout.jsonl`), 훅 판단 기록(`.hook.log`, 관문이 있던 커밋만), 끝난 프로젝트 파일, `meta.json`(판정·시간·키트 커밋·실행 조건)을 남긴다.
+4. `evals/results/` 에 원시 기록(턴별 `.tN.jsonl`, Codex 원본 `.rollout.jsonl`), 끝난 프로젝트 파일, `meta.json`(판정·시간·키트 커밋·실행 조건)을 남긴다.
 
 ```text
 python3 -I evals/report.py evals/results   # 사례·하네스·키트 커밋·입력별 통과 수와 시간 표
@@ -50,7 +50,7 @@ bash evals/run.sh question-order 7c39b22..HEAD codex 10   # 두 커밋 비교: �
 
 맥락 사례(ctx-*)는 파일이 바뀌지 않는 분석·질문도 판정한다: 정답 낱말이 아니라 픽스처에 심은 지금 대상의 사실(값·경로)과 다른 대상의 사실 중 무엇을 답의 근거로 썼는지, 공개 명령(bin/…)으로 실행한 결과, 바꿔도 되는 파일의 경계를 본다. 기계가 가를 수 없는 경우(둘 다 언급)는 검토 필요로 낸다. 각 사례에 실패 표본(다른 대상을 그럴듯하게 근거로 든 답 포함)이 있다.
 
-권한·요청 해석 사례 8개(clear-change 부터)는 같은 출발 상태 `fixtures/login-app.sh`(로그인 화면 문구·세션 설정·셸 검사)를 쓰고, 판정 도구는 `fixtures/login_app.py` 다. 관문 유무와 관계없이 같은 기대 행동을 본다.
+권한·요청 해석 사례 8개(clear-change 부터)는 같은 출발 상태 `fixtures/login-app.sh`(로그인 화면 문구·세션 설정·셸 검사)를 쓰고, 판정 도구는 `fixtures/login_app.py` 다.
 
 사례 폴더의 파일:
 
@@ -78,7 +78,7 @@ bash evals/run.sh question-order 7c39b22..HEAD codex 10   # 두 커밋 비교: �
 - `last_turn_edits`: 마지막 턴에 제품 파일을 편집한 흔적(바꿨다가 되돌려도 남는다)
 - `claims_independent_verification`: 마지막 답이 "독립 검증을 통과했다"고 **마쳤다는** 주장을 하는가("별도 검토를 받겠습니다" 같은 계획 문장은 세지 않는다)
 - 판정은 제품 언어와 무관해야 한다. 기계는 사례가 합의한 공개 CLI 입력·예상 결과만 본다(`bin/<이름>` 실행, `bin/test` 검사). 승인 뒤 "계획에 없는 새 명령"·범위 밖 변경의 일반적 발견은 기계로 추정하지 않고(소스 모양 정규식도, 소스 낱말을 실행해 보는 추정도 쓰지 않는다) 바뀐 파일 목록과 계획 원문을 붙여 검토 필요로 낸다. 실제 실행에서는 독립 검증자가 원문·기준과 diff 를 대조해 잡는다.
-- meta 에는 원시 기록과 함께 판정기 지문(`judge_version`: 사례의 check.py(holdout 포함)와 `caseinfo.py` 의 공용 판정 파일)이 남는다. 실행기와 `rejudge.py` 가 같은 `caseinfo.py` 로 사례 위치와 지문을 정하므로 같은 코드면 지문이 같다. 판정 파일이 하나라도 없으면 지문을 만들지 않고 멈춘다(재판정은 그 meta 를 고치지 않고 종료 1). `completion_inputs` 에는 검토 상태·필수 여부, 승인 대기, 미정·미확인 요구를 보존한다. `rejudge.py` 는 이 입력을 유지하고 직접 검사 결과만 다시 반영하며, 이전 판정·완료 근거·지문을 `rejudge_history` 에 남긴다. 구기록에 완료 근거가 없으면 `completion_inputs_missing` 으로 표시하고, 검사 PASS 만으로 미정이 없었다고 추정해 완료시키지 않는다. 기존 대기·실패도 보존한다. 지문 계산 방식이 바뀌기 전(2026-11-06 이전) 결과는 다시 판정해야 새 실행과 비교된다.
+- meta 에는 원시 기록과 함께 판정기 지문(`judge_version`: 사례의 check.py(holdout 포함)와 `caseinfo.py` 의 공용 판정 파일)이 남는다. 실행기와 `rejudge.py` 가 같은 `caseinfo.py` 로 사례 위치와 지문을 정하므로 같은 코드면 지문이 같다. 판정 파일이 하나라도 없으면 지문을 만들지 않고 멈춘다(재판정은 그 meta 를 고치지 않고 종료 1). `completion_inputs` 에는 검토 상태·필수 여부, 미정·미확인 요구를 보존한다. `rejudge.py` 는 이 입력을 유지하고 직접 검사 결과만 다시 반영하며, 이전 판정·완료 근거·지문을 `rejudge_history` 에 남긴다. 구기록에 완료 근거가 없으면 `completion_inputs_missing` 으로 표시하고, 검사 PASS 만으로 미정이 없었다고 추정해 완료시키지 않는다. 기존 대기·실패도 보존한다. 지문 계산 방식이 바뀌기 전(2026-11-06 이전) 결과는 다시 판정해야 새 실행과 비교된다.
 - `verify_run`: 마지막 턴에 구현자가 독립 검증 실행기(`wf-verify/verify.py`)를 실행한 마지막 결과. 실행기가 출력 끝에 찍는 결과 JSON 을 평가 쪽 함수(`verdict.run_result`)로 읽고, 명령과 결과는 두 하네스 기록 어댑터(`transcript.commands`)가 잇는다. `ok`·`returned`·`incomplete`·`unverified`(하네스 없음·빈 답 등, 사유는 `verify_run_reason`)는 실행기의 판정, `error` 는 결과 없이 실패한 실행, `unknown` 은 결과가 기록에 없거나 결과가 다른 출력과 섞여 이번 실행의 것인지 저장된 출력을 읽은 것인지 가를 수 없는 경우, `none` 은 실행 흔적 없음이다. 실행기 파일만 `cat` 하거나 실행기를 부르지 않고 저장된 결과를 읽은 것은 실행이 아니다. **실행 흔적은 성공이 아니고, `ok` 도 전체 완료가 아니다**: 실행기가 함께 낸 완료 판정(`verified`·`waiting-user` 등)은 `verify_run_completion` 에 따로 남는다. 보고서의 「실행기 OK(완료)/실행」 열로 보이며 평가의 완료 판정에는 쓰지 않는다.
 - `verifier_record`: 검증자를 띄운 흔적이 `observed`(있음)·`none`(볼 수 있는 기록에 없음)·`no-record`(Codex 원본 기록이 없어 볼 수 없음) 중 무엇인가. Codex 는 `exec` 기록에 하위 에이전트 생성이 남지 않아서 원본 기록(rollout)을 함께 본다. **띄운 흔적은 검증 통과의 증거가 아니다.**
 
@@ -87,12 +87,12 @@ bash evals/run.sh question-order 7c39b22..HEAD codex 10   # 두 커밋 비교: �
 ## 모델 없이 도는 시험 (CI)
 
 ```text
-bash evals/selftest.sh       # 표본 판정·관찰 기대값·실행기 계약(종료 코드, 외부 장애 분류, 승인 대기 집계 등)
+bash evals/selftest.sh       # 표본 판정·관찰 기대값·실행기 계약(종료 코드, 외부 장애 분류 등)
 python3 -I evals/flowtest.py # 설치된 검토 도구(verify.py): 반환·재검토·한도·미확인·요청 원문 없음 = 입력 부족·두 원문 입력 방식·판정 근거 변경과 재사용
 python3 -I evals/sandboxtest.py # 실제 codex sandbox -P :workspace 안의 verify(.git 읽기 전용 경계). codex 가 없으면 미실행(종료 3), 통과로 세지 않음
 ```
 
-GitHub CI 가 매 push 마다 `selftest.sh` 를 돌린다. 판정 검사를 고쳤으면 `python3 -I evals/rejudge.py evals/results/<폴더>` 로 저장된 결과를 다시 판정한다(실행 때의 입력·관문 조건을 복원한다. 관문은 v3.0 이하 커밋 결과에만 있다).
+GitHub CI 가 매 push 마다 `selftest.sh` 를 돌린다. 판정 검사를 고쳤으면 `python3 -I evals/rejudge.py evals/results/<폴더>` 로 저장된 결과를 다시 판정한다(실행 때의 입력 조건을 복원한다).
 
 ## 독립 검증 루프 (EVALS_VERIFY=1)
 
@@ -122,9 +122,9 @@ v3.2~v3.4 는 설치기가 두 하네스에 세션 시작 정보 훅을 두었�
 
 `claude`·`codex` CLI 가 설치·로그인되어 있어야 하고, 실제 모델 세션을 임시 폴더에서 권한 확인 없이 실행한다. 사용자 전역 설정은 건드리지 않는다.
 
-실행 환경은 두 하네스가 다르다. **Claude** 는 사용자 홈(`~/.claude`)을 그대로 쓰므로 전역 지침·사용자 설정의 플러그인(예: superpowers·compound-engineering)·전역 훅이 함께 돈다(깨끗한 환경이 아니다). **Codex** 는 `auth.json`·`config.toml`·`AGENTS.md` 만 복사한 임시 홈을 쓴다(구현자 세션 하나에 하나, 검토자 세션은 회차마다 따로. `verdict.py session` 을 직접 불러도 같다). 프로젝트에 `.codex/hooks.json` 이 있을 때(관문이 있던 v3.0 이하 커밋)만 `--dangerously-bypass-hook-trust` 로 사용자의 훅 신뢰를 대신한다.
+실행 환경은 두 하네스가 다르다. **Claude** 는 사용자 홈(`~/.claude`)을 그대로 쓰므로 전역 지침·사용자 설정의 플러그인(예: superpowers·compound-engineering)·전역 훅이 함께 돈다(깨끗한 환경이 아니다). **Codex** 는 `auth.json`·`config.toml`·`AGENTS.md` 만 복사한 임시 홈을 쓴다(구현자 세션 하나에 하나, 검토자 세션은 회차마다 따로. `verdict.py session` 을 직접 불러도 같다). 프로젝트에 `.codex/hooks.json` 이 있을 때(정보 훅이 있던 v3.2~v3.4 커밋)만 `--dangerously-bypass-hook-trust` 로 사용자의 훅 신뢰를 대신한다.
 
-v3.0 이하(관문 있음)와 v3.1(관문 없음)을 비교하면 보고서가 "비교 불가: 관문" 을 표시한다. 기존 사례의 check.py 는 관문이 있으면 "승인 전에는 묻고 멈춤"을, 없으면 "만들고 확인"을 통과로 보므로 통과율을 그대로 비교하지 말고 원시 기록을 함께 본다.
+승인 관문이 있던 v3.0 이하 커밋을 비교하려면 그 태그를 꺼내 그 태그의 `evals/` 로 돌린다(지금 `evals/` 는 관문을 다루지 않는다).
 
 ## 결과를 읽는 법
 
