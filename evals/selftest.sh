@@ -25,7 +25,7 @@ for dir in "$here"/cases/*/; do
     [ ! -d "$sample/files" ] || cp -R "$sample/files/." "$project/"
     # before/ 가 있는 표본은 마지막 턴 직전 상태를 흉내 낸다(없으면 비교하지 않음).
     before=""; [ ! -d "$sample/before" ] || before="$sample/before"
-    # env.txt 가 있는 표본은 실행기가 판정 검사에 넘기는 환경(EVALS_GATE·EVALS_INPUT 등)을 흉내 낸다.
+    # env.txt 가 있는 표본은 실행기가 판정 검사에 넘기는 환경(EVALS_INPUT 등)을 흉내 낸다.
     envs=(); [ ! -f "$sample/env.txt" ] || while IFS= read -r kv; do [ -z "$kv" ] || envs+=("$kv"); done < "$sample/env.txt"
     env ${envs[@]+"${envs[@]}"} EVALS_BEFORE_LAST_TURN=$before python3 -I "$dir/check.py" "$project" "$sample/transcript.jsonl" >/dev/null 2>&1; rc=$?
     case "$kind" in
@@ -85,13 +85,6 @@ grep -q 'check=REVIEW REVIEW 외부 장애' "$cap/out2" && grep -q '"check_needs
 printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho \x27{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Write", "input": {"file_path": "accounts.py"}}]}}\x27\necho \x27{"type": "error", "message": "Selected model is at capacity."}\x27\nexit 1\n' > "$cap/bin/claude"
 EVALS_RESULTS=$cap/r4 PATH="$cap/bin:$PATH" bash "$here/run.sh" account-after-correction "$REF" claude > "$cap/out4" 2>&1
 grep -q 'REVIEW 외부 장애.*편집 기록: accounts.py' "$cap/out4" && ok "되돌린 편집 뒤 장애도 검토 필요로 남김" || ng "되돌린 편집 뒤 장애: $(cat "$cap/out4")"
-# 승인 대기 수는 승인이 아닌 사용자 턴(prompt)만 센다(도구 검사 줄은 세지 않고, 0회도 기록된다)
-printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\nprintf \x27{"event": "prompt", "approved": false}\\n{"event": "pre", "approved": false, "denied": true}\\n{"event": "pre", "approved": false, "denied": false}\\n{"event": "prompt", "approved": false}\\n\x27 >> "$AWK_GATE_LOG"\necho \x27{"session_id": "fake-sid"}\x27\nexit 0\n' > "$cap/bin/claude"
-EVALS_RESULTS=$cap/r5 PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposable "$REF" claude > /dev/null 2>&1
-grep -q '"unapproved_turns": 1,' "$cap"/r5/weight-disposable-*-claude-1.meta.json && ok "승인 대기는 사용자 턴만 셈(뒤따르는 실행기 반환 턴의 prompt 기록은 세지 않음)" || ng "승인 대기 집계: $(grep unapproved "$cap"/r5/*.meta.json)"
-printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\nprintf \x27{"event": "prompt", "approved": true}\\n\x27 >> "$AWK_GATE_LOG"\necho \x27{"session_id": "fake-sid"}\x27\nexit 0\n' > "$cap/bin/claude"
-EVALS_RESULTS=$cap/r6 PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposable "$REF" claude > /dev/null 2>&1
-grep -q '"unapproved_turns": 0,' "$cap"/r6/weight-disposable-*-claude-1.meta.json && ok "승인 대기 0회도 meta 에 남음" || ng "승인 대기 0회 meta 없음"
 # 일반 답 속 낱말(at capacity)은 외부 장애로 보지 않는다
 printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho \x27{"type": "result", "result": "서버가 at capacity 일 때를 처리했습니다"}\x27\nexit 1\n' > "$cap/bin/claude"
 EVALS_RESULTS=$cap/r3 PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposable "$REF" claude > "$cap/out3" 2>&1
@@ -136,7 +129,7 @@ case "$2" in
     line=$(sed -n "${n}p" "$FAKE_DIR/verdicts")
     printf '{"type": "result", "result": %s}\n' "$line"
     exit "${FAKE_VRC:-0}";;
-  *) echo call >> "$FAKE_DIR/impl"; echo "${AWK_GATE_PROMPT_FROM:-user}" >> "$FAKE_DIR/from"; echo '{"session_id": "fake-sid"}'
+  *) echo call >> "$FAKE_DIR/impl"; echo '{"session_id": "fake-sid"}'
      # 승인 턴·교정 턴의 답은 구현 뒤 자기평가(검증자에게 가면 안 됨), 첫 턴 답은 사용자가 승인할 계획이다.
      case "$2" in *"승인합니다"*|*"별도 검증자가"*) echo '{"type": "result", "result": "IMPL-ANSWER-MARKER 다 했습니다"}';;
        *) [ -n "${FAKE_NOPLAN:-}" ] || echo '{"type": "result", "result": "PLAN-MARKER 추천안: calc.py 로 두 수의 합. 승인해 주시겠어요?"}';; esac
@@ -178,7 +171,6 @@ vrun again "$RETV" "$OKV"
 [ "$(mget verifier)" = ok ] && [ "$(mget verify_rounds)" = 2 ] && [ "$(grep -c '' "$vf/again/impl")" = 3 ] && grep -q 'made-by-impl.txt' "$vf/again/vprompt.2" \
   && [ "$(grep -c turn "$vf/again/vprompt.2")" -gt "$(grep -c turn "$vf/again/vprompt.1")" ] \
   && ok "검증: RETURN → 구현자 교정 턴 → 새 버전을 다시 판정" || ng "검증 재검증: $(mget verifier) rounds=$(mget verify_rounds)"
-[ "$(tr '\n' ' ' < "$vf/again/from")" = "user user runner " ] && ok "검증 반환 턴에만 실행기 발신 구분(AWK_GATE_PROMPT_FROM=runner, v3.0 이하 커밋 비교용)을 넘김" || ng "반환 턴 발신 구분: $(tr '\n' ' ' < "$vf/again/from")"
 vrun limit "$RETV" "$RETV" "$RETV"
 [ "$(mget verifier)" = incomplete ] && [ "$(mget verify_rounds)" = 2 ] && [ "$(mget completion)" = incomplete ] && ok "검증: 재검증 한도에 닿으면 미완료(성공 아님)" || ng "검증 한도: $(mget verifier) rounds=$(mget verify_rounds)"
 FAKE_VWRITE=1 vrun touched "$OKV"
@@ -281,7 +273,7 @@ from pathlib import Path
 here = Path(sys.argv[1])
 def meta(d, case, commit, passed, review=False, gi="a"):
     m = {"case": case, "harness": "claude", "kit_commit": commit * 5, "input": "original", "check_passed": passed, "check_needs_review": review,
-         "check_unverified": False, "global_instructions": {"g": gi}, "approval_gate": True, "harness_version": "1", "judge_version": "j",
+         "check_unverified": False, "global_instructions": {"g": gi}, "harness_version": "1", "judge_version": "j",
          "observed": {"first_reply_chars": 100}, "completion": "not-verified"}
     Path(d, f"{case}-{commit}-{passed}-{review}-{gi}.meta.json").write_text(json.dumps(m))
 with tempfile.TemporaryDirectory() as d:

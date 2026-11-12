@@ -19,8 +19,7 @@ class ResultTest(unittest.TestCase):
     def initial(self, root, review=None, observed=None, **overrides):
         run = {"case": "weight-disposable", "kit_ref": "fixture", "kit_commit": "fixture", "harness": "fake", "run": 1,
                "harness_version": "", "exit_code": 0, "seconds": 1, "agents_md_bytes": 1, "check": "PASS", "check_output": "PASS fixture",
-               "approval_gate": False, "gate_waiting": False, "input": "original", "user_turns": 1, "planned_turns": 1,
-               "unapproved_turns": 0, "observed": observed or {}, "verifier": "ok" if review is not None else "off",
+               "input": "original", "user_turns": 1, "planned_turns": 1, "observed": observed or {}, "verifier": "ok" if review is not None else "off",
                "verify_reason": "", "verify_rounds": 1, "verifier_exit_code": None, "review": review or {},
                "baseline_changed": False, "verifier_tool": "", "review_required": False, "lang": "", "judge_version": "",
                "codex_project_trusted": False, "claude_project_settings": "", "global_instructions": {}}
@@ -71,7 +70,7 @@ class ResultTest(unittest.TestCase):
             (None, {"review_required": True}, "review-missing"),
             ({"open_decisions": [], "unconfirmed": []}, {}, "verified"),
             ({"open_decisions": [], "unconfirmed": ["F1"]}, {}, "unverified"),
-            ({"open_decisions": [], "unconfirmed": []}, {"gate_waiting": True}, "waiting-user"),
+            ({"open_decisions": ["Q1"], "unconfirmed": []}, {}, "waiting-user"),
             ({"open_decisions": [], "unconfirmed": []}, {"verifier": "returned"}, "returned"),
             ({"open_decisions": [], "unconfirmed": []}, {"verifier": "incomplete"}, "incomplete"),
         ]
@@ -143,8 +142,7 @@ class ResultTest(unittest.TestCase):
             before = {"case": "weight-disposable", "exit_code": 0,
                       "check_passed": True, "check_output": "PASS fixture",
                       "verifier": "ok", "review_state": "ok", "review_required": False,
-                      "gate_waiting": False, "completion": "waiting-user",
-                      "approval_gate": False, "input": "original"}
+                      "completion": "waiting-user", "input": "original"}
             path.write_text(json.dumps(before))
             result = subprocess.run([sys.executable, "-I", str(HERE / "rejudge.py"), d],
                                     capture_output=True, text=True)

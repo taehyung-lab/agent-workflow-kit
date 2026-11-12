@@ -122,7 +122,7 @@ def _run(cmd, out, limit, cwd=None, env=None, stdin=None):
 
 def _review(cmd, directory, log, env=None):
     """검토자 세션: 구현자 세션의 표지(세션 id·발신 구분)를 물려주지 않는다. 제한 시간(AWK_VERIFY_TIMEOUT, 기본 900초)을 넘기면 124."""
-    keep = {k: v for k, v in os.environ.items() if k not in ("AWK_GATE_PROMPT_FROM", "AWK_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")}
+    keep = {k: v for k, v in os.environ.items() if k not in ("AWK_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")}
     with open(log, "wb") as out, open(str(log) + ".err", "ab") as err:
         try:
             return subprocess.run(cmd, cwd=directory, stdout=out, stderr=err, stdin=subprocess.DEVNULL, env={**keep, **(env or {})},
@@ -177,9 +177,9 @@ class Claude(Harness):
         return self._turn(["claude", "-p", prompt, *self.FLAGS], out, cwd=self.project)
 
     def resume(self, prompt, out, from_runner=False):
-        """from_runner: 사용자 턴이 아닌 실행기의 반환 턴. 관문이 있던 커밋(v3.0 이하)에 발신 구분을 넘겨 글 속 "승인합니다"로 승인 상태가 바뀌지 않게 한다."""
+        """from_runner: 사용자 턴이 아닌 실행기의 반환 턴(제한 시간이 짧다)."""
         return self._turn(["claude", "-p", prompt, "--resume", self.session_id, *self.FLAGS], out, limit=900 if from_runner else LIMIT,
-                          cwd=self.project, env={"AWK_GATE_PROMPT_FROM": "runner"} if from_runner else None)
+                          cwd=self.project)
 
     def review(self, directory, prompt, log):
         exe = shutil.which("claude")
@@ -210,13 +210,13 @@ class Codex(Harness):
         # EVALS_CODEX_NETWORK=1 이면 작업 공간에 네트워크를 허용한다(세션 안에서 다른 세션을 띄우는 후보를 시험할 때).
         if os.environ.get("EVALS_CODEX_NETWORK") == "1":
             self.flags += ["-c", "sandbox_workspace_write.network_access=true"]
-        # Codex 는 프로젝트 훅을 사용자가 한 번 신뢰해야 실행한다. 프로젝트에 .codex/hooks.json 이 있을 때만(관문이 있던 v3.0 이하,
-        # 정보 훅이 있던 v3.2~v3.4 커밋) 그 신뢰를 대신한다.
+        # Codex 는 프로젝트 훅을 사용자가 한 번 신뢰해야 실행한다. 프로젝트에 .codex/hooks.json 이 있을 때만(정보 훅이 있던 v3.2~v3.4 커밋)
+        # 그 신뢰를 대신한다.
         hooks = Path(project) / ".codex/hooks.json"
         if hooks.is_file():
             self.flags.append("--dangerously-bypass-hook-trust")
         # v3.2~v3.4 의 세션 시작 정보 훅(wf-context)은 Codex 가 프로젝트를 신뢰해야(trust_level) 읽힌다. 프로젝트를 신뢰한 사용자를 재현하려고
-        # 임시 홈의 config.toml 에만 이 프로젝트 신뢰를 더한다. 관문이 있던 v3.0 이하 커밋의 실행 조건은 바꾸지 않는다.
+        # 임시 홈의 config.toml 에만 이 프로젝트 신뢰를 더한다.
         if hooks.is_file() and re.search(r"wf-context/context.py", hooks.read_text(encoding="utf-8", errors="replace")):
             config = Path(self.home) / "config.toml"
             for pdir in (str(project), os.path.realpath(project)):
@@ -231,10 +231,10 @@ class Codex(Harness):
                           out, env={"CODEX_HOME": self.home}, stdin=subprocess.DEVNULL)
 
     def resume(self, prompt, out, from_runner=False):
-        """from_runner: 사용자 턴이 아닌 실행기의 반환 턴(발신 구분을 넘기고, 네트워크·훅 신뢰 옵션은 주지 않는다)."""
+        """from_runner: 사용자 턴이 아닌 실행기의 반환 턴(네트워크·훅 신뢰 옵션은 주지 않는다)."""
         return self._turn(["codex", "exec", "resume", "--json", "--skip-git-repo-check", "-c", 'sandbox_mode="workspace-write"',
                            *([] if from_runner else self.flags), self.session_id, prompt], out, cwd=self.project, stdin=subprocess.DEVNULL,
-                          env={"CODEX_HOME": self.home, **({"AWK_GATE_PROMPT_FROM": "runner"} if from_runner else {})})
+                          env={"CODEX_HOME": self.home})
 
     def review(self, directory, prompt, log):
         exe = shutil.which("codex")

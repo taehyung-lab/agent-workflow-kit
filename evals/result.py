@@ -18,7 +18,7 @@ REVIEW_STATES = {"off", "ok", "returned", "incomplete", "unverified"}
 def _known_inputs(inputs):
     return (isinstance(inputs, dict) and inputs.get("version") == 1
             and isinstance(inputs.get("review_state"), str) and inputs["review_state"] in REVIEW_STATES
-            and all(type(inputs.get(k)) is bool for k in ("review_required", "gate_waiting"))
+            and type(inputs.get("review_required")) is bool
             and all(isinstance(inputs.get(k), list)
                     and all(isinstance(v, str) for v in inputs[k]) for k in ("open_decisions", "unconfirmed")))
 
@@ -45,21 +45,21 @@ def check_verdict(record):
 def _completed(record, check):
     inputs = record.get("completion_inputs")
     if _known_inputs(inputs):
-        return completion(inputs["review_state"], check,
-                          inputs["gate_waiting"] or bool(inputs["open_decisions"]),
+        # 관문이 있던 때(v3.0 이하)의 기록에 남은 gate_waiting 은 읽지 않는다(그 결과는 그 태그의 evals 로 다시 판정한다).
+        return completion(inputs["review_state"], check, bool(inputs["open_decisions"]),
                           inputs["review_required"], unresolved=bool(inputs["unconfirmed"]))
     # 예전 저장 형식에는 미정·미확인 입력이 없다. 기존 대기와 실패는 보존하되
     # PASS만 다시 얻었다고 그 공백이 해소된 것으로 보지 않는다.
     previous = record.get("completion")
     state = record.get("review_state", record.get("verifier", "unverified"))
-    waiting = record.get("gate_waiting") is True or previous == "waiting-user"
+    waiting = previous == "waiting-user"
     return completion(state, check, waiting, required=True, unresolved=True)
 
 
 def initial_result(run):
     """실행기가 관찰한 근거를 저장한 뒤 그 근거로 완료를 계산한다. run 은 한 번의 실행에서 관찰한 사실이다:
     case·kit_ref·kit_commit·harness·run·harness_version·exit_code·seconds·agents_md_bytes, check(판정 낱말)·check_output,
-    approval_gate·gate_waiting·input·user_turns·planned_turns·unapproved_turns, observed(observe.py 결과),
+    input·user_turns·planned_turns, observed(observe.py 결과),
     verifier(실행기 검증 루프의 상태, 안 돌렸으면 off)·verify_reason·verify_rounds·verifier_exit_code·review(검토 도구의 마지막 결과 JSON)·
     baseline_changed·verifier_tool·review_required, lang·judge_version·codex_project_trusted·claude_project_settings·global_instructions."""
     observed, review = run["observed"], run["review"]
@@ -74,14 +74,12 @@ def initial_result(run):
         else:
             state, evidence = "off", {"open_decisions": [], "unconfirmed": []}
     inputs = {"version": 1, "review_state": state, "review_required": run["review_required"],
-              "gate_waiting": run["gate_waiting"],
               "open_decisions": evidence.get("open_decisions"), "unconfirmed": evidence.get("unconfirmed")}
     m = {"case": run["case"], "kit_ref": run["kit_ref"], "kit_commit": run["kit_commit"], "harness": run["harness"],
          "run": run["run"], "harness_version": run["harness_version"], "exit_code": run["exit_code"], "seconds": run["seconds"],
          "agents_md_bytes": run["agents_md_bytes"], "check_passed": run["check"] == "PASS",
          "check_needs_review": run["check"] == "REVIEW", "check_unverified": run["check"] == "UNVERIFIED",
-         "approval_gate": run["approval_gate"], "input": run["input"], "user_turns": run["user_turns"],
-         "planned_turns": run["planned_turns"], "unapproved_turns": run["unapproved_turns"],
+         "input": run["input"], "user_turns": run["user_turns"], "planned_turns": run["planned_turns"],
          "check_output": run["check_output"], "observed": observed, "verifier": run["verifier"],
          "verify_reason": run["verify_reason"], "verify_rounds": run["verify_rounds"],
          "verifier_exit_code": run["verifier_exit_code"],
@@ -89,7 +87,7 @@ def initial_result(run):
          "lang": run["lang"] or None, "judge_version": run["judge_version"],
          "stage": "after-approval" if run["input"] == "with-approval" else "original-input",
          "review_state": state, "review_required": inputs["review_required"],
-         "completion_inputs": inputs, "gate_waiting": inputs["gate_waiting"],
+         "completion_inputs": inputs,
          "verifier_tool": run["verifier_tool"] or None, "codex_project_trusted": run["codex_project_trusted"],
          "baseline_changed_after_approval": run["baseline_changed"],
          "global_instructions": run["global_instructions"],

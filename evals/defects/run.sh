@@ -11,8 +11,8 @@ EVALS_LANG=python python3 -I "$ev/session.py" project "$w/p" "$ref" --setup "$ev
 base=$(python3 -I "$ev/verdict.py" snapshot "$w/p")  # 결함을 심기 전 상태(검토의 기준 커밋)
 python3 -I "$here/scenarios.py" apply "$name" "$w/p"
 python3 -I "$here/scenarios.py" text "$name" request > "$w/req.txt"; python3 -I "$here/scenarios.py" text "$name" plan > "$w/plan.txt"
-impl() {  # 구현자 세션 1회(승인 말 포함: v3.0 이하 커밋은 관문이 쓰기를 연다)
-  (cd "$w/p" && AWK_GATE_LOG="$out/$tag.hook.log" python3 -I "$ev/session.py" start codex "$w/p" "$1" "$out/$tag.impl$2")
+impl() {  # 구현자 세션 1회
+  (cd "$w/p" && python3 -I "$ev/session.py" start codex "$w/p" "$1" "$out/$tag.impl$2")
 }
 review() {  # 독립 검토 1회(고정 입력, 평가 실행기가 검토자 세션을 띄운다). 승인된 계획은 검토하는 동안만 작업 지도의 기준으로 둔다(구현자 세션에는 없다)
   mkdir -p "$w/p/work/defect" && { printf '# 결함 사례\n\n## 기준\n\n'; cat "$w/plan.txt"; printf '\n'; } > "$w/p/work/defect/work.md"
