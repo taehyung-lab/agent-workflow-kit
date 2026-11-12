@@ -62,10 +62,8 @@ def product_names(project):
 
 def turn_answers(log):
     """사용자 턴별 마지막 답 목록(<이름>.tN.jsonl 순서). 턴 파일이 없으면 기록 전체의 마지막 답 하나."""
-    from transcript import read
-    log = Path(log)
-    turns = sorted(log.parent.glob(log.name[: -len(".jsonl")] + ".t*.jsonl"), key=lambda p: int(re.search(r"\.t(\d+)\.jsonl$", p.name).group(1)))
-    return [read(t)[1] for t in turns] or [read(log)[1]]
+    from transcript import read, turn_logs
+    return [read(t)[1] for t in turn_logs(log)] or [read(log)[1]]
 
 
 def launcher(root, name, legacy=None):

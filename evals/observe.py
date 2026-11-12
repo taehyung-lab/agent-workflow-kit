@@ -31,7 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from judge import QUESTION
-from transcript import calls, commands, is_codex, read, rollout_calls
+from transcript import calls, commands, is_codex, last_turn_log, read, rollout_calls, rollout_log, turn_log  # last_turn_log 는 사례 판정도 여기서 가져간다
 from verdict import run_result
 
 # 검증을 마쳤다는 주장만 센다. "별도 검토를 받겠습니다" 같은 계획 문장은 주장이 아니다.
@@ -41,12 +41,6 @@ CLAIM = (r"((독립|별도)\s*(검증|판정|검토)(자|자가|자의)?[^.\n?]{
 EXECUTOR = r"wf-verify/verify\.(py|sh)\b"
 WRITES = r"(>\s*\S|sed\s+-i|write_text|open\([^)]*['\"]w|apply_patch|tee\s)"
 NOT_WRITE_REDIRECT = r"\d*>>?\s*/dev/null\b|\d*>&\d"  # 출력 버리기(2>/dev/null)·합치기(2>&1)는 파일 쓰기가 아니다
-
-
-def last_turn_log(log):
-    log = Path(log)
-    turns = sorted(log.parent.glob(log.name[: -len(".jsonl")] + ".t*.jsonl"), key=lambda p: int(re.search(r"\.t(\d+)\.jsonl$", p.name).group(1)))
-    return turns[-1] if turns else log
 
 
 def edits(path, names):
@@ -112,7 +106,7 @@ SUBAGENT_WORK = ("spawn_agent", "followup_task")
 
 def rollout_spawned_in_last_turn(log):
     """Codex 원본 기록에서 마지막 사용자 턴 뒤에 하위 에이전트를 만들었는가. 원본이 없거나 비었거나 읽을 수 없으면(기록 부족) None."""
-    path = Path(str(log)[: -len(".jsonl")] + ".rollout.jsonl")
+    path = rollout_log(log)
     made = rollout_calls(path) if path.is_file() else None
     if made is None:
         return None
@@ -131,7 +125,7 @@ def observe(log, names):
     codex = is_codex(last)
     record = "observed" if observed else ("no-record" if codex and spawned is None else "none")
     run_failed = run in ("returned", "incomplete", "unverified", "error") and not subagent
-    first = Path(str(log).replace(".jsonl", ".t1.jsonl"))
+    first = turn_log(log, 1)
     return {
         "final_question": bool(re.search(QUESTION, final)),
         "first_reply_chars": len(read(first if first.is_file() else log)[1]),

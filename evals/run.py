@@ -29,11 +29,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 KIT = HERE.parent
 sys.path.insert(0, str(HERE))
-import observe, result, session, verdict
+import observe, result, session, transcript, verdict
 from caseinfo import MissingJudgeFile, case_path, judge_version
 
-# 하네스가 모델 용량·요청 한도 같은 외부 장애로 끝났는지: 오류 사건(Codex error·turn.failed, Claude 오류 결과)과 표준 오류에서만 찾는다(일반 답 속 낱말은 보지 않는다).
-ERROR_EVENT = re.compile(rb'"type": ?"(error|turn\.failed)"|"is_error": ?true')
+# 하네스가 모델 용량·요청 한도 같은 외부 장애로 끝났는지: 기록의 오류 사건(transcript.error_lines)과 표준 오류에서만 찾는다(일반 답 속 낱말은 보지 않는다).
 EXTERNAL = re.compile(rb'at capacity|rate.?limit|usage.?limit|hit your [0-9a-z -]*limit|api_error_status"?: ?429|too many requests|overloaded|HTTP 429|stream disconnected|service unavailable', re.I)
 # 전역 스킬은 폴더 전체의 SKILL.md 내용으로 지문을 만든다(스킬이 하나 바뀌어도 지문이 달라진다).
 # 정렬 순서·경로 표기까지 예전 결과의 지문과 같아야 비교할 수 있으므로 셸 명령을 그대로 쓴다.
@@ -173,7 +172,7 @@ def verify_loop(harness, project, out, turns, base_sha, case_dir, tool, t):
 def judge(case_dir, project, work, out, rc, observed, input_kind):
     """사례 판정. 돌려줌: (판정 낱말, 판정 문구). 판정 검사는 0=통과, 1=실패, 2=검토 필요를 돌려주고, 미확인은 실행기가 정한다:
     하네스가 외부 장애로 끝났으면 판정하지 않고 통과율 분모에서 뺀다(시도·사유는 남긴다)."""
-    lines = [l for l in Path(f"{out}.jsonl").read_bytes().split(b"\n") if ERROR_EVENT.search(l)] + Path(f"{out}.err").read_bytes().split(b"\n")
+    lines = transcript.error_lines(f"{out}.jsonl") + Path(f"{out}.err").read_bytes().split(b"\n")
     external = next((m.group().decode(errors="replace") for m in map(EXTERNAL.search, lines) if m), "")
     if rc != 0 and external:
         # 장애 전에 제품 파일을 바꿨으면(최종 파일 차이, 또는 바꿨다가 되돌린 편집 기록) 위반일 수 있으므로
@@ -289,7 +288,7 @@ def run_once(case_name, case_dir, ref, commit, harness_name, i, out_root, state)
         if not os.path.isfile(state["verifier_tool"]):
             state["verifier_tool"] = str(KIT / ".agents/skills/wf-verify/verify.py")
         v, rc = verify_loop(harness, project, out, turns, base_sha, case_dir, state["verifier_tool"], t)
-    harness.close(rollout=f"{out}.rollout.jsonl")
+    harness.close(rollout=transcript.rollout_log(f"{out}.jsonl"))
     seconds = int(time.time()) - start
     try:
         names = (case_dir / "observe.txt").read_text(encoding="utf-8").split() if (case_dir / "observe.txt").is_file() else []

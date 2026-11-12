@@ -1,5 +1,5 @@
 """평가 실행기가 쓰는 판정 함수와 검토 세션. 판정 규칙(judge·completion)은 설치되는 검토 도구(.agents/skills/wf-verify/verify.py)의
-함수를 그대로 쓴다(일반 설치와 평가가 같은 규칙을 쓰게 하려는 것이다). 하네스 기록을 읽는 일과 검토 한 회차를 돌리는 일은 평가만 하므로 여기에 있다.
+함수를 그대로 쓴다(일반 설치와 평가가 같은 규칙을 쓰게 하려는 것이다). 검토 한 회차를 돌리는 일은 평가만 하므로 여기에 있다(하네스 기록은 transcript.py 가 읽는다).
 검토자 세션을 띄우는 명령(두 하네스의 차이)은 session.py 의 어댑터가 맡는다.
 
 검증자는 답 끝에 JSON 하나를 쓴다(verify.py 의 VERIFIER_PROMPT 형식):
@@ -18,36 +18,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from session import HARNESSES
+from transcript import final_answer  # 검증자 기록(Claude stream-json, Codex --json)의 마지막 답 전체
 
 _spec = importlib.util.spec_from_file_location("awk_verify", Path(__file__).resolve().parents[1] / ".agents/skills/wf-verify/verify.py")
 _verify = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_verify)
 last_json, judge, completion, ids, EXIT = _verify.last_json, _verify.judge, _verify.completion, _verify.ids, _verify.EXIT
-
-
-def final_answer(path):
-    """검증자 기록(Claude stream-json, Codex --json)의 마지막 답 전체."""
-    final = ""
-    try:
-        lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return ""
-    for line in lines:
-        try:
-            e = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(e, dict):
-            continue
-        if e.get("type") == "assistant":
-            for part in (e.get("message") or {}).get("content", []) or []:
-                if isinstance(part, dict) and part.get("type") == "text":
-                    final = part.get("text", "")
-        elif e.get("type") == "result":
-            final = e.get("result") or final
-        elif e.get("type") == "item.completed" and (e.get("item") or {}).get("type") == "agent_message":
-            final = e["item"].get("text", "")
-    return final
 
 
 def run_result(output, exit_code=None):

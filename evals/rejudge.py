@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from result import check_verdict, check_word, rejudge_result
+from transcript import turn_logs
 from caseinfo import MissingJudgeFile, case_path, judge_version as judge_fingerprint  # 실행기(run.py)와 같은 사례 위치·지문
 
 failed = []
@@ -26,7 +27,7 @@ for root in sys.argv[1:]:
         # 실행 때와 같은 판정 조건을 복원한다. 예전 meta 에 입력이 없으면 남긴 파일에서 추정한다:
         # 사례의 prompt 수보다 실행한 턴이 많으면 승인 추가로 본다.
         prompts = len(list(case_path(m["case"]).glob("prompt*.txt")))
-        ran = len(list(Path(base).parent.glob(Path(base).name + ".t*.jsonl")))
+        ran = len(turn_logs(base + ".jsonl"))
         env["EVALS_INPUT"] = m.get("input", "with-approval" if ran > prompts else "original")
         env["EVALS_LANG"] = m.get("lang") or ""
         # 판정 파일이 빠져 지문을 만들 수 없으면 이 meta 는 고치지 않고 실패로 알린다(빠진 파일을 뺀 지문을 쓰지 않는다).

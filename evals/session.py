@@ -1,7 +1,7 @@
 """키트 커밋을 설치한 새 프로젝트를 만들고, 그 안에서 하네스 세션을 띄우고 이어 가는 일을 한 곳에서 맡는다.
 
 평가 실행기(run.py)·goalflow·설치 흐름 시험이 같이 쓴다. Claude 와 Codex 의 차이(명령줄, 임시 홈,
-훅·프로젝트 신뢰, 네트워크 옵션, 제한 시간, 세션 id 읽기)는 두 어댑터(Claude·Codex) 안에만 둔다. 부르는 쪽은 하네스 이름으로 가르지 않는다.
+훅·프로젝트 신뢰, 네트워크 옵션, 제한 시간)는 두 어댑터(Claude·Codex) 안에만 둔다. 부르는 쪽은 하네스 이름으로 가르지 않는다.
 
 프로젝트:
   kit_checkout(ref, dest)   지정한 커밋의 키트를 깨끗한 checkout 으로 만든다(설치기가 미커밋 키트를 거절하므로)
@@ -19,6 +19,8 @@
 import fnmatch, json, os, re, shutil, subprocess, sys, tempfile
 from collections import namedtuple
 from pathlib import Path
+
+import transcript  # 기록 형식 읽기(세션 id). 이 모듈을 가져오는 쪽은 모두 evals/ 를 모듈 경로에 둔다
 
 KIT = Path(__file__).resolve().parents[1]
 LIMIT = 1200  # 한 턴의 제한 시간(초)
@@ -145,19 +147,9 @@ class Harness:
 
     def _turn(self, cmd, out, limit=LIMIT, **how):
         rc = _run(cmd, out, limit, **how)
-        # 다음 턴이 이어 갈 세션 id: Claude 는 session_id, Codex 는 thread_id 를 기록에서 읽는다(찾을 때까지 턴마다).
+        # 다음 턴이 이어 갈 세션 id 를 기록에서 읽는다(찾을 때까지 턴마다).
         if not self.session_id:
-            with open(f"{out}.jsonl", encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    try:
-                        e = json.loads(line)
-                    except ValueError:
-                        continue
-                    if not isinstance(e, dict):
-                        break
-                    if e.get("session_id") or e.get("thread_id"):
-                        self.session_id = str(e.get("session_id") or e.get("thread_id"))
-                        break
+            self.session_id = transcript.session_id(f"{out}.jsonl")
         return Turn(rc, f"{out}.jsonl", f"{out}.err", self.session_id)
 
     def close(self, rollout=None):
