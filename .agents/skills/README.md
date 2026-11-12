@@ -5,11 +5,11 @@
 | 파일 | 역할 |
 | --- | --- |
 | [wf-ask/SKILL.md](wf-ask/SKILL.md) | 요구 확인 단계. 제품 파일을 고치기 전에 호출한다 |
-| [wf-ask/reader.md](wf-ask/reader.md) | 요청 원문만 읽는 별도 독자(하위 에이전트)에게 주는 지시문 |
+| [wf-ask/reader.md](wf-ask/reader.md) | 원문·사용자 답·환경을 독립 조사하는 별도 독자에게 주는 지시문 |
 | [wf-ask/map.md](wf-ask/map.md) | 작업 지도(`work/<작업명>/work.md`)의 형식 |
 | [wf-build/SKILL.md](wf-build/SKILL.md) | 구현 단계. 요구의 기대값 → 실패하는 검사 → 최소 구현 |
 | [wf-verify/SKILL.md](wf-verify/SKILL.md) | 결과 검토 단계. 원문 대조·완료 판정·독립 검토 |
-| [wf-verify/verify.py](wf-verify/verify.py) | 요구 기록 검사와 완료 판정(record), 독립 검토 입력 묶기(prepare)·결과 판정(finish). 검토자를 띄우지 않는다 |
+| [wf-verify/verify.py](wf-verify/verify.py) | 요구·결정 기록 연결 검사(record), 독립 검토 입력 묶기(prepare)·결과 판정(finish). 검토자를 띄우지 않는다 |
 | [wf-context/context.py](wf-context/context.py) | 맥락 확인(읽기 전용): `inspect` 는 실경로·커밋·변경 파일 이름·설치 키트 버전·다른 worktree·작업 지도 제목을 낸다. `hook` 은 세션 시작 훅이 부른다 |
 
 파일 쓰기·명령의 허용은 각 도구의 권한 설정과 sandbox 가 맡는다. 키트가 등록하는 훅은 아래 정보 훅 하나다. v3.0 까지의 승인 관문 훅(`wf-design/approval-gate.py`)은 v3.1 에서 없앴고, 업데이트하면 설치기가 그 파일과 프로젝트 설정의 관문 훅 항목만 지운다.
@@ -24,16 +24,9 @@
 
 ## 요구 기록 검사와 독립 검토 도구
 
-`verify.py record --map <지도> [--check <PASS|FAIL|REVIEW>] [--review-required]` 는 작업 지도 `## 기준` 을 읽기만 한다: `요청 원문` 항목이 있는지, 요구 기록 표의 형식(상태 값, 확정인데 출처 없음, 미정·미확인에 의존하는 확정 행)이 맞는지 보고, 독립 검토 없이 전체 완료(`completion`)를 낸다. 출처가 정말 그 결과를 정하는지는 이 명령이 판단하지 못한다(그 판단이 필요하면 독립 검토).
+`verify.py record --map <지도>` 는 작업 지도 `## 기준`의 원문 존재와 요구·결정 연결을 읽기만 한다. 결과의 `scope=record`, `state=recorded`와 종료 0은 구조가 유효하다는 뜻이다. `open_decisions`·`unconfirmed`가 남아 있어도 구조가 맞으면 0이며 전체 완료가 아니다. `completion`을 반환하지 않고 `--check`·`--review-required`를 받지 않는다. 결정은 보낸 제안·사용자 답·합의 결과의 연결을 검사한다. 그 답이 실제로 그 결과를 승인했는지는 원문 대조가 맡는다.
 
-| 완료(`completion`) | 뜻 |
-| --- | --- |
-| `verified` | 직접 검사 PASS, 미정·미확인 행 없음, 검토를 했으면 OK. 완료(종료 0)는 이것뿐이다 |
-| `waiting-user` | 미정 행이 남았다. 묻는다 |
-| `unverified` | 미확인 행이 남았거나 직접 검사 결과를 받지 않았다(통과로 가정하지 않는다) |
-| `needs-review` | 직접 검사가 사람 확인 필요(REVIEW) |
-| `check-failed` | 직접 검사 실패. 대기보다 먼저 드러낸다 |
-| `review-missing` | `--review-required`(독립 검토가 필수인 작업)인데 검토를 받지 않았다. 검토 통과는 `finish` 가 판정한다 |
+독립 검토의 `finish`는 직접 검사·미정·미확인·검토 상태를 합친 `completion`을 반환한다. `verified`만 완료이고, 사용자 답 대기는 `waiting-user`, 검사 실패는 `check-failed`, 사람 확인 필요는 `needs-review`, 필수 검토 누락은 `review-missing`, 근거 부족은 `unverified`다.
 
 `verify.py prepare` 는 **요청 원문**(작업 지도 `## 기준` 의 `요청 원문` 항목, 또는 `--request` 로 준 사용자 글 그대로), **작업 지도의 `## 기준`·`## 맥락`**(있으면), **맥락 도구가 관찰한 대상 저장소 정보**, **기준 커밋부터의 변경**(diff, `--base`, 기본 HEAD)을 묶고 판정 대상을 고정 복사본으로 만든다. 분석·설계·질문만 한 작업은 `--output <파일>` 로 산출물을 넘긴다. 요청 원문을 확보하지 못하거나, 지도 기준이 비거나, 바뀐 파일도 산출물도 없으면 입력 부족(미확인)으로 끝나며, 요약한 계획으로 대신하지 않는다. 그 밖에 `--conditions <파일>`(사용자·평가자가 따로 정한 필수 조건, 줄 머리·표 첫 칸의 ID 가 필수 조건이 된다)과 `--rounds <n>`(재검토 한도, 기본 2)을 받는다.
 

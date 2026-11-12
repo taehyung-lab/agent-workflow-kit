@@ -387,63 +387,75 @@ exit 0
     got = json.loads(fin(rd["kept"], json.dumps(OK), "--check", "PASS").stdout.strip().splitlines()[-1])
     check("검토 중 원문 삭제도 미확인", got.get("state") == "unverified")
 
-    # 요구 기록 검사(record): 검토 없이 지도의 요청 원문·표 형식을 보고 전체 완료를 판정한다
+    # 기록 검사는 형식만 판정하며, 직접 검사나 전체 완료를 대신하지 않는다.
     def rec(mp_, *extra):
         r = sh(sys.executable, "-I", str(verifier), "record", "--map", mp_, *extra, cwd=proj, env=base_env)
         return r.returncode, (json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {})
     m_done = rec_map("rec-done", "| R1 | 한국어 버튼 → 화면 → 로그인하기 | 원문 | - | bin/test | 확정 |\n")
     before = sorted(str(f) for f in (proj / "work").rglob("*"))
-    rc, o = rec(m_done, "--check", "PASS")
-    check("record: 요청 원문·표 형식이 맞고 미정·미확인이 없고 직접 검사 PASS 면 검토 없이 completion=verified(종료 0)",
-          rc == 0 and o.get("state") == "recorded" and o.get("completion") == "verified" and o.get("direct_check") == "PASS")
-    check("record 는 파일을 만들거나 바꾸지 않는다(회차·증거 폴더 없음)", sorted(str(f) for f in (proj / "work").rglob("*")) == before)
     rc, o = rec(m_done)
-    check("record: 직접 검사 결과를 받지 않으면 통과로 가정하지 않는다(unverified, 종료 6)", rc == 6 and o.get("state") == "recorded" and o.get("completion") == "unverified")
-    for chk, want in (("FAIL", "check-failed"), ("REVIEW", "needs-review")):
-        rc, o = rec(m_done, "--check", chk)
-        check(f"record: 직접 검사 {chk} 면 completion={want}(종료 6)", rc == 6 and o.get("completion") == want)
-    rc, o = rec(m_open, "--check", "PASS")
-    check("record: 미정 행이 남으면 직접 검사 PASS 여도 waiting-user(종료 6)", rc == 6 and o.get("state") == "recorded" and o.get("completion") == "waiting-user" and o.get("open_decisions") == ["Q1"])
-    check("record: 미정이 남아도 직접 검사 실패는 감추지 않는다", rec(m_open, "--check", "FAIL")[1].get("completion") == "check-failed")
-    rc, o = rec(m_unk, "--check", "PASS")
-    check("record: 미확인 행이 남으면 unverified(종료 6)", rc == 6 and o.get("completion") == "unverified" and o.get("unconfirmed") == ["F1"])
-    rc, o = rec("work/rec-dep/work.md", "--check", "PASS")
+    check("record: 기록 연결 성공은 완료 판정이나 직접 검사 결과를 반환하지 않는다",
+          rc == 0 and o.get("state") == "recorded" and o.get("scope") == "record" and "completion" not in o and "direct_check" not in o)
+    check("record 는 파일을 만들거나 바꾸지 않는다", sorted(str(f) for f in (proj / "work").rglob("*")) == before)
+    for extra in (("--check", "PASS"), ("--check", "FAIL"), ("--check", "REVIEW"), ("--review-required",)):
+        rc, o = rec(m_done, *extra)
+        check(f"record: 완료 판단 옵션 {extra} 는 사용 오류로 거부한다", rc == 2 and o.get("completion") != "verified")
+    rc, o = rec(m_open)
+    check("record: 미정은 검사 성공과 구별해 열린 결정으로 반환한다", rc == 0 and o.get("open_decisions") == ["Q1"] and "completion" not in o)
+    rc, o = rec(m_unk)
+    check("record: 미확인은 조사할 사실로 반환한다", rc == 0 and o.get("unconfirmed") == ["F1"] and "completion" not in o)
+    rc, o = rec("work/rec-dep/work.md")
     check("record: 표 형식 문제는 returned(종료 3), 미정 목록을 믿지 않는다",
-          rc == 3 and o.get("state") == "returned" and o.get("completion") == "returned" and "의존" in o.get("reason", "") and o.get("open_decisions") == [])
-    rc, o = rec(write_map("rec-noreq", HEAD + "| R1 | 한국어 버튼 → 화면 → 로그인하기 | 원문 | - | bin/test | 확정 |\n"), "--check", "PASS")
+          rc == 3 and o.get("state") == "returned" and "completion" not in o and "의존" in o.get("reason", "") and o.get("open_decisions") == [])
+    rc, o = rec(write_map("rec-noreq", HEAD + "| R1 | 한국어 버튼 → 화면 → 로그인하기 | 원문 | - | bin/test | 확정 |\n"))
     check("record: 지도에 요청 원문이 없으면 returned", rc == 3 and "요청 원문" in o.get("reason", ""))
-    rc, o = rec(write_map("rec-notable", f"- 요청 원문: {REQ}\n\n버튼 문구를 바꾼다\n"), "--check", "PASS")
+    rc, o = rec(write_map("rec-notable", f"- 요청 원문: {REQ}\n\n버튼 문구를 바꾼다\n"))
     check("record: 요구 기록 표가 없으면 returned", rc == 3 and "요구 기록 표" in o.get("reason", ""))
-    rc, o = rec("work/no-such/work.md", "--check", "PASS")
-    check("record: 지도가 없으면 unverified(종료 5), 완료가 아님", rc == 5 and o.get("completion") == "unverified")
-    rc, o = rec(write_map("rec-empty", f"- 요청 원문: {REQ}\n\n" + HEAD), "--check", "PASS")
-    check("record: 행이 없는 표는 완료로 세지 않는다(returned)", rc == 3 and o.get("completion") == "returned")
-    rc, o = rec(m_done, "--check", "PASS", "--review-required")
-    check("record --review-required: 필수 검토 없이는 직접 검사 PASS 여도 완료가 아니다(review-missing, 종료 6)",
-          rc == 6 and o.get("state") == "recorded" and o.get("completion") == "review-missing")
+    rc, o = rec("work/no-such/work.md")
+    check("record: 지도가 없으면 unverified(종료 5)", rc == 5 and o.get("state") == "unverified" and "completion" not in o)
+    rc, o = rec(write_map("rec-empty", f"- 요청 원문: {REQ}\n\n" + HEAD))
+    check("record: 행이 없는 표는 returned", rc == 3 and o.get("state") == "returned")
     # 요구 기록과 결정 기록: 요구는 보장할 행동, 결정은 사용자가 고를 것. 답이 없는 결정에 기대는 요구는 확정이 아니다.
     RHEAD = "| ID | 요구(사전 상태 → 행동·입력 → 기대 결과) | 근거 | 결정 | 확인 방법 | 상태 |\n|---|---|---|---|---|---|\n"
-    DHEAD = "\n| ID | 정할 것 | 조사한 사실 | 추천과 이유 | 대안과 달라지는 결과 | 사용자 답 | 영향 요구 |\n|---|---|---|---|---|---|---|\n"
+    DHEAD = "\n| ID | 정할 것 | 조사한 사실 | 보낸 제안 | 사용자 답 | 합의 결과 | 영향 요구 |\n|---|---|---|---|---|---|---|\n"
     def dmap(name, rows, drows):
         return write_map(name, f"- 요청 원문: {REQ}\n\n" + RHEAD + rows + DHEAD + drows)
     R_OPEN = "| R1 | 안내 화면 → 버튼을 누름 → (D1 에 따름) | - | D1 | 답 뒤 | 미정 |\n| R2 | 안내 화면 → 버튼을 누른 뒤 조회 → (D1 에 따름) | - | D1 | 답 뒤 | 미정 |\n"
-    D_OPEN = "| D1 | 버튼이 여는 화면 | README 에 새 버튼과 A화면이 함께 적혀 있다 | A화면(근거 약함) | 같은 화면에서 문구만 바뀐다 | | R1, R2 |\n"
-    D_DONE = "| D1 | 버튼이 여는 화면 | README 에 새 버튼과 A화면이 함께 적혀 있다 | A화면(근거 약함) | 같은 화면에서 문구만 바뀐다 | \"예, 추천대로\" | R1, R2 |\n"
+    D_OPEN = "| D1 | 버튼이 여는 화면 | README 에 새 버튼과 A화면이 함께 적혀 있다 | A화면으로 이동할까요? | | | R1, R2 |\n"
+    D_DONE = "| D1 | 버튼이 여는 화면 | README 에 새 버튼과 A화면이 함께 적혀 있다 | A화면으로 이동할까요? | \"예, 추천대로\" | A화면으로 이동 | R1, R2 |\n"
     R_DONE = "| R1 | 안내 화면 → 버튼을 누름 → A화면이 열린다 | 사용자 답(D1) | D1 | bin/test | 확정 |\n| R2 | 안내 화면 → 버튼을 누른 뒤 조회 → A화면 | 사용자 답(D1) | D1 | bin/test | 확정 |\n"
-    rc, o = rec(dmap("dec-open", R_OPEN, D_OPEN), "--check", "PASS")
+    rc, o = rec(dmap("dec-open", R_OPEN, D_OPEN))
     check("결정 기록: 사용자 답이 없는 결정은 답 대기(waiting-user)로 남고, 결정 하나가 요구 여럿에 걸려도 한 번만 센다",
-          o.get("completion") == "waiting-user" and o.get("open_decisions", []).count("D1") == 1 and {"R1", "R2", "D1"} <= set(o.get("open_decisions", [])))
+          rc == 0 and o.get("open_decisions", []).count("D1") == 1 and {"R1", "R2", "D1"} <= set(o.get("open_decisions", [])))
     rc, o = rec(dmap("dec-early", R_DONE, D_OPEN))
     check("결정 기록: 답이 없는 결정에 기대는 요구를 확정으로 적으면 returned", rc == 3 and "D1" in o.get("reason", "") and "확정" in o.get("reason", ""))
-    rc, o = rec(dmap("dec-done", R_DONE, D_DONE), "--check", "PASS")
-    check("결정 기록: 답을 옮긴 뒤에는 요구가 확정되고 직접 검사 PASS 면 verified", rc == 0 and o.get("completion") == "verified" and not o.get("open_decisions"))
+    rc, o = rec(dmap("dec-done", R_DONE, D_DONE))
+    check("결정 기록: 제안·답·합의 결과가 이어지면 열린 결정이 없다(완료 판정 아님)", rc == 0 and "completion" not in o and not o.get("open_decisions"))
+    for name, decision in (
+        ("refusal", D_DONE.replace('"예, 추천대로"', '"그건 싫어요"').replace("| A화면으로 이동 |", "| |")),
+        ("answer-only", D_DONE.replace("| A화면으로 이동할까요? |", "| |")),
+        ("no-answer", D_DONE.replace('\"예, 추천대로\"', "")),
+    ):
+        rc, o = rec(dmap("dec-" + name, R_OPEN, decision))
+        check(f"결정 기록: {name} 는 답 칸만으로 해결되지 않는다", rc == 0 and "D1" in o.get("open_decisions", []))
+        rc, o = rec(dmap("dec-early-" + name, R_DONE, decision))
+        check(f"결정 기록: {name} 에 기대는 확정 요구는 거부한다", rc == 3 and "D1" in o.get("reason", ""))
     rc, o = rec(dmap("dec-badref", R_DONE, D_DONE.replace("R1, R2", "R1, R9")))
     check("결정 기록: 영향 요구가 요구 기록에 없으면 returned", rc == 3 and "R9" in o.get("reason", ""))
     rc, o = rec(dmap("dec-noref", R_DONE.replace("| D1 | bin/test | 확정 |\n| R2", "| D7 | bin/test | 확정 |\n| R2", 1), D_DONE))
     check("결정 기록: 요구가 가리키는 결정이 없으면 returned", rc == 3 and "D7" in o.get("reason", ""))
+    rc, o = rec(dmap("dec-missing-forward", R_DONE.replace("| D1 | bin/test |", "| - | bin/test |"), D_OPEN))
+    check("결정 기록: 미합의 결정이 영향을 주는 요구에서 결정 연결을 빼면 거부한다", rc == 3 and "결정 칸" in o.get("reason", ""))
+    rc, o = rec(dmap("dec-missing-reverse", R_DONE, D_DONE.replace("R1, R2", "R1")))
+    check("결정 기록: 요구가 결정에 기대면 영향 요구의 역방향 연결도 일치해야 한다", rc == 3 and "영향 요구" in o.get("reason", ""))
     rc, o = rec(dmap("dec-nocheck", R_DONE.replace("| D1 | bin/test | 확정 |\n| R2", "| D1 | | 확정 |\n| R2", 1), D_DONE))
     check("요구 기록: 확정인데 확인 방법이 비면 returned", rc == 3 and "확인 방법" in o.get("reason", ""))
-    check("record 결과에는 review=off 가 붙어 검토 결과와 구별된다", rec(m_done, "--check", "PASS")[1].get("review") == "off")
+    missing_check = dmap("dec-check-column", R_DONE, D_DONE)
+    check_path = proj / missing_check
+    check_path.write_text(check_path.read_text().replace("| 확인 방법 |", "|").replace("| bin/test |", "|"))
+    rc, o = rec(missing_check)
+    check("요구 기록: 확인 방법 열 자체가 없어도 확정 요구를 거부한다", rc == 3 and "확인 방법" in o.get("reason", ""))
+    check("record 결과에는 review=off 가 붙어 검토 결과와 구별된다", rec(m_done)[1].get("review") == "off")
     # 평가 관찰: 세션이 record 만 실행했으면 독립 검토를 한 것으로 세지 않는다
     sys.path.insert(0, str(KIT / "evals"))
     import observe, verdict
@@ -453,9 +465,9 @@ exit 0
                                                                       "aggregated_output": json.dumps(result, ensure_ascii=False), "exit_code": rc_}}, ensure_ascii=False) + "\n")
         return observe.verify_run(str(log))[0]
     check("평가 관찰: record 의 recorded 는 검토 통과로 읽지 않고, finish 의 ok 는 읽는다",
-          seen(rec(m_done, "--check", "PASS")[1], 0) == "none" and seen({"state": "ok", "completion": "verified"}, 0) == "ok")
+          seen(rec(m_done)[1], 0) == "none" and seen({"state": "ok", "completion": "verified"}, 0) == "ok")
     check("평가 관찰: 예전 기록의 record 결과(state ok, review off)와 완료가 아닌 record(종료 6)도 검토로 읽지 않는다",
-          seen({"state": "ok", "review": "off", "completion": "verified"}, 0) == "none" and seen(rec(m_open, "--check", "PASS")[1], 6) == "none")
+          seen({"state": "ok", "review": "off", "completion": "verified"}, 0) == "none" and seen({"state": "recorded", "review": "off", "completion": "waiting-user"}, 6) == "none")
     check("평가 관찰: 완료가 아닌 finish ok 는 종료 6(예전 기록은 0)으로 읽고, 맞지 않는 종료 코드는 판정으로 쓰지 않는다",
           seen({"state": "ok", "completion": "unverified"}, 6) == "ok" and seen({"state": "ok", "completion": "unverified"}, 0) == "ok"
           and seen({"state": "ok", "completion": "verified"}, 6) == "unknown" and seen({"state": "returned", "completion": "returned"}, 6) == "unknown")
