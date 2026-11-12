@@ -360,7 +360,7 @@ def main(argv):
     times = int(argv[3]) if len(argv) > 3 and argv[3] else 1
     if ".." in ref:
         return compare(case_name, ref, harness_name, times)
-    case_dir = case_path(case_name)  # cases 에 없으면 holdout(숨겨 둔 평가 사례)
+    case_dir = case_path(case_name)  # cases 에 없으면 holdout(기계 판정이 PASS 를 내지 않는 사례. caseinfo.py)
     if not ((case_dir / "prompt.txt").is_file() and (case_dir / "check.py").is_file()):
         fail(f"사례가 없거나 prompt.txt·check.py 가 빠졌다: {case_dir}")
     current_judge_version(case_dir)  # 판정 파일이 빠졌으면 모델을 돌리기 전에 멈춘다
