@@ -60,7 +60,7 @@ FAKE_LOG=$fake/log EVALS_RESULTS=$results PATH="$fake:$PATH" bash "$here/run.sh"
 snap=$(ls -d "$results"/weight-disposable-*-claude-1.files 2>/dev/null | tail -1)
 [ -f "$snap/made-by-fake.txt" ] && ok "끝난 프로젝트 파일 보존" || ng "끝난 프로젝트 파일이 남지 않음"
 grep -q '"exit_code": 7' "${snap%.files}.meta.json" 2>/dev/null && ok "메타데이터에 종료 코드 기록" || ng "메타데이터 종료 코드"
-# 판정기 지문: 실행(run.sh)과 재판정(rejudge.py)이 같은 코드면 같은 지문을 낸다(일반 사례·숨긴 holdout 사례 모두).
+# 판정기 지문: 실행(run.sh)과 재판정(rejudge.py)이 같은 코드면 같은 지문을 낸다(사례 둘로 본다. holdout 폴더의 사례는 caseinfotest.py 가 임시 사본에서 본다).
 # 판정 파일을 바꾸거나 빼는 경우와 재판정의 이력 보존은 caseinfotest.py 가 임시 키트 사본에서 본다.
 fpres=$(mktemp -d)
 for c in weight-disposable account-specified; do

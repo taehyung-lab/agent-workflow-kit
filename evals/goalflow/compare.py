@@ -7,6 +7,7 @@
 세션은 사용자 전역 설정과 격리한다: Claude 는 --setting-sources project, Codex 는 임시 HOME·CODEX_HOME(인증·모델 설정만).
 턴은 모든 구성이 같다: ① 요청 원문 ② 모의 사용자의 답 ③ 마무리 지시. 스킬 구성만 ①의 앞에 스킬을 쓰라는 한 줄이 붙는다.
 끝나면 프로젝트 밖에서 oracle.py 로 실제 저장·반환값을 판정한다.
+요약(<이름>.json)과 함께, 일반 결과 표(evals/report.py)가 읽는 <이름>.meta.json 을 쓴다(table.py 의 result_meta).
 
 환경 변수:
   CMP_REF     설치할 키트 커밋(기본 HEAD. 커밋하지 않은 수정은 들어가지 않는다)
@@ -25,6 +26,7 @@ from session import kit_checkout  # noqa: E402
 from transcript import read, commands  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from asked import asked  # noqa: E402
+from table import result_meta  # noqa: E402
 
 arm, harness, idx, out = sys.argv[1], sys.argv[2], sys.argv[3], Path(sys.argv[4]).resolve()
 name = f"{arm}-{harness}-{idx}"
@@ -37,8 +39,11 @@ sh = lambda *c, cwd=None: subprocess.run(c, cwd=cwd, capture_output=True, text=T
 # ---- 프로젝트 ----
 shutil.copytree(GOAL / "fixture", proj, ignore=shutil.ignore_patterns("__pycache__"))
 sh(*G, "init", "-q", cwd=proj); sh(*G, "add", "-A", cwd=proj); sh(*G, "commit", "-qm", "fixture", cwd=proj)
+kit_ref = kit_commit = None  # 키트 구성만 값이 있다
 if arm == "kit":
-    kit_checkout(os.environ.get("CMP_REF", "HEAD"), work / "kit")
+    kit_ref = os.environ.get("CMP_REF", "HEAD")
+    kit_checkout(kit_ref, work / "kit")
+    kit_commit = sh("git", "rev-parse", "HEAD", cwd=work / "kit").stdout.strip()
     r = sh("bash", str(work / "kit/install.sh"), str(proj))
     assert r.returncode == 0, r.stderr
 elif arm == "skills":
@@ -48,6 +53,7 @@ elif arm == "skills":
             shutil.copytree(src, proj / root / src.name)
 sh(*G, "add", "-A", cwd=proj); sh(*G, "commit", "-qm", "arm: " + arm, "--allow-empty", cwd=proj)
 base = sh(*G, "rev-parse", "HEAD", cwd=proj).stdout.strip()
+agents_md_bytes = (proj / "AGENTS.md").stat().st_size if (proj / "AGENTS.md").is_file() else 0  # 세션 전, 구성 설치 직후의 상시 지침 크기
 
 request = (GOAL / "fixture/request.txt").read_text(encoding="utf-8").strip()
 answer = (GOAL / "answer.txt").read_text(encoding="utf-8").strip()
@@ -158,7 +164,7 @@ if harness == "claude":
         if ev.get("type") == "system" and ev.get("subtype") == "init":
             init = {"skills": [s for s in ev.get("skills", []) if s in ("grilling", "tdd")], "plugins": len(ev.get("plugins", [])), "n_skills": len(ev.get("skills", []))}
             break
-summary = {"name": name, "arm": arm, "harness": harness, "base": base, "seconds": int(time.time() - started), "turns": rows,
+summary = {"name": name, "arm": arm, "harness": harness, "run": int(idx) if idx.isdigit() else idx, "kit_ref": kit_ref, "kit_commit": kit_commit, "agents_md_bytes": agents_md_bytes, "base": base, "seconds": int(time.time() - started), "turns": rows,
            "mock": MOCK, "answered": sorted(answered), "map": (proj / "work/enrollment/work.md").is_file(), "final_changes": product_changes(), "init": init,
            "oracle_exit": oracle.returncode, "automated_valid": verdict.get("automated_valid"), "observation_complete": verdict.get("observation_complete"),
            "failed": [c.get("name") for c in cases if c.get("passed") is False], "unobserved": [c.get("name") for c in cases if c.get("passed") is None],
@@ -166,5 +172,6 @@ summary = {"name": name, "arm": arm, "harness": harness, "base": base, "seconds"
 (out / f"{name}.json").write_text(json.dumps(summary, ensure_ascii=False, indent=1), encoding="utf-8")
 (out / f"{name}.oracle.json").write_text(oracle.stdout or oracle.stderr, encoding="utf-8")
 shutil.copytree(proj, out / f"{name}.files", ignore=shutil.ignore_patterns(".git", "__pycache__"), dirs_exist_ok=True)
+(out / f"{name}.meta.json").write_text(json.dumps(result_meta(summary), ensure_ascii=False, indent=1), encoding="utf-8")
 shutil.rmtree(work, ignore_errors=True)
 print(name, "valid=", summary["automated_valid"], "failed=", len(summary["failed"]), "/", summary["n_cases"], "seconds=", summary["seconds"])
