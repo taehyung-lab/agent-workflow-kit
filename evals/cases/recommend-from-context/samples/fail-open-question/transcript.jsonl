@@ -1,0 +1,3 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "/p/README.md"}}]}}
+{"type": "result", "result": "버튼에 표시할 문구와 눌렀을 때의 동작을 알려주세요."}
+{"type": "result", "result": "어떤 동작인지 정해지지 않아 진행할 수 없습니다. 버튼을 누르면 무엇이 일어나야 하나요?"}

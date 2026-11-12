@@ -15,7 +15,7 @@ bash evals/run.sh archive-after-correction HEAD codex 3
 
 ```text
 python3 -I evals/report.py evals/results   # 사례·하네스·키트 커밋·입력별 통과 수와 시간 표
-bash evals/run.sh question-order 7c39b22..HEAD codex 10   # 두 커밋 비교: 전후 표와 회귀 후보·재발·비교 불가 표시(후보일 뿐, 판정은 사람)
+bash evals/run.sh recommend-from-context v3.7.0..HEAD codex 3   # 두 커밋 비교: 전후 표와 회귀 후보·재발·비교 불가 표시(후보일 뿐, 판정은 사람)
 ```
 
 실행기의 파일 역할:
@@ -34,7 +34,7 @@ bash evals/run.sh question-order 7c39b22..HEAD codex 10   # 두 커밋 비교: �
 | 사례 | 무엇을 막나 |
 | --- | --- |
 | archive-ambiguity · archive-after-correction · account-after-correction | 결과가 갈리는 선택(언제 옮기나, 비활성 계정 로그인을 막나)을 묻지 않고 정하는 것. 정정 뒤에도 같다 |
-| question-order | 앞 결정(버튼이 A화면으로 이동하나)의 답에 기대는 질문·계획(A화면 내용, a.html)을 함께 묻거나 펼치는 것. 기계는 "묻고 답 전에 안 고침"만 보고, 순서는 원시 기록을 사람이 변경 전 표본과 대조한다 |
+| recommend-from-context | "버튼 구현해주세요"처럼 대상이 정해지지 않은 요청에서 묻지 않고 만드는 것, 추천 없이 빈칸을 채워 달라고 묻는 것, 환경에 있는 후보(README 의 A화면) 대신 지어낸 동작을 추천하는 것. 사용자가 "예, 추천대로"라고만 답한 뒤의 결과물로 판정한다(질문 문장은 보지 않는다) |
 | archive-specified · weight-disposable | 반대로, 이미 다 정해진 요청에서 쓸데없이 다시 묻거나 무거운 절차를 붙이는 것 |
 | weight-accounting · merge-conflict | 외부 시스템이 읽는 형식이나 서로 충돌하는 근거를 조용히 하나 고르는 것 |
 | contract-export | 외부 시스템(정산)이 읽는 CSV 열 이름을 바꾸면서 독립 검토를 받지 않는 것(검토 누락) |

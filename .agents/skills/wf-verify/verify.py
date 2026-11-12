@@ -20,7 +20,7 @@ prepare 가 읽은 원문·조건·산출물 파일, 지도의 `## 기준`·`## 
 회차 증거는 지도 옆 verify/ 또는 work/review/ 에 남고 지우거나 덮지 않는다.
 
 판정(state)과 종료 코드. 종료 코드 0 은 전체 완료(completion=verified)와 prepare 의 ready(검토 입력을 만들었고 아직 판정 전)뿐이다:
-  recorded       record: 요청 원문과 요구 기록 표의 형식이 맞다(검토 결과가 아니다. 결과에 review: off 가 붙는다).
+  recorded       record: 요청 원문이 있고 요구·결정 기록의 연결이 맞다(검토 결과도, 분석이 끝났다는 보증도 아니다. 결과에 review: off 가 붙는다).
   ok             finish: 검토자가 형식대로 모든 조건을 충족으로 냈다(이것만 검토 통과다).
                  recorded·ok 는 completion 이 verified 면 0, 아니면 6(판정은 났지만 완료가 아니다. 어떤 completion 인지는 결과 JSON 에 있다).
   returned(3)    돌려보냄. record: 표 형식 문제(지도를 고친다). finish: 검토자의 사유를 보고 원인을 고친 뒤 prepare 부터 다시 실행해 새 버전을 판정받는다.
@@ -175,8 +175,11 @@ def record_rows(criteria):
             break
     else:
         return None, []
-    col = lambda word, default=None: next((k for k, c in enumerate(head) if word in c), default)
-    c_id, c_src, c_dep, c_state = col("ID", 0), col("출처"), col("의존"), col("상태")
+    # 칸 이름은 정확히 같은 것을 먼저 찾는다("요구(사전 상태 → …)"의 '상태'를 상태 칸으로 읽지 않게)
+    col = lambda word, default=None: next((k for k, c in enumerate(head) if c == word), next((k for k, c in enumerate(head) if word in c), default))
+    c_id, c_state, c_check = col("ID", 0), col("상태"), col("확인")
+    c_src = col("근거") if col("근거") is not None else col("출처")
+    c_deps = [k for k in (col("결정"), col("의존")) if k is not None]
     rows, problems = [], []
     for line in lines[i + 2:]:
         if not line.lstrip().startswith("|"):
@@ -186,19 +189,55 @@ def record_rows(criteria):
         rid = (re.findall(ID, get(c_id)) or [get(c_id)])[0]
         state = re.sub(r"[*`_\s]", "", get(c_state))
         src = get(c_src)
-        rows.append({"id": rid, "state": state, "deps": re.findall(ID, get(c_dep)), "source": src})
+        rows.append({"id": rid, "state": state, "deps": [d for k in c_deps for d in re.findall(ID, get(k))], "source": src})
         if state not in RECORD_STATES:
             problems.append(f"{rid}: 상태 '{get(c_state)}' 는 확정·미정·미확인 중 하나여야 한다")
         elif state == "확정" and (c_src is None or src.strip(" -—") == ""):
-            problems.append(f"{rid}: 확정인데 출처(원문·사용자 결정·계약·조사한 사실과 위치)가 비었다")
+            problems.append(f"{rid}: 확정인데 근거(출처: 그 결과를 정한 원문·사용자 답·계약의 인용)가 비었다")
+        elif state == "확정" and c_check is not None and get(c_check).strip(" -—") == "":
+            problems.append(f"{rid}: 확정인데 확인 방법이 비었다")
     states = {r["id"]: r["state"] for r in rows}
+    decisions = decision_rows(criteria)
+    resolved = {d["id"]: d["resolved"] for d in decisions}
     for r in rows:
         for d in r["deps"]:
-            if d not in states:
-                problems.append(f"{r['id']}: 의존 칸의 {d} 가 요구 기록에 없다")
+            if d in resolved:
+                if r["state"] == "확정" and not resolved[d]:
+                    problems.append(f"{r['id']}: 아직 사용자 답이 없는 결정 {d} 에 기대는데 확정이다(답을 결정 기록에 옮긴 뒤 확정한다)")
+            elif d not in states:
+                problems.append(f"{r['id']}: 결정·의존 칸의 {d} 가 요구 기록에도 결정 기록에도 없다")
             elif r["state"] == "확정" and states[d] in ("미정", "미확인"):
                 problems.append(f"{r['id']}: {states[d]}인 {d} 에 의존하는데 확정이다(답·확인 전에는 확정할 수 없다)")
+    for d in decisions:
+        for rid in d["affects"]:
+            if rid not in states:
+                problems.append(f"{d['id']}: 영향을 받는 요구 {rid} 가 요구 기록에 없다")
     return rows, problems
+
+
+def decision_rows(criteria):
+    """`## 기준` 의 결정 기록 표(머리줄에 '사용자 답' 칸이 있는 표)를 읽는다. 표가 없으면 [].
+    돌려줌: [{id, resolved, affects}]. resolved 는 사용자 답 칸에 글이 있는가이고, affects 는 영향을 받는 요구 ID 다.
+    결정은 사용자가 고를 단위다: 결정 하나가 요구 여럿을 정할 수 있고, 요구 하나가 결정 여럿에 기댈 수 있다."""
+    lines = criteria.splitlines()
+    for i, line in enumerate(lines):
+        cells = [c.strip() for c in line.strip().strip("|").split("|")] if line.lstrip().startswith("|") else []
+        if any("사용자 답" in c for c in cells) and i + 1 < len(lines) and re.match(r"^\s*\|[\s:|-]+\|?\s*$", lines[i + 1]):
+            head = cells
+            break
+    else:
+        return []
+    col = lambda word: next((k for k, c in enumerate(head) if word in c), None)
+    c_id, c_answer, c_affects = col("ID") or 0, col("사용자 답"), col("영향")
+    out = []
+    for line in lines[i + 2:]:
+        if not line.lstrip().startswith("|"):
+            break
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        get = lambda k: cells[k] if k is not None and k < len(cells) else ""
+        rid = (re.findall(ID, get(c_id)) or [get(c_id)])[0]
+        out.append({"id": rid, "resolved": get(c_answer).strip(" -—") != "", "affects": re.findall(ID, get(c_affects))})
+    return out
 
 
 def ids(text):
@@ -475,10 +514,10 @@ def map_path(root, given):
 
 
 def open_rows(criteria):
-    """요구 기록 표 → (미정 행 ID, 미확인 행 ID, 형식 문제 목록, 표가 있는가)."""
+    """요구 기록·결정 기록 → (사용자 답을 기다리는 ID(미정 요구와 답이 없는 결정), 미확인 행 ID, 형식 문제 목록, 요구 기록 표가 있는가)."""
     rows, problems = record_rows(criteria)
-    return ([r["id"] for r in rows or [] if r["state"] == "미정"], [r["id"] for r in rows or [] if r["state"] == "미확인"],
-            problems, rows is not None)
+    waiting = [r["id"] for r in rows or [] if r["state"] == "미정"] + [d["id"] for d in decision_rows(criteria) if not d["resolved"]]
+    return (waiting, [r["id"] for r in rows or [] if r["state"] == "미확인"], problems, rows is not None)
 
 
 def report(result, check=None, required=False):
@@ -531,7 +570,7 @@ def record(args):
         print(f"[verify] 돌려보냄: {result['reason']}", file=sys.stderr)
         return report(result, check, required)
     result.update(open_decisions=pending, unconfirmed=unknown)
-    print("[verify] 요청 원문과 요구 기록 표의 형식이 맞다." + (" 독립 검토가 필수라 검토 전에는 완료가 아니다: prepare 로 검토를 받는다." if required else ""), file=sys.stderr)
+    print("[verify] 요청 원문이 있고 요구·결정 기록의 연결이 맞다. 이 검사는 기록의 연결만 본다: 빠진 요구나 근거를 넘어선 해석은 판단하지 못한다." + (" 독립 검토가 필수라 검토 전에는 완료가 아니다: prepare 로 검토를 받는다." if required else ""), file=sys.stderr)
     return report(result, check, required)
 
 

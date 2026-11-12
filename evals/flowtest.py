@@ -421,6 +421,28 @@ exit 0
     rc, o = rec(m_done, "--check", "PASS", "--review-required")
     check("record --review-required: 필수 검토 없이는 직접 검사 PASS 여도 완료가 아니다(review-missing, 종료 6)",
           rc == 6 and o.get("state") == "recorded" and o.get("completion") == "review-missing")
+    # 요구 기록과 결정 기록: 요구는 보장할 행동, 결정은 사용자가 고를 것. 답이 없는 결정에 기대는 요구는 확정이 아니다.
+    RHEAD = "| ID | 요구(사전 상태 → 행동·입력 → 기대 결과) | 근거 | 결정 | 확인 방법 | 상태 |\n|---|---|---|---|---|---|\n"
+    DHEAD = "\n| ID | 정할 것 | 조사한 사실 | 추천과 이유 | 대안과 달라지는 결과 | 사용자 답 | 영향 요구 |\n|---|---|---|---|---|---|---|\n"
+    def dmap(name, rows, drows):
+        return write_map(name, f"- 요청 원문: {REQ}\n\n" + RHEAD + rows + DHEAD + drows)
+    R_OPEN = "| R1 | 안내 화면 → 버튼을 누름 → (D1 에 따름) | - | D1 | 답 뒤 | 미정 |\n| R2 | 안내 화면 → 버튼을 누른 뒤 조회 → (D1 에 따름) | - | D1 | 답 뒤 | 미정 |\n"
+    D_OPEN = "| D1 | 버튼이 여는 화면 | README 에 새 버튼과 A화면이 함께 적혀 있다 | A화면(근거 약함) | 같은 화면에서 문구만 바뀐다 | | R1, R2 |\n"
+    D_DONE = "| D1 | 버튼이 여는 화면 | README 에 새 버튼과 A화면이 함께 적혀 있다 | A화면(근거 약함) | 같은 화면에서 문구만 바뀐다 | \"예, 추천대로\" | R1, R2 |\n"
+    R_DONE = "| R1 | 안내 화면 → 버튼을 누름 → A화면이 열린다 | 사용자 답(D1) | D1 | bin/test | 확정 |\n| R2 | 안내 화면 → 버튼을 누른 뒤 조회 → A화면 | 사용자 답(D1) | D1 | bin/test | 확정 |\n"
+    rc, o = rec(dmap("dec-open", R_OPEN, D_OPEN), "--check", "PASS")
+    check("결정 기록: 사용자 답이 없는 결정은 답 대기(waiting-user)로 남고, 결정 하나가 요구 여럿에 걸려도 한 번만 센다",
+          o.get("completion") == "waiting-user" and o.get("open_decisions", []).count("D1") == 1 and {"R1", "R2", "D1"} <= set(o.get("open_decisions", [])))
+    rc, o = rec(dmap("dec-early", R_DONE, D_OPEN))
+    check("결정 기록: 답이 없는 결정에 기대는 요구를 확정으로 적으면 returned", rc == 3 and "D1" in o.get("reason", "") and "확정" in o.get("reason", ""))
+    rc, o = rec(dmap("dec-done", R_DONE, D_DONE), "--check", "PASS")
+    check("결정 기록: 답을 옮긴 뒤에는 요구가 확정되고 직접 검사 PASS 면 verified", rc == 0 and o.get("completion") == "verified" and not o.get("open_decisions"))
+    rc, o = rec(dmap("dec-badref", R_DONE, D_DONE.replace("R1, R2", "R1, R9")))
+    check("결정 기록: 영향 요구가 요구 기록에 없으면 returned", rc == 3 and "R9" in o.get("reason", ""))
+    rc, o = rec(dmap("dec-noref", R_DONE.replace("| D1 | bin/test | 확정 |\n| R2", "| D7 | bin/test | 확정 |\n| R2", 1), D_DONE))
+    check("결정 기록: 요구가 가리키는 결정이 없으면 returned", rc == 3 and "D7" in o.get("reason", ""))
+    rc, o = rec(dmap("dec-nocheck", R_DONE.replace("| D1 | bin/test | 확정 |\n| R2", "| D1 | | 확정 |\n| R2", 1), D_DONE))
+    check("요구 기록: 확정인데 확인 방법이 비면 returned", rc == 3 and "확인 방법" in o.get("reason", ""))
     check("record 결과에는 review=off 가 붙어 검토 결과와 구별된다", rec(m_done, "--check", "PASS")[1].get("review") == "off")
     # 평가 관찰: 세션이 record 만 실행했으면 독립 검토를 한 것으로 세지 않는다
     sys.path.insert(0, str(KIT / "evals"))
