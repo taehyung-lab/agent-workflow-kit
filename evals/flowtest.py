@@ -126,8 +126,8 @@ exit 0
     (proj / "ui.txt").write_text("button=로그인하기\nbutton_en=Login\n")  # 교정
     (proj / "extra.txt").write_text("새 파일\n"); (proj / "README.md").unlink()
     rc, out, prompt = verify(mp, [OK])
-    check("교정 뒤 2회차: 새 버전을 다시 판정해 ok(종료 0). 직접 검사 결과를 받지 않았으면 전체 완료는 가정하지 않는다(unverified)",
-          rc == 0 and out.get("state") == "ok" and out.get("round") == 2 and out.get("completion") == "unverified" and out.get("direct_check") is None)
+    check("교정 뒤 2회차: 새 버전을 다시 판정해 ok. 직접 검사 결과를 받지 않았으면 전체 완료는 가정하지 않는다(unverified, 종료 6)",
+          rc == 6 and out.get("state") == "ok" and out.get("round") == 2 and out.get("completion") == "unverified" and out.get("direct_check") is None)
     check("2회차 diff 에 교정 내용·새 파일·지운 파일이 보인다", "button=로그인하기" in prompt and "extra.txt" in prompt and "README.md" in prompt)
     (proj / "README.md").write_text("# 앱\n검사: bin/test\n"); (proj / "extra.txt").unlink()
     rc, out, prompt = verify(mp, [OK], harness="codex")
@@ -139,7 +139,7 @@ exit 0
           a[1].get("round") == 1 and [a[1].get("state"), b[1].get("state"), out.get("state")] == ["returned", "incomplete", "incomplete"] and prompt == "")
     check("--request 로 준 뒤 메시지도 사용자 원문으로 들어간다", "AFTER-MARKER" in a[2] and "REQ-MARKER" in a[2])
     rc, out, prompt = verify(mp, [OK], harness="codex", extra=("--request", req_file("codex 시도")))
-    check("Codex 검토 하네스도 같은 실행기·형식으로 판정한다", rc == 0 and out.get("state") == "ok" and "| B1 |" in prompt)
+    check("Codex 검토 하네스도 같은 실행기·형식으로 판정한다", rc == 6 and out.get("state") == "ok" and out.get("completion") == "unverified" and "| B1 |" in prompt)
     # 미확인
     rc, out, _ = verify(mp, [""], extra=("--request", req_file("빈 답 시도")))
     check("빈 답은 unverified(종료 5), 완료가 아님", rc == 5 and out.get("state") == "unverified" and out.get("completion") == "unverified")
@@ -184,8 +184,14 @@ exit 0
           r.returncode == 0 and o.get("state") == "ok" and o.get("completion") == "verified" and o.get("direct_check") == "PASS")
     for chk, want in (("FAIL", "check-failed"), ("REVIEW", "needs-review")):
         rd = prep("--map", mpp, "--request", req_file(f"직접 검사 {chk} 시도"))
-        o = json.loads(fin(rd["kept"], json.dumps(OK, ensure_ascii=False), "--check", chk).stdout.strip().splitlines()[-1])
-        check(f"검토 ok 여도 직접 검사 {chk} 면 completion={want}(완료가 아님)", o.get("state") == "ok" and o.get("completion") == want)
+        r = fin(rd["kept"], json.dumps(OK, ensure_ascii=False), "--check", chk)
+        o = json.loads(r.stdout.strip().splitlines()[-1])
+        check(f"검토 ok 여도 직접 검사 {chk} 면 completion={want}(완료가 아님, 종료 6)", r.returncode == 6 and o.get("state") == "ok" and o.get("completion") == want)
+    rd = prep("--map", mpp, "--request", req_file("직접 검사 없는 finish"))
+    r = fin(rd["kept"], json.dumps(OK, ensure_ascii=False))
+    o = json.loads(r.stdout.strip().splitlines()[-1])
+    check("finish: 검토 ok 여도 --check 가 없으면 종료 6(completion=unverified), 같은 회차를 다시 조회해도 6",
+          r.returncode == 6 and o.get("state") == "ok" and o.get("completion") == "unverified" and fin(rd["kept"], "").returncode == 6)
     check("finish --check 에 정해진 값 밖은 사용 오류(종료 2)", fin(prep("--map", mpp, "--request", req_file("잘못된 check"))["kept"], json.dumps(OK), "--check", "maybe").returncode == 2)
     # 요구 기록 표: 미정(사용자 답)·미확인(조사) 행이 남으면 완료가 아니고, 형식이 틀리면 검토자를 띄우지 않고 돌려보낸다
     HEAD = "| ID | 요구(입력→관찰 장소→기대) | 출처·위치 | 의존 | 확인 방법 | 상태 |\n|---|---|---|---|---|---|\n"
@@ -362,6 +368,8 @@ exit 0
     fin(rd["kept"], json.dumps(OK), "--check", "PASS")
     check("한도에서 입력이 같으면 검토 OK만 재사용하고 직접 검사 PASS는 추정하지 않는다",
           (reused := prep(*reuse_args)).get("state") == "ok" and reused.get("completion") == "unverified")
+    check("한도에서 재사용한 검토 OK 도 완료가 아니므로 prepare 는 0 으로 끝나지 않는다(종료 6)",
+          sh(sys.executable, "-I", str(verifier), "prepare", *reuse_args, cwd=proj, env=base_env).returncode == 6)
     Path(output).write_text("다른 보고서")
     check("한도에서 산출물이 달라지면 이전 OK를 재사용하지 않는다", prep(*reuse_args).get("state") == "incomplete")
 
@@ -387,17 +395,18 @@ exit 0
     before = sorted(str(f) for f in (proj / "work").rglob("*"))
     rc, o = rec(m_done, "--check", "PASS")
     check("record: 요청 원문·표 형식이 맞고 미정·미확인이 없고 직접 검사 PASS 면 검토 없이 completion=verified(종료 0)",
-          rc == 0 and o.get("state") == "ok" and o.get("completion") == "verified" and o.get("direct_check") == "PASS")
+          rc == 0 and o.get("state") == "recorded" and o.get("completion") == "verified" and o.get("direct_check") == "PASS")
     check("record 는 파일을 만들거나 바꾸지 않는다(회차·증거 폴더 없음)", sorted(str(f) for f in (proj / "work").rglob("*")) == before)
     rc, o = rec(m_done)
-    check("record: 직접 검사 결과를 받지 않으면 통과로 가정하지 않는다(unverified)", rc == 0 and o.get("completion") == "unverified")
+    check("record: 직접 검사 결과를 받지 않으면 통과로 가정하지 않는다(unverified, 종료 6)", rc == 6 and o.get("state") == "recorded" and o.get("completion") == "unverified")
     for chk, want in (("FAIL", "check-failed"), ("REVIEW", "needs-review")):
-        check(f"record: 직접 검사 {chk} 면 completion={want}", rec(m_done, "--check", chk)[1].get("completion") == want)
+        rc, o = rec(m_done, "--check", chk)
+        check(f"record: 직접 검사 {chk} 면 completion={want}(종료 6)", rc == 6 and o.get("completion") == want)
     rc, o = rec(m_open, "--check", "PASS")
-    check("record: 미정 행이 남으면 직접 검사 PASS 여도 waiting-user", rc == 0 and o.get("completion") == "waiting-user" and o.get("open_decisions") == ["Q1"])
+    check("record: 미정 행이 남으면 직접 검사 PASS 여도 waiting-user(종료 6)", rc == 6 and o.get("state") == "recorded" and o.get("completion") == "waiting-user" and o.get("open_decisions") == ["Q1"])
     check("record: 미정이 남아도 직접 검사 실패는 감추지 않는다", rec(m_open, "--check", "FAIL")[1].get("completion") == "check-failed")
     rc, o = rec(m_unk, "--check", "PASS")
-    check("record: 미확인 행이 남으면 unverified", o.get("completion") == "unverified" and o.get("unconfirmed") == ["F1"])
+    check("record: 미확인 행이 남으면 unverified(종료 6)", rc == 6 and o.get("completion") == "unverified" and o.get("unconfirmed") == ["F1"])
     rc, o = rec("work/rec-dep/work.md", "--check", "PASS")
     check("record: 표 형식 문제는 returned(종료 3), 미정 목록을 믿지 않는다",
           rc == 3 and o.get("state") == "returned" and o.get("completion") == "returned" and "의존" in o.get("reason", "") and o.get("open_decisions") == [])
@@ -409,6 +418,9 @@ exit 0
     check("record: 지도가 없으면 unverified(종료 5), 완료가 아님", rc == 5 and o.get("completion") == "unverified")
     rc, o = rec(write_map("rec-empty", f"- 요청 원문: {REQ}\n\n" + HEAD), "--check", "PASS")
     check("record: 행이 없는 표는 완료로 세지 않는다(returned)", rc == 3 and o.get("completion") == "returned")
+    rc, o = rec(m_done, "--check", "PASS", "--review-required")
+    check("record --review-required: 필수 검토 없이는 직접 검사 PASS 여도 완료가 아니다(review-missing, 종료 6)",
+          rc == 6 and o.get("state") == "recorded" and o.get("completion") == "review-missing")
     check("record 결과에는 review=off 가 붙어 검토 결과와 구별된다", rec(m_done, "--check", "PASS")[1].get("review") == "off")
     # 평가 관찰: 세션이 record 만 실행했으면 독립 검토를 한 것으로 세지 않는다
     sys.path.insert(0, str(KIT / "evals"))
@@ -418,8 +430,13 @@ exit 0
         log.write_text(json.dumps({"type": "item.completed", "item": {"type": "command_execution", "command": "python3 .agents/skills/wf-verify/verify.py x",
                                                                       "aggregated_output": json.dumps(result, ensure_ascii=False), "exit_code": rc_}}, ensure_ascii=False) + "\n")
         return observe.verify_run(str(log))[0]
-    check("평가 관찰: record 의 ok 는 검토 통과로 읽지 않고, finish 의 ok 는 읽는다",
+    check("평가 관찰: record 의 recorded 는 검토 통과로 읽지 않고, finish 의 ok 는 읽는다",
           seen(rec(m_done, "--check", "PASS")[1], 0) == "none" and seen({"state": "ok", "completion": "verified"}, 0) == "ok")
+    check("평가 관찰: 예전 기록의 record 결과(state ok, review off)와 완료가 아닌 record(종료 6)도 검토로 읽지 않는다",
+          seen({"state": "ok", "review": "off", "completion": "verified"}, 0) == "none" and seen(rec(m_open, "--check", "PASS")[1], 6) == "none")
+    check("평가 관찰: 완료가 아닌 finish ok 는 종료 6(예전 기록은 0)으로 읽고, 맞지 않는 종료 코드는 판정으로 쓰지 않는다",
+          seen({"state": "ok", "completion": "unverified"}, 6) == "ok" and seen({"state": "ok", "completion": "unverified"}, 0) == "ok"
+          and seen({"state": "ok", "completion": "verified"}, 6) == "unknown" and seen({"state": "returned", "completion": "returned"}, 6) == "unknown")
     ghost = prep("--map", "work/ghost/work.md", "--request", req_file(REQ))
     check("prepare: 없는 지도는 미확인이고 그 옆에 증거 폴더를 만들지 않는다", ghost.get("state") == "unverified" and not (proj / "work/ghost").exists())
     # 평가 실행기의 보조: 작업 시작 상태 커밋은 가지·index·작업 트리를 바꾸지 않고, 지도가 여러 개면 고르지 않는다

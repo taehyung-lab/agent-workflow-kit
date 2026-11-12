@@ -1,7 +1,7 @@
 """키트 커밋을 설치한 새 프로젝트를 만들고, 그 안에서 하네스 세션을 띄우고 이어 가는 일을 한 곳에서 맡는다.
 
-평가 실행기(run.py)·결함 사례(defects/run.sh)·goalflow·설치 흐름 시험이 같이 쓴다. Claude 와 Codex 의 차이(명령줄, 임시 홈,
-훅·프로젝트 신뢰, 네트워크 옵션, 제한 시간, 세션 id 읽기)는 두 어댑터(Claude·Codex) 안에만 둔다. 부르는 쪽은 하네스 이름으로 가르지 않는다.
+평가 실행기(run.py)·goalflow·설치 흐름 시험이 같이 쓴다. Claude 와 Codex 의 차이(명령줄, 임시 홈,
+훅·프로젝트 신뢰, 네트워크 옵션, 제한 시간)는 두 어댑터(Claude·Codex) 안에만 둔다. 부르는 쪽은 하네스 이름으로 가르지 않는다.
 
 프로젝트:
   kit_checkout(ref, dest)   지정한 커밋의 키트를 깨끗한 checkout 으로 만든다(설치기가 미커밋 키트를 거절하므로)
@@ -15,14 +15,12 @@
   review(directory, prompt, log)  검토자 세션 한 번(구현자와 다른 새 세션). 종료 코드, 하네스가 없으면 None
   version()                 하네스 버전 한 줄
   close(rollout)            임시 홈 정리. Codex 는 그 전에 세션 원본 기록을 rollout 에 남긴다
-
-셸에서 쓰는 호출자용:
-  python3 -I evals/session.py project <새 폴더> <키트 커밋> [--setup <setup.sh>] [--author <이름> <메일>] [--messages <준비 커밋> <설치 커밋>]
-  python3 -I evals/session.py start <claude|codex> <프로젝트> <프롬프트> <기록 앞부분>   (종료 코드는 하네스의 것)
 """
 import fnmatch, json, os, re, shutil, subprocess, sys, tempfile
 from collections import namedtuple
 from pathlib import Path
+
+import transcript  # 기록 형식 읽기(세션 id). 이 모듈을 가져오는 쪽은 모두 evals/ 를 모듈 경로에 둔다
 
 KIT = Path(__file__).resolve().parents[1]
 LIMIT = 1200  # 한 턴의 제한 시간(초)
@@ -122,7 +120,7 @@ def _run(cmd, out, limit, cwd=None, env=None, stdin=None):
 
 def _review(cmd, directory, log, env=None):
     """검토자 세션: 구현자 세션의 표지(세션 id·발신 구분)를 물려주지 않는다. 제한 시간(AWK_VERIFY_TIMEOUT, 기본 900초)을 넘기면 124."""
-    keep = {k: v for k, v in os.environ.items() if k not in ("AWK_GATE_PROMPT_FROM", "AWK_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")}
+    keep = {k: v for k, v in os.environ.items() if k not in ("AWK_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")}
     with open(log, "wb") as out, open(str(log) + ".err", "ab") as err:
         try:
             return subprocess.run(cmd, cwd=directory, stdout=out, stderr=err, stdin=subprocess.DEVNULL, env={**keep, **(env or {})},
@@ -149,19 +147,9 @@ class Harness:
 
     def _turn(self, cmd, out, limit=LIMIT, **how):
         rc = _run(cmd, out, limit, **how)
-        # 다음 턴이 이어 갈 세션 id: Claude 는 session_id, Codex 는 thread_id 를 기록에서 읽는다(찾을 때까지 턴마다).
+        # 다음 턴이 이어 갈 세션 id 를 기록에서 읽는다(찾을 때까지 턴마다).
         if not self.session_id:
-            with open(f"{out}.jsonl", encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    try:
-                        e = json.loads(line)
-                    except ValueError:
-                        continue
-                    if not isinstance(e, dict):
-                        break
-                    if e.get("session_id") or e.get("thread_id"):
-                        self.session_id = str(e.get("session_id") or e.get("thread_id"))
-                        break
+            self.session_id = transcript.session_id(f"{out}.jsonl")
         return Turn(rc, f"{out}.jsonl", f"{out}.err", self.session_id)
 
     def close(self, rollout=None):
@@ -177,9 +165,9 @@ class Claude(Harness):
         return self._turn(["claude", "-p", prompt, *self.FLAGS], out, cwd=self.project)
 
     def resume(self, prompt, out, from_runner=False):
-        """from_runner: 사용자 턴이 아닌 실행기의 반환 턴. 관문이 있던 커밋(v3.0 이하)에 발신 구분을 넘겨 글 속 "승인합니다"로 승인 상태가 바뀌지 않게 한다."""
+        """from_runner: 사용자 턴이 아닌 실행기의 반환 턴(제한 시간이 짧다)."""
         return self._turn(["claude", "-p", prompt, "--resume", self.session_id, *self.FLAGS], out, limit=900 if from_runner else LIMIT,
-                          cwd=self.project, env={"AWK_GATE_PROMPT_FROM": "runner"} if from_runner else None)
+                          cwd=self.project)
 
     def review(self, directory, prompt, log):
         exe = shutil.which("claude")
@@ -210,13 +198,13 @@ class Codex(Harness):
         # EVALS_CODEX_NETWORK=1 이면 작업 공간에 네트워크를 허용한다(세션 안에서 다른 세션을 띄우는 후보를 시험할 때).
         if os.environ.get("EVALS_CODEX_NETWORK") == "1":
             self.flags += ["-c", "sandbox_workspace_write.network_access=true"]
-        # Codex 는 프로젝트 훅을 사용자가 한 번 신뢰해야 실행한다. 프로젝트에 .codex/hooks.json 이 있을 때만(관문이 있던 v3.0 이하,
-        # 정보 훅이 있던 v3.2~v3.4 커밋) 그 신뢰를 대신한다.
+        # Codex 는 프로젝트 훅을 사용자가 한 번 신뢰해야 실행한다. 프로젝트에 .codex/hooks.json 이 있을 때만(정보 훅이 있던 v3.2~v3.4 커밋)
+        # 그 신뢰를 대신한다.
         hooks = Path(project) / ".codex/hooks.json"
         if hooks.is_file():
             self.flags.append("--dangerously-bypass-hook-trust")
         # v3.2~v3.4 의 세션 시작 정보 훅(wf-context)은 Codex 가 프로젝트를 신뢰해야(trust_level) 읽힌다. 프로젝트를 신뢰한 사용자를 재현하려고
-        # 임시 홈의 config.toml 에만 이 프로젝트 신뢰를 더한다. 관문이 있던 v3.0 이하 커밋의 실행 조건은 바꾸지 않는다.
+        # 임시 홈의 config.toml 에만 이 프로젝트 신뢰를 더한다.
         if hooks.is_file() and re.search(r"wf-context/context.py", hooks.read_text(encoding="utf-8", errors="replace")):
             config = Path(self.home) / "config.toml"
             for pdir in (str(project), os.path.realpath(project)):
@@ -231,10 +219,10 @@ class Codex(Harness):
                           out, env={"CODEX_HOME": self.home}, stdin=subprocess.DEVNULL)
 
     def resume(self, prompt, out, from_runner=False):
-        """from_runner: 사용자 턴이 아닌 실행기의 반환 턴(발신 구분을 넘기고, 네트워크·훅 신뢰 옵션은 주지 않는다)."""
+        """from_runner: 사용자 턴이 아닌 실행기의 반환 턴(네트워크·훅 신뢰 옵션은 주지 않는다)."""
         return self._turn(["codex", "exec", "resume", "--json", "--skip-git-repo-check", "-c", 'sandbox_mode="workspace-write"',
                            *([] if from_runner else self.flags), self.session_id, prompt], out, cwd=self.project, stdin=subprocess.DEVNULL,
-                          env={"CODEX_HOME": self.home, **({"AWK_GATE_PROMPT_FROM": "runner"} if from_runner else {})})
+                          env={"CODEX_HOME": self.home})
 
     def review(self, directory, prompt, log):
         exe = shutil.which("codex")
@@ -260,25 +248,3 @@ class Codex(Harness):
 
 
 HARNESSES = {"claude": Claude, "codex": Codex}
-
-
-def main(argv):
-    if argv[:1] == ["project"] and len(argv) >= 3:
-        opt = lambda name, n: argv[argv.index(name) + 1: argv.index(name) + 1 + n] if name in argv else None
-        setup, author, messages = opt("--setup", 1), opt("--author", 2), opt("--messages", 2)
-        with tempfile.TemporaryDirectory() as tmp:
-            kit_checkout(argv[2], Path(tmp) / "kit")
-            build_project(argv[1], Path(tmp) / "kit", prepare=case_fixture(setup and setup[0]),
-                          **({"author": tuple(author)} if author else {}), **({"messages": tuple(messages)} if messages else {}))
-        return 0
-    if argv[:1] == ["start"] and len(argv) == 5 and argv[1] in HARNESSES:
-        harness = HARNESSES[argv[1]](argv[2])
-        try:
-            return harness.start(argv[3], argv[4]).exit_code
-        finally:
-            harness.close()
-    sys.exit(__doc__.split("셸에서 쓰는 호출자용:", 1)[1])
-
-
-if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))

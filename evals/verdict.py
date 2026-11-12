@@ -1,5 +1,5 @@
 """평가 실행기가 쓰는 판정 함수와 검토 세션. 판정 규칙(judge·completion)은 설치되는 검토 도구(.agents/skills/wf-verify/verify.py)의
-함수를 그대로 쓴다(일반 설치와 평가가 같은 규칙을 쓰게 하려는 것이다). 하네스 기록을 읽는 일과 검토 한 회차를 돌리는 일은 평가만 하므로 여기에 있다.
+함수를 그대로 쓴다(일반 설치와 평가가 같은 규칙을 쓰게 하려는 것이다). 검토 한 회차를 돌리는 일은 평가만 하므로 여기에 있다(하네스 기록은 transcript.py 가 읽는다).
 검토자 세션을 띄우는 명령(두 하네스의 차이)은 session.py 의 어댑터가 맡는다.
 
 검증자는 답 끝에 JSON 하나를 쓴다(verify.py 의 VERIFIER_PROMPT 형식):
@@ -18,41 +18,19 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from session import HARNESSES
+from transcript import final_answer  # 검증자 기록(Claude stream-json, Codex --json)의 마지막 답 전체
 
 _spec = importlib.util.spec_from_file_location("awk_verify", Path(__file__).resolve().parents[1] / ".agents/skills/wf-verify/verify.py")
 _verify = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_verify)
 last_json, judge, completion, ids, EXIT = _verify.last_json, _verify.judge, _verify.completion, _verify.ids, _verify.EXIT
-
-
-def final_answer(path):
-    """검증자 기록(Claude stream-json, Codex --json)의 마지막 답 전체."""
-    final = ""
-    try:
-        lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return ""
-    for line in lines:
-        try:
-            e = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(e, dict):
-            continue
-        if e.get("type") == "assistant":
-            for part in (e.get("message") or {}).get("content", []) or []:
-                if isinstance(part, dict) and part.get("type") == "text":
-                    final = part.get("text", "")
-        elif e.get("type") == "result":
-            final = e.get("result") or final
-        elif e.get("type") == "item.completed" and (e.get("item") or {}).get("type") == "agent_message":
-            final = e["item"].get("text", "")
-    return final
+REVIEW_OFF = "recorded"  # record(요구 기록 검사)의 형식 통과 상태. 검토 결과가 아니다
 
 
 def run_result(output, exit_code=None):
     """세션이 실행한 명령의 출력에서 검토 도구가 찍는 결과를 찾는다. 도구의 출력은 표준 오류의 `[verify] ` 줄과, 맨 끝 한 줄의 결과 JSON
-    (state 가 판정 상태이고 completion 이 있음)뿐이고, 종료 코드는 그 state 의 EXIT 값이다.
+    (state 가 판정 상태이고 completion 이 있음)뿐이고, 종료 코드는 도구의 exit_code(결과) 값이다: state 가 주는 0 이 아닌 코드,
+    아니면 completion 이 verified 일 때만 0 이고 그 밖은 6. 종료 코드가 state 만 따르던 때(v3.6 이하)의 기록은 그때의 값(ok 는 completion 과 무관하게 0)도 받는다.
     저장된 result.json도 같은 형식이므로, 실제 명령 실행인지의 구분은 호출 기록을 가진 평가 관찰(observe.py)이 맡는다.
     돌려줌: (결과 객체 또는 None, 이번 실행의 결과로 볼 수 없는 사유 또는 ""). 다른 글이 섞였거나(예: 스크립트와 저장해 둔 출력을 함께 cat)
     종료 코드가 결과의 state 와 맞지 않으면 그 결과를 이번 실행의 판정으로 쓰지 않는다."""
@@ -65,7 +43,7 @@ def run_result(output, exit_code=None):
         if isinstance(obj, dict) and obj.get("state") in EXIT and "completion" in obj:
             if i != len(lines) - 1 or not all(l.startswith("[verify] ") for l in lines[:i]):
                 return obj, "실행기 결과 JSON 이 다른 출력과 섞여 있어 이번 실행의 결과인지 저장된 결과를 읽은 것인지 가를 수 없다"
-            if exit_code is not None and exit_code != EXIT[obj["state"]]:
+            if exit_code is not None and exit_code not in (_verify.exit_code(obj), EXIT[obj["state"]]):
                 return obj, f"결과 state {obj['state']} 와 종료 코드 {exit_code} 가 맞지 않는다"
             return obj, ""
     return None, ""
@@ -129,5 +107,3 @@ if __name__ == "__main__":
     cmd = sys.argv[1]
     if cmd == "session":
         sys.exit(session(sys.argv[2:]))
-    if cmd == "snapshot":
-        print(snapshot(sys.argv[2]))

@@ -42,7 +42,7 @@ def main(argv):
     elif cmd == "export":
         with open(args[0], "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
-            w.writerow(["id", "text", "done"])
+            w.writerow(["id", "name", "finished"])
             for it in visible(items):
                 w.writerow([it["id"], it["text"], it["done"]])
     else:

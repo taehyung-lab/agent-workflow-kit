@@ -41,7 +41,7 @@ with tempfile.TemporaryDirectory() as tmp:
     case = kit / "evals/cases/zz-case"; case.mkdir(parents=True)
     (case / "check.py").write_text('print("PASS 시험")\n')
     hold = kit / "evals/holdout/zz-hold"; hold.mkdir(parents=True)
-    (hold / "check.py").write_text('print("PASS 숨긴 사례")\n')
+    (hold / "check.py").write_text('print("PASS holdout 사례")\n')
 
     where = subprocess.run([sys.executable, "-I", str(kit / "evals/caseinfo.py"), "path", "zz-hold"], capture_output=True, text=True).stdout.strip()
     check("cases 에 없는 사례는 holdout 경로로 정한다", Path(where).resolve() == hold.resolve(), where)

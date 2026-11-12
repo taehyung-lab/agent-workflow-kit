@@ -25,7 +25,7 @@ for dir in "$here"/cases/*/; do
     [ ! -d "$sample/files" ] || cp -R "$sample/files/." "$project/"
     # before/ 가 있는 표본은 마지막 턴 직전 상태를 흉내 낸다(없으면 비교하지 않음).
     before=""; [ ! -d "$sample/before" ] || before="$sample/before"
-    # env.txt 가 있는 표본은 실행기가 판정 검사에 넘기는 환경(EVALS_GATE·EVALS_INPUT 등)을 흉내 낸다.
+    # env.txt 가 있는 표본은 실행기가 판정 검사에 넘기는 환경(EVALS_INPUT 등)을 흉내 낸다.
     envs=(); [ ! -f "$sample/env.txt" ] || while IFS= read -r kv; do [ -z "$kv" ] || envs+=("$kv"); done < "$sample/env.txt"
     env ${envs[@]+"${envs[@]}"} EVALS_BEFORE_LAST_TURN=$before python3 -I "$dir/check.py" "$project" "$sample/transcript.jsonl" >/dev/null 2>&1; rc=$?
     case "$kind" in
@@ -60,7 +60,7 @@ FAKE_LOG=$fake/log EVALS_RESULTS=$results PATH="$fake:$PATH" bash "$here/run.sh"
 snap=$(ls -d "$results"/weight-disposable-*-claude-1.files 2>/dev/null | tail -1)
 [ -f "$snap/made-by-fake.txt" ] && ok "끝난 프로젝트 파일 보존" || ng "끝난 프로젝트 파일이 남지 않음"
 grep -q '"exit_code": 7' "${snap%.files}.meta.json" 2>/dev/null && ok "메타데이터에 종료 코드 기록" || ng "메타데이터 종료 코드"
-# 판정기 지문: 실행(run.sh)과 재판정(rejudge.py)이 같은 코드면 같은 지문을 낸다(일반 사례·숨긴 holdout 사례 모두).
+# 판정기 지문: 실행(run.sh)과 재판정(rejudge.py)이 같은 코드면 같은 지문을 낸다(사례 둘로 본다. holdout 폴더의 사례는 caseinfotest.py 가 임시 사본에서 본다).
 # 판정 파일을 바꾸거나 빼는 경우와 재판정의 이력 보존은 caseinfotest.py 가 임시 키트 사본에서 본다.
 fpres=$(mktemp -d)
 for c in weight-disposable account-specified; do
@@ -85,13 +85,6 @@ grep -q 'check=REVIEW REVIEW 외부 장애' "$cap/out2" && grep -q '"check_needs
 printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho \x27{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Write", "input": {"file_path": "accounts.py"}}]}}\x27\necho \x27{"type": "error", "message": "Selected model is at capacity."}\x27\nexit 1\n' > "$cap/bin/claude"
 EVALS_RESULTS=$cap/r4 PATH="$cap/bin:$PATH" bash "$here/run.sh" account-after-correction "$REF" claude > "$cap/out4" 2>&1
 grep -q 'REVIEW 외부 장애.*편집 기록: accounts.py' "$cap/out4" && ok "되돌린 편집 뒤 장애도 검토 필요로 남김" || ng "되돌린 편집 뒤 장애: $(cat "$cap/out4")"
-# 승인 대기 수는 승인이 아닌 사용자 턴(prompt)만 센다(도구 검사 줄은 세지 않고, 0회도 기록된다)
-printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\nprintf \x27{"event": "prompt", "approved": false}\\n{"event": "pre", "approved": false, "denied": true}\\n{"event": "pre", "approved": false, "denied": false}\\n{"event": "prompt", "approved": false}\\n\x27 >> "$AWK_GATE_LOG"\necho \x27{"session_id": "fake-sid"}\x27\nexit 0\n' > "$cap/bin/claude"
-EVALS_RESULTS=$cap/r5 PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposable "$REF" claude > /dev/null 2>&1
-grep -q '"unapproved_turns": 1,' "$cap"/r5/weight-disposable-*-claude-1.meta.json && ok "승인 대기는 사용자 턴만 셈(뒤따르는 실행기 반환 턴의 prompt 기록은 세지 않음)" || ng "승인 대기 집계: $(grep unapproved "$cap"/r5/*.meta.json)"
-printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\nprintf \x27{"event": "prompt", "approved": true}\\n\x27 >> "$AWK_GATE_LOG"\necho \x27{"session_id": "fake-sid"}\x27\nexit 0\n' > "$cap/bin/claude"
-EVALS_RESULTS=$cap/r6 PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposable "$REF" claude > /dev/null 2>&1
-grep -q '"unapproved_turns": 0,' "$cap"/r6/weight-disposable-*-claude-1.meta.json && ok "승인 대기 0회도 meta 에 남음" || ng "승인 대기 0회 meta 없음"
 # 일반 답 속 낱말(at capacity)은 외부 장애로 보지 않는다
 printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho \x27{"type": "result", "result": "서버가 at capacity 일 때를 처리했습니다"}\x27\nexit 1\n' > "$cap/bin/claude"
 EVALS_RESULTS=$cap/r3 PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposable "$REF" claude > "$cap/out3" 2>&1
@@ -136,7 +129,7 @@ case "$2" in
     line=$(sed -n "${n}p" "$FAKE_DIR/verdicts")
     printf '{"type": "result", "result": %s}\n' "$line"
     exit "${FAKE_VRC:-0}";;
-  *) echo call >> "$FAKE_DIR/impl"; echo "${AWK_GATE_PROMPT_FROM:-user}" >> "$FAKE_DIR/from"; echo '{"session_id": "fake-sid"}'
+  *) echo call >> "$FAKE_DIR/impl"; echo '{"session_id": "fake-sid"}'
      # 승인 턴·교정 턴의 답은 구현 뒤 자기평가(검증자에게 가면 안 됨), 첫 턴 답은 사용자가 승인할 계획이다.
      case "$2" in *"승인합니다"*|*"별도 검증자가"*) echo '{"type": "result", "result": "IMPL-ANSWER-MARKER 다 했습니다"}';;
        *) [ -n "${FAKE_NOPLAN:-}" ] || echo '{"type": "result", "result": "PLAN-MARKER 추천안: calc.py 로 두 수의 합. 승인해 주시겠어요?"}';; esac
@@ -178,7 +171,6 @@ vrun again "$RETV" "$OKV"
 [ "$(mget verifier)" = ok ] && [ "$(mget verify_rounds)" = 2 ] && [ "$(grep -c '' "$vf/again/impl")" = 3 ] && grep -q 'made-by-impl.txt' "$vf/again/vprompt.2" \
   && [ "$(grep -c turn "$vf/again/vprompt.2")" -gt "$(grep -c turn "$vf/again/vprompt.1")" ] \
   && ok "검증: RETURN → 구현자 교정 턴 → 새 버전을 다시 판정" || ng "검증 재검증: $(mget verifier) rounds=$(mget verify_rounds)"
-[ "$(tr '\n' ' ' < "$vf/again/from")" = "user user runner " ] && ok "검증 반환 턴에만 실행기 발신 구분(AWK_GATE_PROMPT_FROM=runner, v3.0 이하 커밋 비교용)을 넘김" || ng "반환 턴 발신 구분: $(tr '\n' ' ' < "$vf/again/from")"
 vrun limit "$RETV" "$RETV" "$RETV"
 [ "$(mget verifier)" = incomplete ] && [ "$(mget verify_rounds)" = 2 ] && [ "$(mget completion)" = incomplete ] && ok "검증: 재검증 한도에 닿으면 미완료(성공 아님)" || ng "검증 한도: $(mget verifier) rounds=$(mget verify_rounds)"
 FAKE_VWRITE=1 vrun touched "$OKV"
@@ -261,7 +253,7 @@ kit = Path(sys.argv[1]); bad = []
 agents = (kit / "AGENTS.md").read_text(encoding="utf-8")
 region = agents[agents.index("<!-- agent-workflow-kit:begin -->"):agents.index("<!-- agent-workflow-kit:end -->")].encode()
 if len(region) > 6000: bad.append(f"AGENTS.md 키트 영역 {len(region)}B > 6000B")
-skills = sorted((kit / ".agents/skills").glob("*/SKILL.md")) + [kit / ".agents/skills/guide.md"]
+skills = sorted((kit / ".agents/skills").glob("*/SKILL.md"))
 for f in skills:
     n = len(f.read_bytes())
     if n > 4500: bad.append(f"{f.relative_to(kit)} {n}B > 4500B")
@@ -281,7 +273,7 @@ from pathlib import Path
 here = Path(sys.argv[1])
 def meta(d, case, commit, passed, review=False, gi="a"):
     m = {"case": case, "harness": "claude", "kit_commit": commit * 5, "input": "original", "check_passed": passed, "check_needs_review": review,
-         "check_unverified": False, "global_instructions": {"g": gi}, "approval_gate": True, "harness_version": "1", "judge_version": "j",
+         "check_unverified": False, "global_instructions": {"g": gi}, "harness_version": "1", "judge_version": "j",
          "observed": {"first_reply_chars": 100}, "completion": "not-verified"}
     Path(d, f"{case}-{commit}-{passed}-{review}-{gi}.meta.json").write_text(json.dumps(m))
 with tempfile.TemporaryDirectory() as d:
@@ -304,6 +296,34 @@ assert c("ok", "PASS", waiting=True) == "waiting-user" and c("ok", "FAIL", waiti
 assert c("ok", "PASS", unresolved=True) == "unverified"                                      # 필요한 사실이 미확인
 assert c("unverified", "PASS", required=True) == "unverified" and c("returned", "PASS") == "returned" and c("incomplete", "PASS") == "incomplete"
 assert c("ok", "PASS", True) == "waiting-user" and c("off", "FAIL", True) == "check-failed"
+PY
+# 검토 도구의 종료 코드는 완료 판정을 따른다: 0 은 completion=verified 뿐, state 가 준 코드(3·4·5)는 그대로, 판정은 났지만 완료가 아니면 6.
+# 평가 관찰은 그 코드로 실행 결과를 읽고(종료 코드가 state 만 따르던 예전 기록의 0 도 받는다), record 결과(recorded, 예전 ok+review off)는 검토로 세지 않는다.
+python3 -I - "$here" <<'PY' && ok "검토 도구 종료 코드: verified 만 0, 완료 아닌 recorded·ok 는 6, returned 3·incomplete 4·unverified 5 유지, 평가 관찰이 같은 규칙으로 읽음" || ng "검토 도구 종료 코드"
+import json, sys, tempfile
+from pathlib import Path
+sys.path.insert(0, sys.argv[1]); import verdict; from observe import verify_run
+code = verdict._verify.exit_code
+assert code({"state": "ok", "completion": "verified"}) == 0 and code({"state": "recorded", "completion": "verified"}) == 0
+for done in ("waiting-user", "needs-review", "check-failed", "review-missing", "unverified"):
+    assert code({"state": "ok", "completion": done}) == 6 and code({"state": "recorded", "completion": done}) == 6, done
+assert code({"state": "ok"}) == 6  # 완료 판정이 없는 결과도 0 이 아니다
+assert [code({"state": s, "completion": s}) for s in ("returned", "incomplete", "unverified")] == [3, 4, 5]
+r = verdict.run_result
+waiting = json.dumps({"state": "ok", "completion": "waiting-user"})
+assert r(waiting, 6)[1] == "" and r(waiting, 0)[1] == "" and r(waiting, 3)[1] != ""
+assert r(json.dumps({"state": "ok", "completion": "verified"}), 6)[1] != ""
+assert r(json.dumps({"state": "recorded", "review": "off", "completion": "review-missing"}), 6)[1] == ""
+with tempfile.TemporaryDirectory() as d:
+    def seen(result, rc):
+        path = Path(d) / "t.jsonl"
+        path.write_text(json.dumps({"type": "item.completed", "item": {"id": "0", "type": "command_execution", "command": "python3 .agents/skills/wf-verify/verify.py record",
+                                                                       "aggregated_output": json.dumps(result), "exit_code": rc}}))
+        return verify_run(path)[:3:2]
+    assert seen({"state": "recorded", "review": "off", "completion": "verified"}, 0) == ("none", "")
+    assert seen({"state": "recorded", "review": "off", "completion": "waiting-user"}, 6) == ("none", "")
+    assert seen({"state": "ok", "review": "off", "completion": "verified"}, 0) == ("none", "")  # 예전 기록의 record 결과
+    assert seen({"state": "ok", "completion": "waiting-user"}, 6) == ("ok", "waiting-user")
 PY
 FAKE_BREAK=1 vrun checkfail "$OKV"
 [ "$(mget verifier)" = ok ] && [ "$(mget completion)" = check-failed ] && [ "$(mget check_passed)" = False ] \

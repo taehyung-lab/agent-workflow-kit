@@ -105,7 +105,7 @@ printf '{"type": "item.completed", "item": {"type": "agent_message", "text": %s}
     check("재검토 한도(2)에 닿으면 미완료(4)", rc == 4 and o.get("state") == "incomplete")
     req = proj / "work/discount/req2.txt"; req.write_text("할인은 소수점 아래를 버려 주세요\n")
     rc, o, p = verify([OK], "--request", str(req))
-    check("요청 원문이 다른 새 시도는 1회차부터 다시 판정해 ok(0)", rc == 0 and o.get("state") == "ok" and o.get("round") == 1 and p != "")
+    check("요청 원문이 다른 새 시도는 1회차부터 다시 판정해 ok(직접 검사 결과를 받지 않아 종료 6)", rc == 6 and o.get("state") == "ok" and o.get("completion") == "unverified" and o.get("round") == 1 and p != "")
     req.write_text("세 번째 시도\n")
     rc, o, p = verify([OK], "--request", str(req), FAKE_FAIL="1")
     check("검토자 하네스가 실패하면 미확인(5)과 재개 조건, 완료가 아님", rc == 5 and "재개 조건" in o.get("reason", "") and o.get("completion") != "verified")

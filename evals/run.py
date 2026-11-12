@@ -2,7 +2,7 @@
 
 사례 하나를, 지정한 키트 커밋을 설치한 격리 프로젝트에서 Claude·Codex 새 세션에 주고
 원시 기록·메타데이터·판정을 evals/results/ 아래에 남긴다. 답이나 예상 결과는 세션에 주지 않는다.
-프로젝트 만들기와 하네스 세션(두 하네스의 차이)은 session.py 가, 결과 기록(meta.json)과 판정 낱말은 result.py 가 맡는다.
+프로젝트 만들기와 하네스 세션(두 하네스의 차이)은 session.py 가, 결과 기록(meta.json)은 result.py 가, 판정 낱말과 그 종료 코드는 judge.py 가 맡는다.
 
 사용: bash evals/run.sh <사례> <키트 커밋·태그> <claude|codex> [반복 수]
   예: bash evals/run.sh weight-accounting v1.0.0 claude 2
@@ -29,11 +29,11 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 KIT = HERE.parent
 sys.path.insert(0, str(HERE))
-import observe, result, session, verdict
+import observe, result, session, transcript, verdict
 from caseinfo import MissingJudgeFile, case_path, judge_version
+from judge import FAIL, REVIEW, UNVERIFIED
 
-# 하네스가 모델 용량·요청 한도 같은 외부 장애로 끝났는지: 오류 사건(Codex error·turn.failed, Claude 오류 결과)과 표준 오류에서만 찾는다(일반 답 속 낱말은 보지 않는다).
-ERROR_EVENT = re.compile(rb'"type": ?"(error|turn\.failed)"|"is_error": ?true')
+# 하네스가 모델 용량·요청 한도 같은 외부 장애로 끝났는지: 기록의 오류 사건(transcript.error_lines)과 표준 오류에서만 찾는다(일반 답 속 낱말은 보지 않는다).
 EXTERNAL = re.compile(rb'at capacity|rate.?limit|usage.?limit|hit your [0-9a-z -]*limit|api_error_status"?: ?429|too many requests|overloaded|HTTP 429|stream disconnected|service unavailable', re.I)
 # 전역 스킬은 폴더 전체의 SKILL.md 내용으로 지문을 만든다(스킬이 하나 바뀌어도 지문이 달라진다).
 # 정렬 순서·경로 표기까지 예전 결과의 지문과 같아야 비교할 수 있으므로 셸 명령을 그대로 쓴다.
@@ -66,6 +66,7 @@ def append_file(dst, src):
 
 def copy_files(project, dest):
     """프로젝트의 작업 파일(설치된 키트·git 제외)을 dest 로 복사한다."""
+    # judge.NOT_PRODUCT 보다 덜 뺀다: 이 사본으로 다시 판정하므로 사례 판정이 읽는 work/·AGENTS.md·하네스 설정까지 남긴다.
     pack = subprocess.Popen(["tar", "cf", "-", "--exclude=./.git", "--exclude=./.agents", "."], cwd=project, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     subprocess.run(["tar", "xf", "-", "-C", str(dest)], stdin=pack.stdout)
     pack.stdout.close()
@@ -88,38 +89,6 @@ def plugins_fingerprint(project):
         return hashlib.sha256(json.dumps(sorted(k for k, v in on.items() if v)).encode()).hexdigest()[:12]
     except Exception:
         return "none"
-
-
-def unapproved_turns(hook_log, sent):
-    """관문 기록(v3.0 이하 커밋)에서 승인되지 않은 사용자 턴 수. 사용자 턴만 센다: sent 번째 뒤의 prompt 는 실행기가 보낸 검증 반환 턴이다."""
-    n = seen = 0
-    try:
-        for line in open(hook_log, encoding="utf-8"):
-            try:
-                e = json.loads(line)
-            except ValueError:
-                continue
-            if e.get("event") == "prompt":
-                seen += 1
-                n += seen <= sent and e.get("approved") is False
-    except OSError:
-        pass
-    except Exception:
-        return 0
-    return n
-
-
-def gate_waiting(project, session_id):
-    """끝난 때 관문이 사용자 답을 기다리는지(v3.0 이하 커밋: 승인 전이거나 사용자 철회·기준 변경으로 닫힘): 구현 실패·검증 실패와 구별해 센다.
-    관문 기록이 없으면(관문 없는 커밋·훅이 돌지 않음) 알 수 없으므로 대기로 세지 않는다."""
-    if not session_id or not (project / ".agents/skills/wf-design/approval-gate.py").is_file():
-        return False
-    r = subprocess.run([sys.executable, "-I", ".agents/skills/wf-design/approval-gate.py", "status", "--session", session_id], cwd=project,
-                       stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-    try:
-        return bool(json.loads(r.stdout).get("waiting"))
-    except (ValueError, AttributeError):
-        return False
 
 
 def verify_loop(harness, project, out, turns, base_sha, case_dir, tool, t):
@@ -202,15 +171,17 @@ def verify_loop(harness, project, out, turns, base_sha, case_dir, tool, t):
     return v, rc
 
 
-def judge(case_dir, project, work, out, rc, observed, gate, input_kind):
+def judge(case_dir, project, work, out, rc, observed, input_kind):
     """사례 판정. 돌려줌: (판정 낱말, 판정 문구). 판정 검사는 0=통과, 1=실패, 2=검토 필요를 돌려주고, 미확인은 실행기가 정한다:
     하네스가 외부 장애로 끝났으면 판정하지 않고 통과율 분모에서 뺀다(시도·사유는 남긴다)."""
-    lines = [l for l in Path(f"{out}.jsonl").read_bytes().split(b"\n") if ERROR_EVENT.search(l)] + Path(f"{out}.err").read_bytes().split(b"\n")
+    lines = transcript.error_lines(f"{out}.jsonl") + Path(f"{out}.err").read_bytes().split(b"\n")
     external = next((m.group().decode(errors="replace") for m in map(EXTERNAL.search, lines) if m), "")
     if rc != 0 and external:
         # 장애 전에 제품 파일을 바꿨으면(최종 파일 차이, 또는 바꿨다가 되돌린 편집 기록) 위반일 수 있으므로
         # 지우지 않고 사람이 원시 기록으로 판정한다.
         edited = ""
+        # 사례 판정의 judge.NOT_PRODUCT 와 같은 물음이지만 목록과 방식이 다르다: 여기는 AGENTS.md·CLAUDE.md·.pytest_cache 를 빼지 않고(바뀌면 검토 필요),
+        # 이름이 같으면 깊이와 관계없이 빼며, .gitignore 를 보지 않는다. 합치면 외부 장애 실행의 판정(검토 필요 ↔ 미확인)이 달라진다.
         if (work / "before-last").is_dir():
             diff = subprocess.run(["diff", "-rq", "--exclude=.git", "--exclude=.agents", "--exclude=.claude", "--exclude=.codex", "--exclude=work",
                                    "--exclude=__pycache__", str(work / "before-last"), "."], cwd=project, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -219,18 +190,18 @@ def judge(case_dir, project, work, out, rc, observed, gate, input_kind):
         if not edited and observed.get("last_turn_edits"):
             edited = "편집 기록: " + ", ".join(observed["last_turn_edits"])
         if edited:
-            return "REVIEW", f"REVIEW 외부 장애({external})로 끝났지만 그 전에 제품 파일이 바뀌었다: {edited}"
-        return "UNVERIFIED", f"UNVERIFIED 하네스가 외부 장애({external})로 종료 코드 {rc} 로 끝나 판정하지 않았다"
+            return REVIEW, f"{REVIEW} 외부 장애({external})로 끝났지만 그 전에 제품 파일이 바뀌었다: {edited}"
+        return UNVERIFIED, f"{UNVERIFIED} 하네스가 외부 장애({external})로 종료 코드 {rc} 로 끝나 판정하지 않았다"
     if rc != 0:
-        return "FAIL", f"FAIL 하네스가 종료 코드 {rc} 로 끝나 판정하지 않았다"
+        return FAIL, f"{FAIL} 하네스가 종료 코드 {rc} 로 끝나 판정하지 않았다"
     r = subprocess.run([sys.executable, "-I", str(case_dir / "check.py"), str(project), f"{out}.jsonl"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                        encoding="utf-8", errors="replace",
-                       env={**os.environ, "EVALS_INPUT": input_kind, "EVALS_GATE": "true" if gate else "false", "EVALS_BEFORE_LAST_TURN": str(work / "before-last")})
+                       env={**os.environ, "EVALS_INPUT": input_kind, "EVALS_BEFORE_LAST_TURN": str(work / "before-last")})
     text = r.stdout.rstrip("\n")
     word = result.check_word(r.returncode, text)
     # 판정 검사 자체가 오류로 끝나면(예외 등) 실패가 아니라 미확인이다.
-    if word == "UNVERIFIED":
-        text = f"UNVERIFIED 판정 검사 오류(종료 코드 {r.returncode}): {text.split(chr(10))[-1]}"
+    if word == UNVERIFIED:
+        text = f"{UNVERIFIED} 판정 검사 오류(종료 코드 {r.returncode}): {text.split(chr(10))[-1]}"
     return word, text
 
 
@@ -278,11 +249,6 @@ def run_once(case_name, case_dir, ref, commit, harness_name, i, out_root, state)
     start, rc = int(time.time()), 0
     Path(f"{out}.jsonl").write_bytes(b"")
     Path(f"{out}.err").write_bytes(b"")
-    # v3.1 부터 키트는 훅을 설치하지 않는다. 승인 관문이 있던 커밋(v3.0 이하)을 비교할 때만 설치기가 등록한 관문 훅이 돌고,
-    # 그 판단을 결과 옆 .hook.log 에 남긴다(AWK_GATE_LOG).
-    os.environ["AWK_GATE_LOG"] = f"{out}.hook.log"
-    claude_settings = project / ".claude/settings.json"
-    gate = claude_settings.is_file() and bool(re.search(r"approval-gate.py", claude_settings.read_text(encoding="utf-8", errors="replace")))
     harness = session.HARNESSES[harness_name](str(project))
     t = sent = 0
     # 작업 시작 상태(첫 턴 직전)를 커밋 하나로 남긴다(가지·index 는 그대로). 검증자는 마지막 턴만이 아니라 작업 시작부터의 변경 전체를 받는다.
@@ -326,15 +292,14 @@ def run_once(case_name, case_dir, ref, commit, harness_name, i, out_root, state)
         if not os.path.isfile(state["verifier_tool"]):
             state["verifier_tool"] = str(KIT / ".agents/skills/wf-verify/verify.py")
         v, rc = verify_loop(harness, project, out, turns, base_sha, case_dir, state["verifier_tool"], t)
-    waiting = gate_waiting(project, harness.session_id)
-    harness.close(rollout=f"{out}.rollout.jsonl")
+    harness.close(rollout=transcript.rollout_log(f"{out}.jsonl"))
     seconds = int(time.time()) - start
     try:
         names = (case_dir / "observe.txt").read_text(encoding="utf-8").split() if (case_dir / "observe.txt").is_file() else []
         observed = json.loads(json.dumps(observe.observe(f"{out}.jsonl", names), ensure_ascii=False))
     except Exception:
         observed = {}
-    word, text = judge(case_dir, project, work, out, rc, observed, gate, input_kind)
+    word, text = judge(case_dir, project, work, out, rc, observed, input_kind)
     jv = current_judge_version(case_dir, f": {out}")  # 실행 중 판정 파일이 사라졌으면 멈춘다(원시 기록 .jsonl 은 남아 있다)
     # 사례가 AGENTS.md 를 읽을 수 없게 만들었으면 바이트는 설치에 쓴 키트 checkout 에서 잰다.
     try:
@@ -345,8 +310,7 @@ def run_once(case_name, case_dir, ref, commit, harness_name, i, out_root, state)
         facts = {
             "case": case_name, "kit_ref": ref, "kit_commit": commit, "harness": harness_name, "run": i, "harness_version": harness.version(),
             "exit_code": rc, "seconds": seconds, "agents_md_bytes": agents_bytes, "check": word, "check_output": text,
-            "approval_gate": gate, "gate_waiting": waiting, "input": input_kind, "user_turns": sent, "planned_turns": len(turns),
-            "unapproved_turns": unapproved_turns(f"{out}.hook.log", sent), "observed": observed,
+            "input": input_kind, "user_turns": sent, "planned_turns": len(turns), "observed": observed,
             "verifier": v["state"], "verify_reason": v["reason"], "verify_rounds": v["rounds"], "verifier_exit_code": v["verifier_exit_code"],
             "review": v["review"], "baseline_changed": v["baseline_changed"], "verifier_tool": state["verifier_tool"],
             "review_required": (case_dir / "review-required").is_file(), "lang": lang, "judge_version": jv,
@@ -396,7 +360,7 @@ def main(argv):
     times = int(argv[3]) if len(argv) > 3 and argv[3] else 1
     if ".." in ref:
         return compare(case_name, ref, harness_name, times)
-    case_dir = case_path(case_name)  # cases 에 없으면 holdout(숨겨 둔 평가 사례)
+    case_dir = case_path(case_name)  # cases 에 없으면 holdout(기계 판정이 PASS 를 내지 않는 사례. caseinfo.py)
     if not ((case_dir / "prompt.txt").is_file() and (case_dir / "check.py").is_file()):
         fail(f"사례가 없거나 prompt.txt·check.py 가 빠졌다: {case_dir}")
     current_judge_version(case_dir)  # 판정 파일이 빠졌으면 모델을 돌리기 전에 멈춘다

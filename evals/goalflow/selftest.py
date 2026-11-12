@@ -1,4 +1,7 @@
-"""Model-free oracle regression controls and deliberate behavioral faults."""
+"""Model-free oracle regression controls and deliberate behavioral faults.
+
+구성 비교의 meta(table.py 의 result_meta)도 손으로 쓴 요약으로 본다: 판정 갈래마다 하나씩, 그리고 report.py 가 그 meta 를 표로 낸다.
+"""
 import json,shutil,subprocess,sys,tempfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parent
@@ -90,5 +93,48 @@ def run():
     assert unavailable.returncode==2 and u["unverified"]>0 and u["failed"]==0,u
     rows.append({"case":"migration-observer-unavailable","unverified":u["unverified"],"failed":u["failed"]})
  return rows
+
+def summary(arm,**over):
+ """compare.py 가 쓰는 요약과 같은 모양의 손으로 쓴 요약(15개 전부 통과). over 로 갈래마다 다른 값만 바꾼다."""
+ turn=lambda n,chars,edits:{"turn":n,"rc":0,"answered_now":[],"seconds":100,"product_changes":edits,"reply_chars":chars,"question_marks":1,"reply":"","record_runs":0,"review_runs":0,"test_runs":0}
+ s={"name":f"{arm}-claude-1","arm":arm,"harness":"claude","run":1,"kit_ref":"HEAD" if arm=="kit" else None,"kit_commit":"0123456789abcdef0123456789abcdef01234567" if arm=="kit" else None,
+    "agents_md_bytes":4000 if arm=="kit" else 0,"base":"f"*40,"seconds":300,"turns":[turn(1,1200,[]),turn(2,800,["service.py"]),turn(3,500,["service.py"])],
+    "mock":"asked","answered":[1,3],"map":arm=="kit","final_changes":["service.py"],"init":{},"oracle_exit":0,"automated_valid":True,"observation_complete":True,
+    "failed":[],"unobserved":[],"n_cases":15,"oracle_error":None,"public_tests_rc":0}
+ s.update(over);return s
+
+def meta_checks():
+ sys.path.insert(0,str(ROOT))
+ from table import result_meta
+ verdict=lambda m:"PASS" if m["check_passed"] else "UNVERIFIED" if m["check_unverified"] else "REVIEW" if m["check_needs_review"] else "FAIL"
+ ok=result_meta(summary("kit"))
+ assert verdict(ok)=="PASS" and ok["check_output"].startswith("PASS "),ok
+ assert (ok["case"],ok["harness"],ok["kit_ref"],ok["kit_commit"][:7],ok["run"],ok["seconds"],ok["exit_code"],ok["agents_md_bytes"],ok["user_turns"])==("goalflow","claude","HEAD","0123456",1,300,0,4000,3),ok
+ assert ok["observed"]=={"first_reply_chars":1200},ok
+ assert ok["goalflow"]["answered"]==[1,3] and ok["goalflow"]["edits_before_answer"]==[] and ok["goalflow"]["failed"]==[],ok
+ bad=result_meta(summary("skills",automated_valid=False,oracle_exit=1,failed=["capacity-one-under-concurrency"],
+                         turns=[dict(summary("skills")["turns"][0],product_changes=["service.py"]),dict(summary("skills")["turns"][1],rc=1)]))
+ assert verdict(bad)=="FAIL" and "capacity-one-under-concurrency" in bad["check_output"],bad
+ assert bad["kit_commit"]=="skills" and bad["kit_ref"]=="skills" and bad["exit_code"]==1 and bad["user_turns"]==2,bad
+ assert bad["goalflow"]["failed"]==["capacity-one-under-concurrency"] and bad["goalflow"]["edits_before_answer"]==["service.py"],bad
+ # 실패와 관찰 불가가 함께 있으면 실패다(관찰된 실패는 남은 관찰과 무관하다)
+ assert verdict(result_meta(summary("none",automated_valid=False,observation_complete=False,failed=["a"],unobserved=["b"])))=="FAIL"
+ unobs=result_meta(summary("none",automated_valid=False,observation_complete=False,oracle_exit=2,unobserved=["storage-rows"]))
+ assert verdict(unobs)=="UNVERIFIED" and unobs["kit_commit"]=="none" and unobs["goalflow"]["unobserved"]==["storage-rows"],unobs
+ err=result_meta(summary("none",automated_valid=None,observation_complete=None,n_cases=0,oracle_error="Traceback ..."))
+ assert verdict(err)=="UNVERIFIED" and "Traceback" in err["check_output"],err
+ # 판정 항목이 없는데 오류도 적히지 않은 결과를 통과로 세지 않는다
+ assert verdict(result_meta(summary("none",automated_valid=True,observation_complete=True,n_cases=0)))=="UNVERIFIED"
+ # report.py 가 일반 결과(run.py 의 meta)와 같은 폴더에서 이 meta 를 표로 낸다: 세 구성이 세 줄이다
+ with tempfile.TemporaryDirectory(prefix="goal-meta-") as temp:
+  for i,m in enumerate([ok,bad,unobs]):(Path(temp)/f"{m['goalflow']['arm']}-claude-{i}.meta.json").write_text(json.dumps(m,ensure_ascii=False))
+  r=subprocess.run([sys.executable,"-I",str(ROOT.parent/"report.py"),temp],capture_output=True,text=True,timeout=45)
+  lines=[l.split() for l in r.stdout.splitlines() if l.startswith("goalflow")]
+  assert r.returncode==0 and not r.stderr.strip(),(r.returncode,r.stderr)
+  assert [l[3] for l in lines]==["0123456","none","skills"],r.stdout
+  by={l[3]:l for l in lines}
+  # 사용자 턴, 첫 답, 통과/판정(미확인은 분모에서 빠진다)
+  assert by["0123456"][5:8]==["3","1200","1/1"] and by["skills"][5:8]==["2","1200","0/1"] and by["none"][5:8]==["3","1200","0/0"],r.stdout
+
 if __name__=="__main__":
- rows=run();print(json.dumps(rows,ensure_ascii=False,indent=2));print(f"{len(rows)} oracle controls passed")
+ rows=run();print(json.dumps(rows,ensure_ascii=False,indent=2));meta_checks();print(f"{len(rows)} oracle controls passed, meta checks passed")
