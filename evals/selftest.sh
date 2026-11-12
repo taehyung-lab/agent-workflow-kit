@@ -261,7 +261,7 @@ kit = Path(sys.argv[1]); bad = []
 agents = (kit / "AGENTS.md").read_text(encoding="utf-8")
 region = agents[agents.index("<!-- agent-workflow-kit:begin -->"):agents.index("<!-- agent-workflow-kit:end -->")].encode()
 if len(region) > 6000: bad.append(f"AGENTS.md 키트 영역 {len(region)}B > 6000B")
-skills = sorted((kit / ".agents/skills").glob("*/SKILL.md")) + [kit / ".agents/skills/guide.md"]
+skills = sorted((kit / ".agents/skills").glob("*/SKILL.md"))
 for f in skills:
     n = len(f.read_bytes())
     if n > 4500: bad.append(f"{f.relative_to(kit)} {n}B > 4500B")

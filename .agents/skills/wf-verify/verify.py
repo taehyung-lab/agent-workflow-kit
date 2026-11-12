@@ -8,7 +8,7 @@
   python3 .agents/skills/wf-verify/verify.py finish --round <prepare 가 낸 kept 폴더> --check <PASS|FAIL|REVIEW> < 검토자의-마지막-답
         (--check: 구현자가 직접 실행한 검사의 결과. 없으면 가정하지 않고 전체 완료를 미확인으로 낸다)
 
-언제: record 는 작업 지도를 쓰는 작업, prepare·finish 는 AGENTS.md 「선택」이 독립 검토를 고를 때(사용자 요구·검사 기준 약화는 필수). 사용법은 guide.md.
+언제: record 는 작업 지도를 쓰는 작업, prepare·finish 는 wf-verify 단계가 독립 검토를 받을 때(사용자 요구·검사 기준 약화는 필수). 사용법은 wf-verify/SKILL.md.
 
 prepare 가 넘기는 것(구현자가 고르지 않는다): 요청 원문(작업 지도 `## 기준` 의 `요청 원문` 항목, 또는 --request 파일에 사용자 글 그대로),
 지도가 있으면 그 `## 기준`과 `## 맥락`(맥락 봉투: 대상·근거 용도·시나리오·결정), 맥락 도구(wf-context/context.py)가 관찰한 대상 저장소 정보,
@@ -41,7 +41,7 @@ DIFF_LIMIT = 60000  # 검토자 입력에 넣는 diff 최대 바이트(넘으면
 KIT_PATHS = (".agents", ".claude", ".codex", "CLAUDE.md", "AGENTS.md")  # 비교하지 않는 키트·하네스 설정(저장소 맨 위만)
 
 
-VERIFIER_PROMPT = """당신은 별도 검증자다. 판정 대상은 아래 「대상 버전」의 폴더(판정 대상 버전의 고정 복사본)다. 그 폴더의 AGENTS.md 와 .agents/skills/guide.md 「독립 검토」를 읽고 그 기준으로 판정한다.
+VERIFIER_PROMPT = """당신은 별도 검증자다. 판정 대상은 아래 「대상 버전」의 폴더(판정 대상 버전의 고정 복사본)다. 그 폴더의 AGENTS.md 와 .agents/skills/wf-verify/SKILL.md 「검토자 기준」를 읽고 그 기준으로 판정한다.
 제품 파일·검사·기준을 고치지 않는다(고치면 이 판정은 무효로 처리된다). 저장소의 실행·검사 명령을 실행해 실제 결과로 판정하며, 그때 생기는 임시 산출물은 괜찮다.
 요구의 근거는 아래 사용자 원문과 저장소의 외부 계약뿐이다. 구현자가 정한 내용은 근거가 아니다. 구현자의 자기평가는 받지 않는다.
 판정 범위는 이 변경이 바꾼 동작과, 연결 근거(같은 함수·같은 출력·같은 계약을 쓴다)가 있는 기존 보장뿐이다. 연결 없는 기능은 보지 않는다.
