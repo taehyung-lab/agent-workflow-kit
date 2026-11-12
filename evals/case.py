@@ -40,6 +40,7 @@ def done(msg):
 
 def copy_project(*also_ignore):
     """git 기록·하네스 설정(.claude·.codex)·작업 기록(work)을 뺀 프로젝트 사본. 더 뺄 이름·패턴은 인자로 준다."""
+    # judge.NOT_PRODUCT 와 목적이 다르다: 제품 명령을 실행해 볼 사본이라 설치된 키트(.agents)·지침은 남기고, 뺄지는 사례가 정한다.
     work = Path(tempfile.mkdtemp()) / "p"
     shutil.copytree(project, work, symlinks=True, ignore=shutil.ignore_patterns(".git", ".claude", ".codex", "work", *also_ignore))
     return work

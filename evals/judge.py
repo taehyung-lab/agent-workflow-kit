@@ -41,6 +41,8 @@ def changed_in_last_turn(project, names):
     return changed
 
 
+# 제품이 아닌 프로젝트 맨 위 이름(git·키트·하네스 설정·작업 기록·캐시·키트가 설치한 지침). 사례 판정이 "제품 파일이 바뀌었나"를 볼 때 뺀다.
+# 프로젝트를 복사할 때 빼는 목록(run.copy_files, case.copy_project)은 목적이 달라 따로 둔다.
 NOT_PRODUCT = {".git", ".agents", ".claude", ".codex", "work", "__pycache__", ".pytest_cache", "AGENTS.md", "CLAUDE.md"}
 
 

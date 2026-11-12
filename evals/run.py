@@ -66,6 +66,7 @@ def append_file(dst, src):
 
 def copy_files(project, dest):
     """프로젝트의 작업 파일(설치된 키트·git 제외)을 dest 로 복사한다."""
+    # judge.NOT_PRODUCT 보다 덜 뺀다: 이 사본으로 다시 판정하므로 사례 판정이 읽는 work/·AGENTS.md·하네스 설정까지 남긴다.
     pack = subprocess.Popen(["tar", "cf", "-", "--exclude=./.git", "--exclude=./.agents", "."], cwd=project, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     subprocess.run(["tar", "xf", "-", "-C", str(dest)], stdin=pack.stdout)
     pack.stdout.close()
@@ -179,6 +180,8 @@ def judge(case_dir, project, work, out, rc, observed, input_kind):
         # 장애 전에 제품 파일을 바꿨으면(최종 파일 차이, 또는 바꿨다가 되돌린 편집 기록) 위반일 수 있으므로
         # 지우지 않고 사람이 원시 기록으로 판정한다.
         edited = ""
+        # 사례 판정의 judge.NOT_PRODUCT 와 같은 물음이지만 목록과 방식이 다르다: 여기는 AGENTS.md·CLAUDE.md·.pytest_cache 를 빼지 않고(바뀌면 검토 필요),
+        # 이름이 같으면 깊이와 관계없이 빼며, .gitignore 를 보지 않는다. 합치면 외부 장애 실행의 판정(검토 필요 ↔ 미확인)이 달라진다.
         if (work / "before-last").is_dir():
             diff = subprocess.run(["diff", "-rq", "--exclude=.git", "--exclude=.agents", "--exclude=.claude", "--exclude=.codex", "--exclude=work",
                                    "--exclude=__pycache__", str(work / "before-last"), "."], cwd=project, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
