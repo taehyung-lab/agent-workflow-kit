@@ -2,7 +2,7 @@
 
 사례 하나를, 지정한 키트 커밋을 설치한 격리 프로젝트에서 Claude·Codex 새 세션에 주고
 원시 기록·메타데이터·판정을 evals/results/ 아래에 남긴다. 답이나 예상 결과는 세션에 주지 않는다.
-프로젝트 만들기와 하네스 세션(두 하네스의 차이)은 session.py 가, 결과 기록(meta.json)과 판정 낱말은 result.py 가 맡는다.
+프로젝트 만들기와 하네스 세션(두 하네스의 차이)은 session.py 가, 결과 기록(meta.json)은 result.py 가, 판정 낱말과 그 종료 코드는 judge.py 가 맡는다.
 
 사용: bash evals/run.sh <사례> <키트 커밋·태그> <claude|codex> [반복 수]
   예: bash evals/run.sh weight-accounting v1.0.0 claude 2
@@ -31,6 +31,7 @@ KIT = HERE.parent
 sys.path.insert(0, str(HERE))
 import observe, result, session, transcript, verdict
 from caseinfo import MissingJudgeFile, case_path, judge_version
+from judge import FAIL, REVIEW, UNVERIFIED
 
 # 하네스가 모델 용량·요청 한도 같은 외부 장애로 끝났는지: 기록의 오류 사건(transcript.error_lines)과 표준 오류에서만 찾는다(일반 답 속 낱말은 보지 않는다).
 EXTERNAL = re.compile(rb'at capacity|rate.?limit|usage.?limit|hit your [0-9a-z -]*limit|api_error_status"?: ?429|too many requests|overloaded|HTTP 429|stream disconnected|service unavailable', re.I)
@@ -186,18 +187,18 @@ def judge(case_dir, project, work, out, rc, observed, input_kind):
         if not edited and observed.get("last_turn_edits"):
             edited = "편집 기록: " + ", ".join(observed["last_turn_edits"])
         if edited:
-            return "REVIEW", f"REVIEW 외부 장애({external})로 끝났지만 그 전에 제품 파일이 바뀌었다: {edited}"
-        return "UNVERIFIED", f"UNVERIFIED 하네스가 외부 장애({external})로 종료 코드 {rc} 로 끝나 판정하지 않았다"
+            return REVIEW, f"{REVIEW} 외부 장애({external})로 끝났지만 그 전에 제품 파일이 바뀌었다: {edited}"
+        return UNVERIFIED, f"{UNVERIFIED} 하네스가 외부 장애({external})로 종료 코드 {rc} 로 끝나 판정하지 않았다"
     if rc != 0:
-        return "FAIL", f"FAIL 하네스가 종료 코드 {rc} 로 끝나 판정하지 않았다"
+        return FAIL, f"{FAIL} 하네스가 종료 코드 {rc} 로 끝나 판정하지 않았다"
     r = subprocess.run([sys.executable, "-I", str(case_dir / "check.py"), str(project), f"{out}.jsonl"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                        encoding="utf-8", errors="replace",
                        env={**os.environ, "EVALS_INPUT": input_kind, "EVALS_BEFORE_LAST_TURN": str(work / "before-last")})
     text = r.stdout.rstrip("\n")
     word = result.check_word(r.returncode, text)
     # 판정 검사 자체가 오류로 끝나면(예외 등) 실패가 아니라 미확인이다.
-    if word == "UNVERIFIED":
-        text = f"UNVERIFIED 판정 검사 오류(종료 코드 {r.returncode}): {text.split(chr(10))[-1]}"
+    if word == UNVERIFIED:
+        text = f"{UNVERIFIED} 판정 검사 오류(종료 코드 {r.returncode}): {text.split(chr(10))[-1]}"
     return word, text
 
 

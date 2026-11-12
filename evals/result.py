@@ -10,6 +10,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from judge import EXIT, FAIL, PASS, REVIEW, UNVERIFIED
 from verdict import completion
 
 REVIEW_STATES = {"off", "ok", "returned", "incomplete", "unverified"}
@@ -23,7 +24,7 @@ def _known_inputs(inputs):
                     and all(isinstance(v, str) for v in inputs[k]) for k in ("open_decisions", "unconfirmed")))
 
 
-CHECK_EXIT = {0: "PASS", 1: "FAIL", 2: "REVIEW"}
+CHECK_EXIT = {code: word for word, code in EXIT.items()}  # 종료 코드 → 판정 낱말
 
 
 def check_word(exit_code, output):
@@ -31,15 +32,15 @@ def check_word(exit_code, output):
     검사는 0=통과, 1=실패, 2=검토 필요로 끝나고 결과 줄을 PASS·FAIL·REVIEW 로 시작한다. 둘이 맞지 않으면(예외 등 검사 자체의 오류)
     실패가 아니라 미확인(UNVERIFIED)이다."""
     word = CHECK_EXIT.get(exit_code)
-    return word if word and output.startswith(word) else "UNVERIFIED"
+    return word if word and output.startswith(word) else UNVERIFIED
 
 
 def check_verdict(record):
     if record.get("check_passed"):
-        return "PASS"
+        return PASS
     if record.get("check_needs_review"):
-        return "REVIEW"
-    return "UNVERIFIED" if record.get("check_unverified") else "FAIL"
+        return REVIEW
+    return UNVERIFIED if record.get("check_unverified") else FAIL
 
 
 def _completed(record, check):
@@ -77,8 +78,8 @@ def initial_result(run):
               "open_decisions": evidence.get("open_decisions"), "unconfirmed": evidence.get("unconfirmed")}
     m = {"case": run["case"], "kit_ref": run["kit_ref"], "kit_commit": run["kit_commit"], "harness": run["harness"],
          "run": run["run"], "harness_version": run["harness_version"], "exit_code": run["exit_code"], "seconds": run["seconds"],
-         "agents_md_bytes": run["agents_md_bytes"], "check_passed": run["check"] == "PASS",
-         "check_needs_review": run["check"] == "REVIEW", "check_unverified": run["check"] == "UNVERIFIED",
+         "agents_md_bytes": run["agents_md_bytes"], "check_passed": run["check"] == PASS,
+         "check_needs_review": run["check"] == REVIEW, "check_unverified": run["check"] == UNVERIFIED,
          "input": run["input"], "user_turns": run["user_turns"], "planned_turns": run["planned_turns"],
          "check_output": run["check_output"], "observed": observed, "verifier": run["verifier"],
          "verify_reason": run["verify_reason"], "verify_rounds": run["verify_rounds"],
@@ -114,8 +115,8 @@ def rejudge_result(record, check, output, judge_version, check_sha):
         "completion_inputs": copy.deepcopy(record.get("completion_inputs")),
         "completion_inputs_missing": record.get("completion_inputs_missing"),
     })
-    updated.update(completion=_completed(record, check), check_passed=check == "PASS",
-                   check_needs_review=check == "REVIEW", check_unverified=check == "UNVERIFIED",
+    updated.update(completion=_completed(record, check), check_passed=check == PASS,
+                   check_needs_review=check == REVIEW, check_unverified=check == UNVERIFIED,
                    check_output=output, rejudged=True, check_sha=check_sha, judge_version=judge_version,
                    completion_inputs_missing=not _known_inputs(record.get("completion_inputs")))
     return updated

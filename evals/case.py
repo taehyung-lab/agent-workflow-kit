@@ -16,10 +16,10 @@ check.py 는 `python3 -I check.py <프로젝트 폴더> <세션 기록 .jsonl>` 
 import shutil, sys, tempfile
 from pathlib import Path
 
+from judge import EXIT  # 판정 낱말 → 종료 코드
 from transcript import read
 
 project = Path(sys.argv[1]).resolve()
-EXIT = {"PASS": 0, "FAIL": 1, "REVIEW": 2}
 
 
 def __getattr__(name):

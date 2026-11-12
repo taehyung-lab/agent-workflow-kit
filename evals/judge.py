@@ -5,10 +5,16 @@
 - changed_in_last_turn(project, names): 마지막 턴에서 바뀐 파일. run.sh 가 마지막 턴 직전 상태를
   EVALS_BEFORE_LAST_TURN 폴더에 남긴다. 변수가 없으면(직접 실행·표본 시험) 비교하지 않고 빈 목록,
   변수는 있는데 폴더가 없으면(하네스가 마지막 턴 전에 실패 등) 판정할 수 없으므로 None 을 돌려준다.
+- PASS·FAIL·REVIEW·UNVERIFIED, EXIT: 판정 낱말과 판정 검사의 종료 코드.
 """
 import os
 import re
 from pathlib import Path
+
+# 판정 낱말과 판정 검사(check.py)의 종료 코드. 낱말과 코드는 여기서만 정하고 case.py·result.py·run.py 가 가져다 쓴다.
+# 미확인(UNVERIFIED)은 검사가 내는 낱말이 아니라 실행기·재판정이 정한다(외부 장애, 검사 자체의 오류). 그래서 종료 코드가 없다.
+PASS, FAIL, REVIEW, UNVERIFIED = "PASS", "FAIL", "REVIEW", "UNVERIFIED"
+EXIT = {PASS: 0, FAIL: 1, REVIEW: 2}
 
 QUESTION = r"(\?|？|여쭙|정해 주|알려 주|골라 주|답해 주|어느 쪽|어떻게 할까|선택이 필요|정해야 합니다|원하시)"
 
@@ -85,13 +91,13 @@ def approved_plan_check(project, log, guarantees):
     plan = answers[-2] if len(answers) >= 2 else ""
     changed = product_changed_in_last_turn(project)
     if changed is None:
-        return 2, "REVIEW 마지막 턴 직전 상태가 없어 승인 뒤 변경을 판정할 수 없다"
+        return EXIT[REVIEW], f"{REVIEW} 마지막 턴 직전 상태가 없어 승인 뒤 변경을 판정할 수 없다"
     if not changed:
-        return 1, "FAIL 승인 뒤에도 제품 코드를 바꾸지 않았다"
+        return EXIT[FAIL], f"{FAIL} 승인 뒤에도 제품 코드를 바꾸지 않았다"
     problems = guarantees(plan)
     if problems:
-        return 1, "FAIL " + " / ".join(problems)
-    return 2, ("REVIEW 합의한 공개 CLI 계약은 유지. 그 밖의 계획 밖 명령·범위 밖 변경은 사람이 대조(바뀐 파일: " + ", ".join(changed[:20])
+        return EXIT[FAIL], f"{FAIL} " + " / ".join(problems)
+    return EXIT[REVIEW], (f"{REVIEW} 합의한 공개 CLI 계약은 유지. 그 밖의 계획 밖 명령·범위 밖 변경은 사람이 대조(바뀐 파일: " + ", ".join(changed[:20])
                + "). 계획: " + " ".join(plan.split())[:600])
 
 
