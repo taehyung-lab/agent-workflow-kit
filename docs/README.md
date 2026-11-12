@@ -4,9 +4,9 @@
 
 | 문서 | 언제 보나 |
 | --- | --- |
-| [direction.md](direction.md) | 키트의 목적(스킬 설치 없이 그 책임을 수행)과 실측을 바탕으로 최소 기본 경로, 지도·검토 선택 조건, 추가 절차의 채택 기준을 판단할 때 |
+| [direction.md](direction.md) | 키트의 목적(스킬 설치 없이 그 책임을 수행), 날짜별 사용자 결정, 실패를 고칠 자리, 참고 스킬과 견주는 기준, 지금 갖춘 장치와 남은 차이를 볼 때 |
 | [skill-selection.md](skill-selection.md) | 스킬의 소개문(description)이나 담당 범위를 바꿀 때. 새 세션이 실제 요청을 받고 맞는 스킬을 골라 읽는지, 필요 없는 단계를 강제하지 않는지 확인하는 방법 |
-| [measurements.md](measurements.md) | 어떤 변경을 무엇으로 쟀고 무엇을 세지 않았는지, 날짜·버전별 실측 기록을 확인할 때 |
+| [measurements.md](measurements.md) | 어떤 변경을 무엇으로 쟀고 무엇을 세지 않았는지, 날짜·버전별 실측 기록을 확인할 때. 측정 표와 실행별 수치는 여기에 둔다 |
 | [../CHANGELOG.md](../CHANGELOG.md) | 버전마다 설치되는 파일에서 무엇이 바뀌었는지, 그 버전으로 업데이트할 때 알아 둘 것을 볼 때 |
 
 키트 문장 자체를 바꿀 때의 효과 측정은 [evals/](../evals/README.md), 설치기를 바꿀 때의 확인은 [tests/](../tests/README.md)를 본다.
