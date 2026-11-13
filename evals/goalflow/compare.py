@@ -1,4 +1,4 @@
-"""goalflow 를 요청부터 구현·외부 판정까지 한 번에 도는 구성 비교: 키트(kit) / 스킬 설치(skills) / 지침 없음(none).
+"""과제 하나를 요청부터 구현·외부 판정까지 한 번에 도는 구성 비교: 키트(kit) / 스킬 설치(skills) / 지침 없음(none).
 
   python3 -I evals/goalflow/compare.py <kit|skills|none> <claude|codex> <번호> <결과 폴더>
   python3 -I evals/goalflow/table.py <결과 폴더> [-v]
@@ -10,6 +10,8 @@
 요약(<이름>.json)과 함께, 일반 결과 표(evals/report.py)가 읽는 <이름>.meta.json 을 쓴다(table.py 의 result_meta).
 
 환경 변수:
+  CMP_TASK    과제 이름(기본 goalflow = 회차 신청). tasks/ 아래 폴더 이름을 주면 그 과제를 돈다(orders·rooms).
+              과제 폴더에는 fixture/(시작 프로젝트)·request.txt·answer.txt·topics.txt·oracle.py 가 있다. 회차 신청은 이 폴더 자체가 과제 폴더이고 요청은 fixture/request.txt 다.
   CMP_REF     설치할 키트 커밋(기본 HEAD. 커밋하지 않은 수정은 들어가지 않는다)
   CMP_SKILLS  skills 구성에 설치할 스킬 저장소의 skills 폴더(예: mattpocock/skills 를 고정 커밋으로 받은 곳의 skills/). 그 안의 productivity/grilling·engineering/tdd 를 쓴다
   CMP_PREFIX  첫 요청 앞에 붙일 한 줄(기본: skills 구성만 "grilling 스킬로 요구를 확인한 다음 tdd 스킬로 구현해 주세요.")
@@ -20,6 +22,9 @@ from pathlib import Path
 
 KIT = Path(__file__).resolve().parents[2]
 GOAL = KIT / "evals/goalflow"
+TASK_NAME = os.environ.get("CMP_TASK", "goalflow")
+TASK = GOAL if TASK_NAME == "goalflow" else GOAL / "tasks" / TASK_NAME
+assert (TASK / "oracle.py").is_file(), f"과제 폴더가 없다: {TASK}"
 MP = Path(os.environ.get("CMP_SKILLS") or "/nonexistent")
 sys.path.insert(0, str(KIT / "evals"))
 from session import kit_checkout  # noqa: E402
@@ -37,7 +42,7 @@ G = ["git", "-c", "user.name=cmp", "-c", "user.email=cmp@invalid", "-c", "commit
 sh = lambda *c, cwd=None: subprocess.run(c, cwd=cwd, capture_output=True, text=True)
 
 # ---- 프로젝트 ----
-shutil.copytree(GOAL / "fixture", proj, ignore=shutil.ignore_patterns("__pycache__"))
+shutil.copytree(TASK / "fixture", proj, ignore=shutil.ignore_patterns("__pycache__"))
 sh(*G, "init", "-q", cwd=proj); sh(*G, "add", "-A", cwd=proj); sh(*G, "commit", "-qm", "fixture", cwd=proj)
 kit_ref = kit_commit = None  # 키트 구성만 값이 있다
 if arm == "kit":
@@ -55,11 +60,12 @@ sh(*G, "add", "-A", cwd=proj); sh(*G, "commit", "-qm", "arm: " + arm, "--allow-e
 base = sh(*G, "rev-parse", "HEAD", cwd=proj).stdout.strip()
 agents_md_bytes = (proj / "AGENTS.md").stat().st_size if (proj / "AGENTS.md").is_file() else 0  # 세션 전, 구성 설치 직후의 상시 지침 크기
 
-request = (GOAL / "fixture/request.txt").read_text(encoding="utf-8").strip()
-answer = (GOAL / "answer.txt").read_text(encoding="utf-8").strip()
+request = next(f for f in (TASK / "request.txt", TASK / "fixture/request.txt") if f.is_file()).read_text(encoding="utf-8").strip()
+answer = (TASK / "answer.txt").read_text(encoding="utf-8").strip()
+topics = (TASK / "topics.txt").read_text(encoding="utf-8").strip()
 # 모의 사용자(MOCK=asked): 물은 정책만 답한다. answer.txt 의 세 항목 가운데 에이전트가 물은 것만 주고, 묻지 않은 것은 알려 주지 않는다.
 MOCK = os.environ.get("MOCK", "asked")
-items = {int(m.group(1)): m.group(0).strip() for m in re.finditer(r"^(\d)\. .*$", answer, re.M)}
+items = {int(m.group(1)): m.group(0).strip() for m in re.finditer(r"^(\d+)\. .*$", answer, re.M)}
 PREFIX = os.environ.get("CMP_PREFIX", "grilling 스킬로 요구를 확인한 다음 tdd 스킬로 구현해 주세요." if arm == "skills" else "")
 FIRST = (PREFIX + "\n\n" if PREFIX else "") + request
 CLOSE = "더 물을 것이 없으면 그대로 마무리해 주세요. 남은 질문이 있으면 추천안대로 정해 완료하고, 정한 내용과 실제 실행한 명령·결과를 보고해 주세요."
@@ -71,7 +77,7 @@ def next_prompt(n, last_reply):
         return FIRST
     if MOCK == "all":
         return answer + "\n\n위 답으로 진행해 주세요." if n == 2 else CLOSE
-    new = [t for t in asked(last_reply) if t not in answered]
+    new = [t for t in asked(last_reply, topics) if t not in answered]
     answered.update(new)
     told = "\n".join(items[t] for t in new)
     if n == 2:
@@ -147,7 +153,7 @@ for n in (1, 2, 3):
         break
 
 # ---- 판정(프로젝트 밖) ----
-oracle = sh(sys.executable, "-I", str(GOAL / "oracle.py"), str(proj))
+oracle = sh(sys.executable, "-I", str(TASK / "oracle.py"), str(proj))
 try:
     verdict = json.loads(oracle.stdout)
 except ValueError:
@@ -164,10 +170,10 @@ if harness == "claude":
         if ev.get("type") == "system" and ev.get("subtype") == "init":
             init = {"skills": [s for s in ev.get("skills", []) if s in ("grilling", "tdd")], "plugins": len(ev.get("plugins", [])), "n_skills": len(ev.get("skills", []))}
             break
-summary = {"name": name, "arm": arm, "harness": harness, "run": int(idx) if idx.isdigit() else idx, "kit_ref": kit_ref, "kit_commit": kit_commit, "agents_md_bytes": agents_md_bytes, "base": base, "seconds": int(time.time() - started), "turns": rows,
-           "mock": MOCK, "answered": sorted(answered), "map": (proj / "work/enrollment/work.md").is_file(), "final_changes": product_changes(), "init": init,
+summary = {"name": name, "task": TASK_NAME, "arm": arm, "harness": harness, "run": int(idx) if idx.isdigit() else idx, "kit_ref": kit_ref, "kit_commit": kit_commit, "agents_md_bytes": agents_md_bytes, "base": base, "seconds": int(time.time() - started), "turns": rows,
+           "mock": MOCK, "answered": sorted(answered), "map": any((proj / "work").glob("*/work.md")), "final_changes": product_changes(), "init": init,
            "oracle_exit": oracle.returncode, "automated_valid": verdict.get("automated_valid"), "observation_complete": verdict.get("observation_complete"),
-           "failed": [c.get("name") for c in cases if c.get("passed") is False], "unobserved": [c.get("name") for c in cases if c.get("passed") is None],
+           "failed": [c.get("name") for c in cases if c.get("passed") is False], "failed_decision": verdict.get("failed_decision"), "unobserved": [c.get("name") for c in cases if c.get("passed") is None],
            "n_cases": len(cases), "oracle_error": verdict.get("error"), "public_tests_rc": smoke.returncode}
 (out / f"{name}.json").write_text(json.dumps(summary, ensure_ascii=False, indent=1), encoding="utf-8")
 (out / f"{name}.oracle.json").write_text(oracle.stdout or oracle.stderr, encoding="utf-8")

@@ -17,3 +17,10 @@ request_id
 # 추천 사례(recommend-from-context·recommend-missing-goal)
 이용 안내
 A화면
+# 주문 할인 과제(goalflow/tasks/orders)
+5만 원
+배송비
+영수증
+# 회의실 예약 과제(goalflow/tasks/rooms)
+회의실
+임시 예약

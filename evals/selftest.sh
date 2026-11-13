@@ -395,6 +395,24 @@ else
   cat "$goal_log"
 fi
 rm -f "$goal_log"
+# 과제 판정기(주문 할인·회의실 예약): 시작 상태는 실패, 정답 구현은 통과, 묻지 않고 흔한 쪽으로 정한 구현은 사용자 답 항목에서 실패한다.
+task_log=$(mktemp)
+if python3 -I "$here/goalflow/tasks/selftest.py" > "$task_log" 2>&1; then
+  ok "과제 판정기 $(tail -1 "$task_log")"
+else
+  ng "과제 판정기"
+  cat "$task_log"
+fi
+rm -f "$task_log"
+# 요청에서 완료까지의 연결(모델 호출 없음): 단계 표·단계 사이 넘겨주기·글 속 가리킴이 끊기지 않았다.
+chain_log=$(mktemp)
+if python3 -I "$here/chaintest.py" > "$chain_log" 2>&1; then
+  ok "연결 검사 $(tail -1 "$chain_log")"
+else
+  ng "연결 검사"
+  cat "$chain_log"
+fi
+rm -f "$chain_log"
 # 검토 도구 결과 읽기(모델 호출 없음): 이어 붙인 꼬리 출력이 있어도 이번 실행의 결과로 읽는다.
 verdict_log=$(mktemp)
 if python3 -I "$here/verdicttest.py" > "$verdict_log" 2>&1; then
