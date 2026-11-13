@@ -1,0 +1,2 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "/p/README.md"}}]}}
+{"type": "result", "result": "안내 문구 아래에 '확인' 버튼을 추가하고, 누르면 '확인했습니다.'를 표시할까요?"}

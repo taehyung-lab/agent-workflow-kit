@@ -1,0 +1,1 @@
+실제 baseline Codex 실행에서 확인한 네이티브 GET form 이동. 링크 외의 정상 구현도 인정한다.

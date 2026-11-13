@@ -14,6 +14,14 @@ tree=$(GIT_INDEX_FILE=$tmpidx git -C "$kitdir" add -A >/dev/null 2>&1 && GIT_IND
 if [ "$tree" = "$(git -C "$kitdir" rev-parse 'HEAD^{tree}')" ]; then REF=HEAD; else
   REF=$(git -C "$kitdir" -c user.name=selftest -c user.email=selftest@invalid commit-tree "$tree" -p HEAD -m selftest-worktree); fi
 printf '시험 대상 키트: %s\n' "$( [ "$REF" = HEAD ] && echo "HEAD $(git -C "$kitdir" rev-parse --short HEAD)" || echo "작업 트리 스냅숏 ${REF:0:7}(미커밋 변경 포함)")"
+# 교체한 환경과 이를 공유하는 사례가 실제로 준비되는지 확인한다(표본 판정만으로는 끊긴 source 경로를 못 찾는다).
+for fixture in cases/button-followthrough cases/recommend-from-context holdout/recommend-missing-goal; do
+  fixture_dir=$(mktemp -d)
+  if (cd "$fixture_dir" && bash "$here/$fixture/setup.sh") && [ -f "$fixture_dir/index.html" ] && {
+    if [ "$fixture" = cases/recommend-from-context ]; then [ -f "$fixture_dir/a.html" ]; else [ ! -e "$fixture_dir/a.html" ]; fi
+  }; then ok "$fixture: 실제 출발 환경 준비"; else ng "$fixture: 출발 환경 준비 실패"; fi
+  rm -rf "${fixture_dir:?}"
+done
 for dir in "$here"/cases/*/; do
   name=$(basename "$dir")
   for f in prompt.txt check.py samples/pass/transcript.jsonl samples/fail/transcript.jsonl; do
@@ -299,7 +307,7 @@ assert c("ok", "PASS", True) == "waiting-user" and c("off", "FAIL", True) == "ch
 PY
 # 검토 도구의 종료 코드는 완료 판정을 따른다: 0 은 completion=verified 뿐, state 가 준 코드(3·4·5)는 그대로, 판정은 났지만 완료가 아니면 6.
 # 평가 관찰은 그 코드로 실행 결과를 읽고(종료 코드가 state 만 따르던 예전 기록의 0 도 받는다), record 결과(recorded, 예전 ok+review off)는 검토로 세지 않는다.
-python3 -I - "$here" <<'PY' && ok "검토 도구 종료 코드: verified 만 0, 완료 아닌 recorded·ok 는 6, returned 3·incomplete 4·unverified 5 유지, 평가 관찰이 같은 규칙으로 읽음" || ng "검토 도구 종료 코드"
+python3 -I - "$here" <<'PY' && ok "검토 도구 종료 코드 규칙(exit_code): verified 만 0, 완료 아닌 판정은 6, returned 3·incomplete 4·unverified 5. 옛 기록(v3.7.0 의 record 가 completion 을 내던 출력)도 평가 관찰이 같은 규칙으로 읽음" || ng "검토 도구 종료 코드"
 import json, sys, tempfile
 from pathlib import Path
 sys.path.insert(0, sys.argv[1]); import verdict; from observe import verify_run
@@ -387,5 +395,14 @@ else
   cat "$goal_log"
 fi
 rm -f "$goal_log"
+# 전역 진입 문장을 평가 세션에 넣는 길(모델 호출 없음): 개인 전역 지침은 그 세션에서만 빠지고 개인 파일은 바뀌지 않는다.
+entry_log=$(mktemp)
+if python3 -I "$here/entrytest.py" > "$entry_log" 2>&1; then
+  ok "전역 진입 문장 주입 $(tail -1 "$entry_log")"
+else
+  ng "전역 진입 문장 주입"
+  cat "$entry_log"
+fi
+rm -f "$entry_log"
 printf '%d passed, %d failed%s\n' "$pass" "$failed" "${unrun:+, 1 미실행(표준 쓰기 경계 시험)}"
 [ "$failed" -eq 0 ]

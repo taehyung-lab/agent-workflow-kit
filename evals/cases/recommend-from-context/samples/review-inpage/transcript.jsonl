@@ -1,0 +1,3 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "/p/README.md"}}]}}
+{"type": "result", "result": "A화면으로 가는 버튼을 추천합니다. 이대로 할까요?"}
+{"type": "result", "result": "버튼을 누르면 같은 페이지에서 A화면이 보입니다."}
