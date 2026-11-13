@@ -4,7 +4,7 @@
 원시 기록·메타데이터·판정을 evals/results/ 아래에 남긴다. 답이나 예상 결과는 세션에 주지 않는다.
 프로젝트 만들기와 하네스 세션(두 하네스의 차이)은 session.py 가, 결과 기록(meta.json)은 result.py 가, 판정 낱말과 그 종료 코드는 judge.py 가 맡는다.
 
-사용: bash evals/run.sh <사례> <키트 커밋·태그> <claude|codex> [반복 수]
+사용: bash evals/run.sh <사례[,사례…]> <키트 커밋·태그> <claude|codex> [반복 수]   (사례 묶음은 커밋을 시작할 때 한 번만 정한다)
   예: bash evals/run.sh weight-accounting v1.0.0 claude 2
       bash evals/run.sh recommend-from-context v3.7.0..HEAD codex 2   (두 커밋 비교, 끝에 report.py --compare)
       bash evals/run.sh weight-accounting HEAD codex
@@ -345,7 +345,8 @@ def run_once(case_name, case_dir, ref, commit, harness_name, i, out_root, state)
 def compare(case_name, ref, harness_name, times):
     """비교 실행: <기준>..<대상> 이면 같은 사례·하네스로 두 커밋을 번갈아(기준 1회, 대상 1회, …) 돌린다(시간대·모델 상태의 차이가 한쪽에 몰리지 않게).
     끝나면 양쪽 원시 기록을 지금 판정기로 다시 판정(rejudge)한 뒤 report.py --compare 로 전후를 보여 준다(판정기가 달라 비교 불가가 되지 않게)."""
-    base, target = ref[:ref.index("..")], ref[ref.rindex("..") + 2:]
+    # 이름(HEAD·가지)은 시작할 때 한 번만 커밋으로 정한다: 도는 동안 커밋을 해도 한 묶음이 여러 커밋에 걸치지 않는다.
+    base, target = (resolve(r) for r in (ref[:ref.index("..")], ref[ref.rindex("..") + 2:]))
     out = os.environ.get("EVALS_RESULTS") or f"{HERE}/results/{time.strftime('%Y%m%d')}"
     rc = 0
     for i in range(1, times + 1):
@@ -357,21 +358,36 @@ def compare(case_name, ref, harness_name, times):
     return rc
 
 
+def resolve(ref):
+    """커밋·태그·가지 이름을 커밋 해시로 정한다. 키트에 없으면 멈춘다."""
+    r = subprocess.run(["git", "-C", str(KIT), "rev-parse", "--verify", "-q", ref + "^{commit}"], stdout=subprocess.PIPE, text=True)
+    if r.returncode != 0:
+        fail(f"키트에 없는 커밋·태그: {ref}")
+    return r.stdout.strip()
+
+
 def main(argv):
     if len(argv) < 3:
-        fail("사용: bash evals/run.sh <사례> <키트 커밋·태그 | 기준..대상> <claude|codex> [반복 수]")
+        fail("사용: bash evals/run.sh <사례[,사례…]> <키트 커밋·태그 | 기준..대상> <claude|codex> [반복 수]")
     case_name, ref, harness_name = argv[:3]
     times = int(argv[3]) if len(argv) > 3 and argv[3] else 1
+    if "," in case_name:
+        # 사례 묶음: 커밋을 시작할 때 한 번만 정하고, 띄울 세션 수를 먼저 알린다(세션마다 모델 사용량이 든다).
+        cases = [c for c in case_name.split(",") if c]
+        pinned = "..".join(resolve(r) for r in ref.split("..")) if ".." in ref else resolve(ref)
+        sides = 2 if ".." in ref else 1
+        print(f"사례 {len(cases)}개 × {times}회 × 커밋 {sides}개 = 세션 {len(cases) * times * sides}개를 띄운다({harness_name}, {pinned[:7] if sides == 1 else ' → '.join(p[:7] for p in pinned.split('..'))})", flush=True)
+        status = 0
+        for c in cases:
+            status = subprocess.run([sys.executable, "-I", __file__, c, pinned, harness_name, str(times)]).returncode or status
+        return status
     if ".." in ref:
         return compare(case_name, ref, harness_name, times)
     case_dir = case_path(case_name)  # cases 에 없으면 holdout(기계 판정이 PASS 를 내지 않는 사례. caseinfo.py)
     if not ((case_dir / "prompt.txt").is_file() and (case_dir / "check.py").is_file()):
         fail(f"사례가 없거나 prompt.txt·check.py 가 빠졌다: {case_dir}")
     current_judge_version(case_dir)  # 판정 파일이 빠졌으면 모델을 돌리기 전에 멈춘다
-    r = subprocess.run(["git", "-C", str(KIT), "rev-parse", "--verify", "-q", ref + "^{commit}"], stdout=subprocess.PIPE, text=True)
-    if r.returncode != 0:
-        fail(f"키트에 없는 커밋·태그: {ref}")
-    commit = r.stdout.strip()
+    commit = resolve(ref)
     if harness_name not in session.HARNESSES:
         fail("하네스는 claude 또는 codex")
     if not shutil.which(harness_name):
