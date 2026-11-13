@@ -116,6 +116,29 @@ def maps(root):
     return found
 
 
+MAP_PATH = re.compile(r"`([^`\s]+)`|\]\(([^)\s]+)\)")
+FILE_LIKE = re.compile(r"/|\.[A-Za-z][A-Za-z0-9]{0,5}$")  # 폴더 구분이 있거나 확장자로 끝난다(`v3.7.2`·`npm` 같은 낱말은 경로로 보지 않는다)
+
+
+def missing_map_paths(root):
+    """AGENTS.md 의 프로젝트가 관리하는 부분(키트 영역 아래)에 적힌 경로 가운데 지금 없는 것.
+    파일이 있는지만 본다. 그 파일이 그 일의 올바른 근거인지는 보지 못한다. 명령·주소·절대 경로·~ 경로·와일드카드는 건너뛴다."""
+    try:
+        text = (Path(root) / "AGENTS.md").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    text = text.split("<!-- agent-workflow-kit:end -->")[-1]
+    missing = []
+    for a, b in MAP_PATH.findall(text):
+        path = (a or b).split("#")[0].rstrip(".,:;")
+        path = re.sub(r":\d+$", "", path)
+        if not path or "://" in path or path[0] in "/~-$<@" or "*" in path or not FILE_LIKE.search(path):
+            continue
+        if not (Path(root) / path).exists() and path not in missing:
+            missing.append(path)
+    return missing
+
+
 def inspect(start, session_dir=None):
     """관찰한 값을 사람이 읽을 줄로 낸다(정보만)."""
     lines = []
@@ -162,6 +185,9 @@ def inspect(start, session_dir=None):
             lines.append(f"같은 저장소의 다른 worktree {len(trees)}개: {shown}{more}")
     found = maps(root)
     lines.append("작업 지도: " + ("; ".join(found) if found else "없음"))
+    gone = missing_map_paths(root)
+    if gone:
+        lines.append("AGENTS.md 프로젝트 지도에 적혀 있지만 지금 없는 경로: " + ", ".join(gone[:LIMIT_FILES]) + (f" 외 {len(gone) - LIMIT_FILES}개" if len(gone) > LIMIT_FILES else ""))
     return lines
 
 

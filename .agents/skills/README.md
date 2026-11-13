@@ -10,7 +10,7 @@
 | [wf-build/SKILL.md](wf-build/SKILL.md) | 구현 단계. 요구의 기대값 → 실패하는 검사 → 최소 구현 |
 | [wf-verify/SKILL.md](wf-verify/SKILL.md) | 결과 검토 단계. 원문 대조·완료 판정·독립 검토 |
 | [wf-verify/verify.py](wf-verify/verify.py) | 요구 기록 형식 검사(record), 독립 검토 입력 묶기(prepare)·결과 판정(finish). 검토자를 띄우지 않는다 |
-| [wf-context/context.py](wf-context/context.py) | 맥락 확인(읽기 전용): `inspect` 는 실경로·커밋·변경 파일 이름·설치 키트 버전·다른 worktree·작업 지도 제목을 낸다. `hook` 은 세션 시작 훅이 부른다 |
+| [wf-context/context.py](wf-context/context.py) | 맥락 확인(읽기 전용): `inspect` 는 실경로·커밋·변경 파일 이름·설치 키트 버전·다른 worktree·작업 지도 제목을 내고, AGENTS.md 프로젝트 지도에 적힌 경로 가운데 없어진 것이 있으면 알린다. `hook` 은 세션 시작 훅이 부른다 |
 
 파일 쓰기·명령의 허용은 각 도구의 권한 설정과 sandbox 가 맡는다. 키트가 등록하는 훅은 아래 정보 훅 하나다. v3.0 까지의 승인 관문 훅(`wf-design/approval-gate.py`)은 v3.1 에서 없앴고, 업데이트하면 설치기가 그 파일과 프로젝트 설정의 관문 훅 항목만 지운다.
 

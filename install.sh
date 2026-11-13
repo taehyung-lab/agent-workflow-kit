@@ -172,7 +172,7 @@ install_fresh() {
     printf '\n/work/\n' >> .gitignore
   fi
   kit_hooks apply
-  printf '%s\n' 'Files installed. Next, in a new session: survey this repository, fill the 4 project-map lines in AGENTS.md (leave 미확인 where no evidence), decide keep/move/remove for existing agent docs, then confirm with one small real request.'
+  printf '%s\n' 'Files installed. Next, in a new session: survey this repository, fill the 4 project-map rows in AGENTS.md (leave 미확인 where no evidence), decide keep/move/remove for existing agent docs, then confirm with one small real request.'
 }
 
 # 업데이트: 키트 소유 부분이 설치 당시 그대로일 때만 새 커밋으로 교체하고, 프로젝트 부분은 건드리지 않는다

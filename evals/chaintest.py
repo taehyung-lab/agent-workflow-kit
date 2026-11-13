@@ -16,6 +16,7 @@ STAGES = ["wf-ask", "wf-build", "wf-verify"]
 # (주는 파일, 주는 쪽 문구, 받는 파일, 받는 쪽 문구, 무엇의 연결인가)
 HANDOFFS = [
     ("AGENTS.md", "요청이 바꿀 곳과 결과를 글자 그대로 정한 변경은 단계 없이 바로 바꾸고 4로 확인한다", "AGENTS.md", "4. 완료라고 말하기 전에", "단계를 건너뛴 변경도 확인을 거친다"),
+    ("wf-ask/SKILL.md", "AGENTS.md 「프로젝트 지도」가 가리키는 계약·환경 문서", "AGENTS.md", "", "조사 → 프로젝트 지도"),
     ("wf-ask/SKILL.md", "`wf-build` 로 간다", "wf-build/SKILL.md", "확인된 요구", "요구 확인 → 구현"),
     ("wf-ask/map.md", "요구(입력→관찰 장소→기대)", "wf-build/SKILL.md", "요구 기록 표의 행", "지도의 요구 기록 → 구현의 기대값"),
     ("wf-build/SKILL.md", "실행한 명령과 실제 출력을 요구별로 남긴다", "wf-verify/SKILL.md", "요구마다 실행한 명령과 실제 출력으로 확인한다", "구현의 증거 → 결과 검토"),

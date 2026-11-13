@@ -79,7 +79,7 @@ git -C "$kit" checkout -q -- README.md
 # 업데이트 준비: v1 설치본 세 개(보존·영역 변경·스킬 변경)에 프로젝트 내용을 넣고, 키트 v2를 만든다
 for n in keep plain region skill exists; do
   t="$tmp/up-$n"; mkdir "$t"; install "$t"
-  sed -i.bak 's/^- 제품 원문·사용자 결정·결정권자: 미확인$/- 제품 원문·사용자 결정·결정권자: docs\/product.md/' "$t/AGENTS.md" && rm "$t/AGENTS.md.bak"
+  sed -i.bak 's/^| 제품 동작을 바꾸기 전 | 미확인 |/| 제품 동작을 바꾸기 전 | docs\/product.md |/' "$t/AGENTS.md" && rm "$t/AGENTS.md.bak"
   printf '\n## 프로젝트 약속\n\n- 이 저장소만의 약속\n' >> "$t/AGENTS.md"
   mkdir -p "$t/.agents/skills/my-role"; echo role > "$t/.agents/skills/my-role/SKILL.md"
 done
@@ -100,7 +100,7 @@ t="$tmp/up-keep"
 if install --update "$t" && [ ! -s "$tmp/err" ] \
   && [ "$(head -n 2 "$t/AGENTS.md")" = "$(printf '# 프로젝트 머리말\n')" ] \
   && grep -qxF 'v2 kit line' "$t/AGENTS.md" \
-  && grep -qxF -- '- 제품 원문·사용자 결정·결정권자: docs/product.md' "$t/AGENTS.md" \
+  && grep -qF -- '| 제품 동작을 바꾸기 전 | docs/product.md |' "$t/AGENTS.md" \
   && grep -qxF -- '- 이 저장소만의 약속' "$t/AGENTS.md" \
   && cmp -s "$kit/.agents/skills/wf-ask/SKILL.md" "$t/.agents/skills/wf-ask/SKILL.md" \
   && [ -f "$t/.agents/skills/wf-new/SKILL.md" ] && [ ! -e "$t/.agents/skills/README.md" ] \
