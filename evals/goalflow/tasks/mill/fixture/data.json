@@ -1,0 +1,68 @@
+{
+  "bins": [
+    {
+      "id": "old",
+      "grain": "wheat",
+      "grams": 9,
+      "arrived": "2026-10-01"
+    },
+    {
+      "id": "new",
+      "grain": "wheat",
+      "grams": 9,
+      "arrived": "2026-11-01"
+    },
+    {
+      "id": "rye",
+      "grain": "rye",
+      "grams": 30,
+      "arrived": "2026-10-03"
+    }
+  ],
+  "accounts": [
+    {
+      "id": "c1",
+      "flour": 20,
+      "bran": 4
+    },
+    {
+      "id": "c2",
+      "flour": 0,
+      "bran": 0
+    },
+    {
+      "id": "coop",
+      "flour": 0,
+      "bran": 7
+    }
+  ],
+  "jobs": [
+    {
+      "id": 7,
+      "customer": "c1",
+      "grain": "wheat",
+      "grams": 6,
+      "status": "draft",
+      "flour": 0,
+      "bran": 0
+    },
+    {
+      "id": 8,
+      "customer": "c1",
+      "grain": "rye",
+      "grams": 3,
+      "status": "done",
+      "flour": 2,
+      "bran": 1
+    },
+    {
+      "id": 9,
+      "customer": "c2",
+      "grain": "rye",
+      "grams": 4,
+      "status": "draft",
+      "flour": 0,
+      "bran": 0
+    }
+  ]
+}
