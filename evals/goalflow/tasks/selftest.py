@@ -163,7 +163,86 @@ label_mutant("labels 곧은 경로만 구현", {"sheets.py": straight},
              ["printed-edits-refused", "removed-space-reusable-any-order",
               "failed-add-atomic-then-retry", "existing-contents-count-at-boundary"], [])
 
+# 공동 제분소: 네 모듈 중 두 모듈을 고쳐야 실제 제분이 가능하다.
+def judge_mill(overrides):
+    with tempfile.TemporaryDirectory(prefix="milltest-") as temp:
+        project = Path(temp) / "p"
+        shutil.copytree(HERE / "mill/fixture", project)
+        for filename, source in overrides.items():
+            (project / filename).write_text(source, encoding="utf-8")
+        p = subprocess.run([sys.executable, "-I", str(HERE / "mill/oracle.py"), str(project)],
+                           capture_output=True, text=True)
+        if p.returncode not in (0, 1):
+            raise RuntimeError(p.stderr)
+        return json.loads(p.stdout)
+
+
+mill_control = {p.name: p.read_text(encoding="utf-8") for p in (HERE / "mill/control").glob("*.py")}
+r = judge_mill({})
+if not r["failed_given"] or r["automated_valid"]:
+    bad.append("mill: 시작 상태가 통과한다")
+if "public-tests-pass" in r["failed_given"]:
+    bad.append("mill: 시작 상태의 공개 검사가 실패한다")
+expect("mill 정답 구현", judge_mill(mill_control), [], [])
+
+
+def mill_mutant(label, overrides, given, decision):
+    result = judge_mill({**mill_control, **overrides})
+    expect(label, result, given, decision)
+    print(label + ": given=" + str(result["failed_given"]) + ", decision=" + str(result["failed_decision"]))
+
+
+# 1번: 묻지 않고 밀가루를 내림하고 나머지를 겨로 둔다.
+floor = mill_control["milling.py"].replace('(job["grams"] * 2 + 2) // 3', 'job["grams"] * 2 // 3')
+mill_mutant("mill 산출량 내림", {"milling.py": floor}, [],
+            ["round-up-one-gram", "round-up-existing-four-grams"])
+
+# 2번: 묻지 않고 흔한 선입선출을 택한다.
+fifo = mill_control["inventory.py"].replace('reverse=True', 'reverse=False')
+mill_mutant("mill 선입선출", {"inventory.py": fifo}, [],
+            ["newest-bin-first", "newest-bin-spillover"])
+
+# 3번: 묻지 않고 부산물도 고객에게 적립한다.
+customer_bran = mill_control["milling.py"].replace(
+    'inventory.find(data["accounts"], "coop")["bran"] += bran',
+    'inventory.find(data["accounts"], job["customer"])["bran"] += bran')
+mill_mutant("mill 겨도 고객 귀속", {"milling.py": customer_bran}, [],
+            ["bran-to-coop-c1", "bran-to-coop-c2"])
+
+# 요청의 new -> run 정상 경로만 구현한 변이:
+# 완료 재실행 방지 없이 원료를 다시 쓰고, 재고가 '더 많을 때'만 실행한다.
+# 여러 통에서 가능한 만큼 먼저 저장하고 부족을 보고해 실패 뒤 재시도가 깨진다.
+# 세 사용자 결정의 구현은 그대로 두므로 결정 누락과 given 누락을 구별한다.
+straight_inventory = mill_control["inventory.py"].replace(
+    '    if sum(b["grams"] for b in bins) < grams:\n        raise ValueError("원료 부족")\n',
+    '    shortage = sum(b["grams"] for b in bins) <= grams\n')
+straight_inventory += '''
+    if shortage:
+        import storage
+        storage.save(data)
+        raise ValueError("원료 부족")
+'''
+straight_milling = mill_control["milling.py"].replace(
+    '    if job["status"] == "done":\n        return view(job)\n', '').replace(
+    'if job["status"] != "draft":', 'if job["status"] == "cancelled":')
+mill_mutant("mill 곧은 경로만 구현", {
+    "inventory.py": straight_inventory, "milling.py": straight_milling},
+    ["repeat-run-no-double-spend", "shortage-atomic-then-restock-retry",
+     "existing-multi-bin-exact-boundary", "jobs-share-live-stock"], [])
+
+# 동일한 공개 결과를 내면서 내부 저장을 감싸고 출력에 키를 더하고 배열을 역순으로.
+wrapped_storage = (HERE / "mill/fixture/storage.py").read_text(encoding="utf-8").replace(
+    'return json.loads(path().read_text(encoding="utf-8"))',
+    'raw = json.loads(path().read_text(encoding="utf-8"))\n    return raw.get("payload", raw)').replace(
+    'json.dumps(data, ensure_ascii=False, indent=2)',
+    'json.dumps({"payload": data, "version": 2}, ensure_ascii=False, indent=2)')
+extra_cli = (HERE / "mill/fixture/mill.py").read_text(encoding="utf-8").replace(
+    'print(json.dumps(main(sys.argv[1:]), ensure_ascii=False))',
+    'result = main(sys.argv[1:])\n        if isinstance(result, list):\n            result = list(reversed(result))\n            for row in result:\n                row["extra"] = True\n        else:\n            result["extra"] = True\n        print(json.dumps(result, ensure_ascii=False))')
+expect("mill 저장 형식·추가 키·순서 독립", judge_mill({
+    **mill_control, "storage.py": wrapped_storage, "mill.py": extra_cli}), [], [])
+
 for b in bad:
     print("FAIL " + b)
-print(f"과제 3개·변이 8개 확인, {len(bad)} failed")
+print(f"과제 4개·변이 12개 확인, {len(bad)} failed")
 sys.exit(1 if bad else 0)
