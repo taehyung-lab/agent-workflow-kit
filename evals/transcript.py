@@ -146,6 +146,25 @@ def _answer(event, final):
     return final
 
 
+def replies(path):
+    """이 기록에서 에이전트가 사용자에게 쓴 글 전부를 순서대로. 한 턴에 글을 여러 번 나눠 쓰는 경우(질문 목록을 앞 글에, "위 질문에 답해 달라"를
+    마지막 글에) 마지막 답만 읽으면 질문을 놓친다. 기록을 열 수 없으면 빈 목록이다."""
+    found = []
+    try:
+        for event in events(path, errors="replace"):
+            if not isinstance(event, dict):
+                continue
+            kind = event.get("type")
+            if kind == "assistant":
+                found += [part.get("text", "") for part in (event.get("message") or {}).get("content", []) or []
+                          if isinstance(part, dict) and part.get("type") == "text"]
+            elif kind == "item.completed" and (event.get("item") or {}).get("type") == "agent_message":
+                found.append(event["item"].get("text", ""))
+    except OSError:
+        return []
+    return [text for text in found if text.strip()]
+
+
 def final_answer(path):
     """마지막 답 전체(read 의 final 과 같은 규칙). 검토자 기록처럼 온전하지 않을 수 있는 기록용이다:
     기록을 열 수 없으면 빈 글이고, UTF-8 이 아닌 바이트와 객체가 아닌 사건은 멈추지 않고 넘긴다."""

@@ -1,0 +1,7 @@
+{
+ "orders": [
+  {"id": 1, "customer": "한빛문구", "created": "2026-10-02", "status": "paid", "items": [{"name": "복사지", "price": 45000}, {"name": "토너", "price": 35000}]},
+  {"id": 2, "customer": "새봄카페", "created": "2026-10-20", "status": "pending", "items": [{"name": "원두", "price": 42000}, {"name": "종이컵", "price": 18000}]},
+  {"id": 3, "customer": "두레공방", "created": "2026-10-28", "status": "pending", "items": [{"name": "물감", "price": 30000}]}
+ ]
+}

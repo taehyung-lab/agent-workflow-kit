@@ -33,7 +33,7 @@ def result_meta(summary):
     goalflow 에는 table.py 가 보이는 구성별 사실을 둔다: 모의 사용자가 답한 정책, 답 전(1턴)에 바꾼 제품 파일, 실패·관찰 불가 판정 항목."""
     arm, turns = summary["arm"], summary["turns"]
     word, line = oracle_verdict(summary)
-    return {"case": "goalflow", "kit_ref": summary["kit_ref"] if arm == "kit" else arm,
+    return {"case": summary.get("task", "goalflow"), "kit_ref": summary["kit_ref"] if arm == "kit" else arm,
             "kit_commit": summary["kit_commit"] if arm == "kit" else arm, "harness": summary["harness"], "run": summary["run"],
             "exit_code": next((t["rc"] for t in turns if t["rc"] != 0), 0), "seconds": summary["seconds"],
             "agents_md_bytes": summary["agents_md_bytes"], "check_passed": word == PASS, "check_needs_review": False,
@@ -49,7 +49,7 @@ if __name__ == "__main__":
         if f.endswith((".oracle.json", ".meta.json")):
             continue
         s = json.load(open(f)); t = s["turns"]
-        print(f'{s["name"]:16} valid={s["automated_valid"]!s:5} fail={len(s["failed"]):2}/{s["n_cases"]} unobs={len(s["unobserved"])} pub={s["public_tests_rc"]} map={s["map"]!s:5} sec={s["seconds"]:5} | '
+        print(f'{s.get("task", "goalflow"):9} {s["name"]:16} valid={s["automated_valid"]!s:5} fail={len(s["failed"]):2}/{s["n_cases"]} unobs={len(s["unobserved"])} pub={s["public_tests_rc"]} map={s["map"]!s:5} sec={s["seconds"]:5} | '
               + " ".join(f't{r["turn"]}:ans{r.get("answered_now","")},rc{r["rc"]},{r["seconds"]}s,edit{len(r["product_changes"])},?{r["question_marks"]},rec{r["record_runs"]},rev{r["review_runs"]}' for r in t) + f' | init={s["init"]} err={str(s["oracle_error"])[:80] if s["oracle_error"] else ""}')
         if "-v" in sys.argv:
-            print("    failed:", s["failed"])
+            print("    failed:", s["failed"], "| 사용자 답 항목:", s.get("failed_decision"))
