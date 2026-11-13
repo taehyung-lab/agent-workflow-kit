@@ -175,7 +175,7 @@ flowchart LR
 ## 5분 시작
 
 ```bash
-git clone --branch v3.7.1 https://github.com/taehyung-lab/agent-workflow-kit
+git clone --branch v3.7.2 https://github.com/taehyung-lab/agent-workflow-kit
 bash agent-workflow-kit/install.sh /path/to/my-project
 ```
 
@@ -262,7 +262,7 @@ AGENTS.md의 네 항목에는 저장소가 관리하는 근거의 위치와 한 
 교체 결과를 diff로 검토하고, 아래 도입 확인 중 바뀐 것에 맞는 확인을 거친 뒤 반영한다. 확인을 마치지 못하면 남은 확인을 함께 남긴다.
 
 ```bash
-git -C /path/to/agent-workflow-kit fetch --tags && git -C /path/to/agent-workflow-kit checkout v3.7.1
+git -C /path/to/agent-workflow-kit fetch --tags && git -C /path/to/agent-workflow-kit checkout v3.7.2
 bash /path/to/agent-workflow-kit/install.sh --update /path/to/target-repository
 ```
 
