@@ -4,6 +4,21 @@
 
 키트를 바꿀 때 새 세션으로 잰 결과를 날짜·버전별로 둔 기록이다. 기록마다 무엇을 셌고 무엇을 세지 않았는지를 함께 적는다. 원시 기록은 커밋하지 않는다. 다시 실행하는 방법은 [evals/README.md](../evals/README.md)에 있다.
 
+## v3.7.1: 교정판의 발행 전 확인 (2026-11-13)
+
+교정판은 요구 확인·별도 독자·구현 절차를 v3.7.0 그대로 두고, 기록 검사가 완료를 선언하지 않게 하고 잘못된 평가 사례를 바로잡은 것이다([corrections.md](corrections.md)). 아래는 퇴보가 없는지 본 것이며 구성당 1회다. 개선의 증거로 세지 않는다. 원시 기록은 실행한 사람의 `work/measure-v371/`(커밋하지 않음).
+
+| 측정(6fe04bd, 각 1회) | Codex | Claude |
+|---|---|---|
+| 회차 신청 과제(`evals/goalflow/compare.py kit`) | 정책 질문, 외부 판정 15/15, 답 전 제품 수정 없음 | 정책 질문, 외부 판정 15/15, 답 전 제품 수정 없음 |
+| contract-export(필수 독립 검토) | 통과 | 검토 필요. 원시 기록으로는 `prepare` → 검토자 → `finish` 가 state ok·completion verified 를 냈다. 같은 명령 뒤에 `echo exit=$?` 를 이어 붙여 관찰 도구가 결과를 확정하지 못했다(`verify_run=unknown`) |
+| clear-change | 통과 | — |
+| recommend-from-context | 통과 | — |
+
+전역 진입 문장의 약속을 재는 세 사례(b9b954e, 각 1회): 실행기가 그 커밋의 `entry.md` 문단을 세션의 전역 지침으로 넣고 실행한 사람의 개인 전역 지침은 그 세션에서만 뺐다(meta 의 `global_entry` 가 여섯 실행 모두 `kit:entry.md`). installed-kit-only·switch-project·kit-unreadable 모두 Codex 1/1·Claude 1/1 통과. 실행 전후로 개인 전역 지침 파일 세 개의 지문이 같았다. 그 전까지 이 세 사례의 결과는 실행한 사람의 개인 파일에 든 문단을 잰 것이었다.
+
+세지 않은 것: 구성당 1회라 안정성은 말하지 못한다. Codex 의 installed-kit-only(378초)·switch-project(445초)가 왜 오래 걸렸는지는 보지 않았다. 나머지 사례는 이 커밋으로 다시 돌리지 않았다(교정판이 바꾼 설치 파일은 검토 도구의 record 와 그 설명뿐이다).
+
 ## v3.7: 단계 호출과 별도 독자 (2026-11-12)
 
 과제와 실행기는 아래 「v3.6 과 스킬 설치·없음 비교」와 같다(`evals/goalflow/compare.py`, 모의 사용자는 물은 정책만 답함, 외부 판정 15개, 세션은 사용자 전역 설정과 격리). Codex CLI 0.167.2, Claude Code. 원시 기록은 실행한 사람의 `work/measure-20261112-stages/`(커밋하지 않음)에 있다. v3.6.0 과 스킬 설치 열은 전날 같은 실행기로 잰 값이다.
