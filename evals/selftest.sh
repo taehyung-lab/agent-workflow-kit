@@ -395,5 +395,14 @@ else
   cat "$goal_log"
 fi
 rm -f "$goal_log"
+# 전역 진입 문장을 평가 세션에 넣는 길(모델 호출 없음): 개인 전역 지침은 그 세션에서만 빠지고 개인 파일은 바뀌지 않는다.
+entry_log=$(mktemp)
+if python3 -I "$here/entrytest.py" > "$entry_log" 2>&1; then
+  ok "전역 진입 문장 주입 $(tail -1 "$entry_log")"
+else
+  ng "전역 진입 문장 주입"
+  cat "$entry_log"
+fi
+rm -f "$entry_log"
 printf '%d passed, %d failed%s\n' "$pass" "$failed" "${unrun:+, 1 미실행(표준 쓰기 경계 시험)}"
 [ "$failed" -eq 0 ]

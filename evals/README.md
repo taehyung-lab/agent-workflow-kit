@@ -63,6 +63,7 @@ bash evals/run.sh recommend-from-context v3.7.0..HEAD codex 2   # 두 커밋 비
 | `before-turnN.sh` | N 번째 턴을 보내기 전에 프로젝트 폴더에서 실행(예: 재개 전에 다른 사람이 파일을 바꿔 커밋) |
 | `check.py` | 판정. 종료 코드 0=통과, 1=실패, 2=검토 필요 |
 | `observe.txt` | 편집 흔적을 볼 제품 파일 이름 |
+| `global-entry` | 있으면 그 키트 커밋의 `entry.md` 문단을 세션의 전역 지침으로 넣는다(전역 진입 문장의 약속을 재는 사례). 실행한 사람의 개인 전역 지침은 그 세션에서만 빠지고 개인 파일은 바뀌지 않는다. meta 의 `global_entry` 가 `kit:entry.md`·`missing`(그 커밋에 entry.md 없음)·`personal` 중 무엇으로 돌렸는지 남긴다 |
 | `samples/` | 판정 검사가 정말 위반을 잡는지 확인하는 표본(`pass-*`·`fail-*`·`review-*`). 일부는 실제 세션 기록에서 가져왔고 출처를 `source.txt` 에 적었다 |
 
 ## 지도에서 구현 완료까지

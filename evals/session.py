@@ -129,12 +129,27 @@ def _review(cmd, directory, log, env=None):
             return 124
 
 
+CENTRAL_KIT = "~/.agents/kits/agent-workflow-kit"  # entry.md 의 <중앙 키트> 자리에 넣는 경로(사례의 판정 검사가 이 경로를 본다)
+
+
+def entry_text(kit):
+    """키트 checkout 의 entry.md 에서 전역 지침으로 넣을 문단(```markdown 울타리 안)을 꺼낸다. 파일이나 울타리가 없으면 None.
+    전역 진입 문장의 약속을 재는 사례는 실행한 사람의 개인 전역 지침이 아니라 그 커밋의 이 문단을 받아야 한다."""
+    path = Path(kit) / "entry.md"
+    if not path.is_file():
+        return None
+    m = re.search(r"```markdown\n(.*?)\n```", path.read_text(encoding="utf-8"), re.S)
+    return m.group(1).replace("<중앙 키트>", CENTRAL_KIT).strip() if m else None
+
+
 class Harness:
-    """한 프로젝트에서 도는 구현자 세션 하나. project 없이 만들면 검토자 세션(review)과 version 만 쓴다."""
+    """한 프로젝트에서 도는 구현자 세션 하나. project 없이 만들면 검토자 세션(review)과 version 만 쓴다.
+    entry: 이 세션의 전역 지침으로 쓸 글. 주면 실행한 사람의 개인 전역 지침은 이 세션에서만 빼고 이 글을 넣는다(개인 파일은 건드리지 않는다)."""
     name = ""
 
-    def __init__(self, project=None):
+    def __init__(self, project=None, entry=None):
         self.project = project
+        self.entry = entry
         self.session_id = ""
         self.project_trusted = False  # 임시 홈에 이 프로젝트 신뢰를 더했는가(Codex 만)
 
@@ -161,12 +176,16 @@ class Claude(Harness):
     name = "claude"
     FLAGS = ["--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions", "--max-turns", "30"]
 
+    def _flags(self):
+        # entry 가 있으면 사용자 설정(~/.claude 의 CLAUDE.md·플러그인)을 이 세션에서만 읽지 않게 하고 그 글을 시스템 지침 끝에 넣는다.
+        return self.FLAGS + (["--setting-sources", "project,local", "--append-system-prompt", self.entry] if self.entry else [])
+
     def start(self, prompt, out):
-        return self._turn(["claude", "-p", prompt, *self.FLAGS], out, cwd=self.project)
+        return self._turn(["claude", "-p", prompt, *self._flags()], out, cwd=self.project)
 
     def resume(self, prompt, out, from_runner=False):
         """from_runner: 사용자 턴이 아닌 실행기의 반환 턴(제한 시간이 짧다)."""
-        return self._turn(["claude", "-p", prompt, "--resume", self.session_id, *self.FLAGS], out, limit=900 if from_runner else LIMIT,
+        return self._turn(["claude", "-p", prompt, "--resume", self.session_id, *self._flags()], out, limit=900 if from_runner else LIMIT,
                           cwd=self.project)
 
     def review(self, directory, prompt, log):
@@ -175,13 +194,16 @@ class Claude(Harness):
                                directory, log)
 
 
-def _codex_home():
-    """Codex 는 전역 지침을 CODEX_HOME 에서 읽는다. 실제 설정(인증·config·AGENTS.md)만 복사한 임시 홈을 쓴다(사용자 전역 설정은 건드리지 않는다)."""
+def _codex_home(entry=None):
+    """Codex 는 전역 지침을 CODEX_HOME 에서 읽는다. 실제 설정(인증·config·AGENTS.md)만 복사한 임시 홈을 쓴다(사용자 전역 설정은 건드리지 않는다).
+    entry 를 주면 임시 홈의 AGENTS.md 를 사용자의 것 대신 그 글로 쓴다."""
     home = tempfile.mkdtemp()
-    for f in ("auth.json", "config.toml", "AGENTS.md"):
+    for f in ("auth.json", "config.toml") + (() if entry else ("AGENTS.md",)):
         src = Path.home() / ".codex" / f
         if src.is_file():
             shutil.copy(src, home)
+    if entry:
+        (Path(home) / "AGENTS.md").write_text(entry + "\n", encoding="utf-8")
     return home
 
 
@@ -189,12 +211,12 @@ class Codex(Harness):
     """Codex. 임시 홈을 세션이 끝날 때(close)까지 두어 같은 세션을 이어 간다."""
     name = "codex"
 
-    def __init__(self, project=None):
-        super().__init__(project)
+    def __init__(self, project=None, entry=None):
+        super().__init__(project, entry)
         self.home, self.flags = None, []
         if project is None:
             return
-        self.home = _codex_home()
+        self.home = _codex_home(entry)
         # EVALS_CODEX_NETWORK=1 이면 작업 공간에 네트워크를 허용한다(세션 안에서 다른 세션을 띄우는 후보를 시험할 때).
         if os.environ.get("EVALS_CODEX_NETWORK") == "1":
             self.flags += ["-c", "sandbox_workspace_write.network_access=true"]

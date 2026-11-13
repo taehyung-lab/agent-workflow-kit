@@ -89,7 +89,7 @@ def initial_result(run):
          "stage": "after-approval" if run["input"] == "with-approval" else "original-input",
          "review_state": state, "review_required": inputs["review_required"],
          "completion_inputs": inputs,
-         "verifier_tool": run["verifier_tool"] or None, "codex_project_trusted": run["codex_project_trusted"],
+         "verifier_tool": run["verifier_tool"] or None, "codex_project_trusted": run["codex_project_trusted"], "global_entry": run.get("global_entry", "personal"),
          "baseline_changed_after_approval": run["baseline_changed"],
          "global_instructions": run["global_instructions"],
          "claude_project_settings": run["claude_project_settings"] or None}

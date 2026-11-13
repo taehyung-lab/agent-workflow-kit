@@ -249,7 +249,11 @@ def run_once(case_name, case_dir, ref, commit, harness_name, i, out_root, state)
     start, rc = int(time.time()), 0
     Path(f"{out}.jsonl").write_bytes(b"")
     Path(f"{out}.err").write_bytes(b"")
-    harness = session.HARNESSES[harness_name](str(project))
+    # 사례 폴더에 global-entry 가 있으면(전역 진입 문장의 약속을 재는 사례) 그 키트 커밋의 entry.md 문단을 이 세션의 전역 지침으로 넣는다.
+    # 실행한 사람의 개인 전역 지침은 이 세션에서만 빠진다. 그 커밋에 entry.md 가 없으면 개인 지침 그대로 돌리고 meta 에 남긴다.
+    entry = session.entry_text(kit) if (case_dir / "global-entry").is_file() else None
+    global_entry = "kit:entry.md" if entry else ("missing" if (case_dir / "global-entry").is_file() else "personal")
+    harness = session.HARNESSES[harness_name](str(project), entry=entry)
     t = sent = 0
     # 작업 시작 상태(첫 턴 직전)를 커밋 하나로 남긴다(가지·index 는 그대로). 검증자는 마지막 턴만이 아니라 작업 시작부터의 변경 전체를 받는다.
     try:
@@ -314,7 +318,7 @@ def run_once(case_name, case_dir, ref, commit, harness_name, i, out_root, state)
             "verifier": v["state"], "verify_reason": v["reason"], "verify_rounds": v["rounds"], "verifier_exit_code": v["verifier_exit_code"],
             "review": v["review"], "baseline_changed": v["baseline_changed"], "verifier_tool": state["verifier_tool"],
             "review_required": (case_dir / "review-required").is_file(), "lang": lang, "judge_version": jv,
-            "codex_project_trusted": harness.project_trusted,
+            "codex_project_trusted": harness.project_trusted, "global_entry": global_entry,
             "claude_project_settings": Path(settings_file).read_text(encoding="utf-8").rstrip("\n") if settings_file else "",
             "global_instructions": {"~/.claude/CLAUDE.md": fingerprint("~/.claude/CLAUDE.md"), "~/.agents/USER.md": fingerprint("~/.agents/USER.md"),
                                     "~/.codex/AGENTS.md": fingerprint("~/.codex/AGENTS.md"),
