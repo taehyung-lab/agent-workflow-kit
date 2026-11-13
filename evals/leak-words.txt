@@ -1,0 +1,19 @@
+# 평가 과제에만 나오는 낱말. 설치되는 지침(AGENTS.md 키트 영역, .agents/skills 의 글, 검토자 지시문)에 있으면 leaktest.py 가 실패한다.
+# 과제의 요청 문장·정답·흐름을 가리키는 낱말만 넣는다. 일반 낱말(버튼, 화면, 저장)은 넣지 않는다.
+# 로그인 화면 사례들(clear-change·answer-proceeds·new-request-after-done 등)
+로그인하기
+가입하기
+# 계정 사례(account-after-correction·account-specified)
+탈퇴
+비활성화
+# 할 일 보관함·내보내기 사례(archive-*·contract-export·weight-accounting)
+보관함
+정산
+# 회차 신청 과제(goalflow)
+request_id
+요청 ID
+회차 신청
+응답 유실
+# 추천 사례(recommend-from-context·recommend-missing-goal)
+이용 안내
+A화면

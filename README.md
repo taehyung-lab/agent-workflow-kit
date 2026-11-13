@@ -170,12 +170,12 @@ flowchart LR
 
 ④ 측정은 [evals/](evals/)가 맡는다. 지정한 키트 커밋을 격리한 새 프로젝트에 설치하고, 예상 답을 주지 않은 Claude·Codex 새 세션에 사례를 실행해 원시 기록·판정·AGENTS.md 바이트를 남긴다. 사례마다 통과·실패 표본이 있어서 CI 가 "판정 검사가 위반을 정말 잡는가"를 매번 확인한다. 같은 과제를 키트·스킬 설치·지침 없음 세 구성으로 돌리는 비교는 [evals/goalflow/](evals/goalflow/README.md)의 `compare.py` 가 맡고, 키트의 채택 기준은 이것으로 잰다. 이 저장소는 효과가 보이지 않으면 문장을 더 강하게 고치지 않고, [이슈](https://github.com/taehyung-lab/agent-workflow-kit/issues)로 미확인을 추적한다.
 
-자동으로 도는 것은 기계로 판단되는 부분뿐이다: `bash evals/run.sh <사례> <기준>..<대상> <하네스> <횟수>` 가 두 커밋을 같은 조건으로 돌리고, 보고서가 사례별 전후(통과·검토 필요·답 대기·첫 답 길이)와 "회귀 후보"·"재발"·"비교 불가"를 표시한다. 원인 자리·교체안·채택과 되돌리기는 원시 기록을 본 사람이 정하고, 규칙 후보나 별도 스킬을 자동으로 쌓지 않는다(실패마다 파일이 늘어나는 "덧붙임"을 자동화하는 셈이기 때문이다).
+자동으로 도는 것은 기계로 판단되는 부분뿐이다: `bash evals/run.sh <사례> <기준>..<대상> <하네스> <횟수>` 가 두 커밋을 같은 조건으로 돌리고, 보고서가 사례별 전후(통과·검토 필요·답 대기·첫 답 길이)와 그 결과로 무엇을 말할 수 있는지("차이"·"회귀 확인용"·"재발"·"말할 수 없음"·"비교 불가")를 표시한다. 원인 자리·교체안·채택과 되돌리기는 원시 기록을 본 사람이 정하고, 규칙 후보나 별도 스킬을 자동으로 쌓지 않는다(실패마다 파일이 늘어나는 "덧붙임"을 자동화하는 셈이기 때문이다).
 
 ## 5분 시작
 
 ```bash
-git clone --branch v3.7.1 https://github.com/taehyung-lab/agent-workflow-kit
+git clone --branch v3.7.2 https://github.com/taehyung-lab/agent-workflow-kit
 bash agent-workflow-kit/install.sh /path/to/my-project
 ```
 
@@ -262,7 +262,7 @@ AGENTS.md의 네 항목에는 저장소가 관리하는 근거의 위치와 한 
 교체 결과를 diff로 검토하고, 아래 도입 확인 중 바뀐 것에 맞는 확인을 거친 뒤 반영한다. 확인을 마치지 못하면 남은 확인을 함께 남긴다.
 
 ```bash
-git -C /path/to/agent-workflow-kit fetch --tags && git -C /path/to/agent-workflow-kit checkout v3.7.1
+git -C /path/to/agent-workflow-kit fetch --tags && git -C /path/to/agent-workflow-kit checkout v3.7.2
 bash /path/to/agent-workflow-kit/install.sh --update /path/to/target-repository
 ```
 

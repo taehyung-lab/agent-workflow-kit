@@ -274,8 +274,8 @@ total = len(region) + sum(len(f.read_bytes()) for f in docs) + prompt
 if total > 32000: bad.append(f"설치 문서 전체 {total}B > 32000B")
 print("\n".join(bad) or f"키트 영역 {len(region)}B, 검토자 지시문 {prompt}B, 설치 문서 전체 {total}B"); sys.exit(1 if bad else 0)
 PY
-# 비교 보고(report.py --compare): 회귀 후보·재발·비교 불가를 표시하고, 검토 필요는 실패로 세지 않는다
-python3 -I - "$here" <<'PY' && ok "비교 보고: 회귀 후보·재발·비교 불가 표시, 검토 필요는 재발로 세지 않음" || ng "비교 보고"
+# 비교 보고(report.py --compare): 통과 수와 함께 '무엇을 말할 수 있는가'를 낸다. 검토 필요는 실패로 세지 않고 사람 판독 대기로 센다
+python3 -I - "$here" <<'PY' && ok "비교 보고: 섞인 결과는 말할 수 없음·재발·비교 불가 표시, 검토 필요는 재발로 세지 않고 사람 판독 대기로 셈" || ng "비교 보고"
 import json, subprocess, sys, tempfile
 from pathlib import Path
 here = Path(sys.argv[1])
@@ -291,7 +291,7 @@ with tempfile.TemporaryDirectory() as d:
     meta(d, "cmp", "aaaaaaaa", True); meta(d, "cmp", "bbbbbbbb", True, gi="b")
     out = subprocess.run([sys.executable, "-I", str(here / "report.py"), "--compare", "aaaaaaa", "bbbbbbb", d], capture_output=True, text=True).stdout
     row = lambda c: next(l for l in out.splitlines() if l.startswith(c + " "))
-    assert "회귀 후보" in row("reg") and "재발" in row("rec") and "재발" not in row("rev") and "비교 불가: 전역 지침" in row("cmp"), out
+    assert "말할 수 없음" in row("reg") and "퇴보" not in row("reg") and "재발" in row("rec") and "재발" not in row("rev") and "사람 판독 대기" in row("rev") and "비교 불가: 전역 지침" in row("cmp"), out
 PY
 python3 -I - "$here" <<'PY' && ok "완료 분류: 모두 관찰로 확인했을 때만 완료(직접 증거 없음·REVIEW·미정·미확인은 완료 아님), 실패는 대기보다 먼저, 필수 검토 미수행=review-missing" || ng "완료 분류"
 import sys; sys.path.insert(0, sys.argv[1]); from verdict import completion as c
@@ -395,6 +395,33 @@ else
   cat "$goal_log"
 fi
 rm -f "$goal_log"
+# 검토 도구 결과 읽기(모델 호출 없음): 이어 붙인 꼬리 출력이 있어도 이번 실행의 결과로 읽는다.
+verdict_log=$(mktemp)
+if python3 -I "$here/verdicttest.py" > "$verdict_log" 2>&1; then
+  ok "검토 결과 읽기 $(tail -1 "$verdict_log")"
+else
+  ng "검토 결과 읽기"
+  cat "$verdict_log"
+fi
+rm -f "$verdict_log"
+# 평가가 재려는 것이 새지 않았는가(모델 호출 없음): 설치 지침에 평가 과제의 낱말이 없고, 표본에 홈 경로가 없다.
+leak_log=$(mktemp)
+if python3 -I "$here/leaktest.py" > "$leak_log" 2>&1; then
+  ok "누출 검사 $(tail -1 "$leak_log")"
+else
+  ng "누출 검사"
+  cat "$leak_log"
+fi
+rm -f "$leak_log"
+# 비교 보고의 판단 규칙(모델 호출 없음): 전부 뒤집힌 경우만 차이로 적는다.
+report_log=$(mktemp)
+if python3 -I "$here/reporttest.py" > "$report_log" 2>&1; then
+  ok "비교 보고 판단 규칙 $(tail -1 "$report_log")"
+else
+  ng "비교 보고 판단 규칙"
+  cat "$report_log"
+fi
+rm -f "$report_log"
 # 전역 진입 문장을 평가 세션에 넣는 길(모델 호출 없음): 개인 전역 지침은 그 세션에서만 빠지고 개인 파일은 바뀌지 않는다.
 entry_log=$(mktemp)
 if python3 -I "$here/entrytest.py" > "$entry_log" 2>&1; then

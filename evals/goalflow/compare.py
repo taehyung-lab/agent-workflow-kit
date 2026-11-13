@@ -172,6 +172,13 @@ summary = {"name": name, "arm": arm, "harness": harness, "run": int(idx) if idx.
 (out / f"{name}.json").write_text(json.dumps(summary, ensure_ascii=False, indent=1), encoding="utf-8")
 (out / f"{name}.oracle.json").write_text(oracle.stdout or oracle.stderr, encoding="utf-8")
 shutil.copytree(proj, out / f"{name}.files", ignore=shutil.ignore_patterns(".git", "__pycache__"), dirs_exist_ok=True)
+# Codex 의 exec 기록에는 하위 에이전트 생성이 남지 않는다. 임시 홈을 지우기 전에 이 세션의 원본 기록을 남겨, 별도 독자를 실제로 띄웠는지 볼 수 있게 한다.
+if harness == "codex" and sid:
+    with open(out / f"{name}.rollout.jsonl", "wb") as roll:
+        for root_dir, _, files in os.walk(work / "home" / ".codex" / "sessions"):
+            for f in files:
+                if f.startswith("rollout-") and f.endswith(f"{sid}.jsonl"):
+                    roll.write((Path(root_dir) / f).read_bytes())
 (out / f"{name}.meta.json").write_text(json.dumps(result_meta(summary), ensure_ascii=False, indent=1), encoding="utf-8")
 shutil.rmtree(work, ignore_errors=True)
 print(name, "valid=", summary["automated_valid"], "failed=", len(summary["failed"]), "/", summary["n_cases"], "seconds=", summary["seconds"])
