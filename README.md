@@ -35,7 +35,7 @@ flowchart TD
   B["wf-build 구현<br/>요구의 기대값 → 실패하는 검사 → 최소 구현"]
   W["wf-verify 결과 검토<br/>원문 대조 · 완료 판정 · 독립 검토"]
   C["context.py (세션 시작 훅 · 직접 실행)<br/>실경로 · 커밋 · 변경 · 키트 버전 · 지도 제목 (정보만)"]
-  V["verify.py<br/>요구 기록 검사·완료 판정(record) · 검토 입력 고정(prepare) · 결과 판정(finish)"]
+  V["verify.py<br/>요구 기록 검사(record) · 검토 입력 고정(prepare) · 결과 판정(finish)"]
   R["키트 저장소에만 있는 것<br/>install.sh · tests(CI) · evals(전후 비교 · 세 구성 비교)"]
   E --> A
   A -->|제품 파일을 바꾸는 작업| Q
@@ -140,7 +140,7 @@ sandbox_mode = "read-only"
 
 - **직접 확인이 기본이다.** 완료 전에 요구마다 실행한 명령과 실제 출력으로 확인한다. 내부 호출만 보는 검사로는 닫지 않는다.
 - **독립 검토는 정해진 작업에서는 반드시, 그 밖에는 필요할 때 받는다.** 필수인 작업은 [AGENTS.md](AGENTS.md) 기본 4 에 있고, 단계를 건너뛴 변경에도 적용된다. 검토자는 하네스의 하위 에이전트이고, 검토 도구가 요청 원문·지도 기준·변경만 넘긴다. 새 요구가 있어야 성립하는 반례는 판정을 막지 않고 범위 밖으로 따로 적힌다.
-- **애매하면 완료가 아니다.** 작업 지도를 쓴 작업은 요구 기록 표의 행마다 상태(확정·미정·미확인)가 있고, 완료는 `verify.py` 가 한 규칙으로 판정한다. 완료는 `verified` 뿐이다. 미정 행이 남으면 `waiting-user`(묻는다), 직접 검사 결과를 넘기지 않으면 통과로 가정하지 않고 `unverified`, 필수 독립 검토를 받지 않았으면 `review-missing` 이다. 판정 상태 전체는 [.agents/skills/README.md](.agents/skills/README.md)에 있다.
+- **애매하면 완료가 아니다.** 작업 지도를 쓴 작업은 요구 기록 표의 행마다 상태(확정·미정·미확인)가 있다. `verify.py record` 는 표의 형식과 남은 미정·미확인만 알려 주고 완료를 판정하지 않는다(종료 0 은 형식이 맞다는 뜻이다). 완료는 결과 검토 단계가 요청 원문과 실제 결과를 대조해 판단하고, 독립 검토를 받은 작업은 `verify.py finish` 가 검토 결과와 직접 검사 결과를 합쳐 `verified` 를 낸다. 도구의 결과 상태는 [.agents/skills/README.md](.agents/skills/README.md)에 있다.
 - **필수 조건을 빼거나 낮추는 것은 사용자만 정한다.**
 
 이 판정 규칙을 넣기 전·후를 비교한 실측은 [docs/measurements.md](docs/measurements.md) 「v3.3」에, 사용자 확인 전에 제품 파일을 고치지 않게 한 이유는 [docs/direction.md](docs/direction.md)의 v3.4 결정에 있다.
@@ -175,7 +175,7 @@ flowchart LR
 ## 5분 시작
 
 ```bash
-git clone --branch v3.7.0 https://github.com/taehyung-lab/agent-workflow-kit
+git clone --branch v3.7.1 https://github.com/taehyung-lab/agent-workflow-kit
 bash agent-workflow-kit/install.sh /path/to/my-project
 ```
 
@@ -262,7 +262,7 @@ AGENTS.md의 네 항목에는 저장소가 관리하는 근거의 위치와 한 
 교체 결과를 diff로 검토하고, 아래 도입 확인 중 바뀐 것에 맞는 확인을 거친 뒤 반영한다. 확인을 마치지 못하면 남은 확인을 함께 남긴다.
 
 ```bash
-git -C /path/to/agent-workflow-kit fetch --tags && git -C /path/to/agent-workflow-kit checkout v3.7.0
+git -C /path/to/agent-workflow-kit fetch --tags && git -C /path/to/agent-workflow-kit checkout v3.7.1
 bash /path/to/agent-workflow-kit/install.sh --update /path/to/target-repository
 ```
 

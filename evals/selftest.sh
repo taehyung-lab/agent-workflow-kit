@@ -307,7 +307,7 @@ assert c("ok", "PASS", True) == "waiting-user" and c("off", "FAIL", True) == "ch
 PY
 # 검토 도구의 종료 코드는 완료 판정을 따른다: 0 은 completion=verified 뿐, state 가 준 코드(3·4·5)는 그대로, 판정은 났지만 완료가 아니면 6.
 # 평가 관찰은 그 코드로 실행 결과를 읽고(종료 코드가 state 만 따르던 예전 기록의 0 도 받는다), record 결과(recorded, 예전 ok+review off)는 검토로 세지 않는다.
-python3 -I - "$here" <<'PY' && ok "검토 도구 종료 코드: verified 만 0, 완료 아닌 recorded·ok 는 6, returned 3·incomplete 4·unverified 5 유지, 평가 관찰이 같은 규칙으로 읽음" || ng "검토 도구 종료 코드"
+python3 -I - "$here" <<'PY' && ok "검토 도구 종료 코드 규칙(exit_code): verified 만 0, 완료 아닌 판정은 6, returned 3·incomplete 4·unverified 5. 옛 기록(v3.7.0 의 record 가 completion 을 내던 출력)도 평가 관찰이 같은 규칙으로 읽음" || ng "검토 도구 종료 코드"
 import json, sys, tempfile
 from pathlib import Path
 sys.path.insert(0, sys.argv[1]); import verdict; from observe import verify_run

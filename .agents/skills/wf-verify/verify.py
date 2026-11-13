@@ -38,8 +38,8 @@ from pathlib import Path
 
 RESULTS = {"충족", "미충족", "미확인"}
 ID = r"[A-Z]{1,3}\d{1,3}"
-EXIT = {"ok": 0, "recorded": 0, "returned": 3, "incomplete": 4, "unverified": 5}  # state 만으로 정해지는 코드. 0 은 exit_code 가 completion 을 보고 확정한다
-NOT_DONE = 6  # 판정은 났지만(recorded·ok) 완료가 아니다: waiting-user·needs-review·check-failed·review-missing·unverified
+EXIT = {"ok": 0, "recorded": 0, "returned": 3, "incomplete": 4, "unverified": 5}  # state 로 정해지는 코드. record 는 이 값 그대로 끝나고, prepare 의 조기 종료·finish 는 exit_code 가 completion 까지 본다
+NOT_DONE = 6  # 검토 판정(ok)은 났지만 완료가 아니다: waiting-user·needs-review·check-failed·unverified(finish 와 prepare 의 조기 종료만 낸다)
 DIFF_LIMIT = 60000  # 검토자 입력에 넣는 diff 최대 바이트(넘으면 잘렸다고 적는다)
 KIT_PATHS = (".agents", ".claude", ".codex", "CLAUDE.md", "AGENTS.md")  # 비교하지 않는 키트·하네스 설정(저장소 맨 위만)
 

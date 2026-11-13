@@ -1,10 +1,8 @@
 # 변경 기록
 
-## 미발행 교정판: v3.7.0 기준
-
-평가에서 실제 목적지가 없는 요청에 특정 화면 이동을 강제하던 기준을 교정한다. 기록 검사 `record --map`은 기존 요구 표의 형식과 남은 항목만 반환한다. 종료 0은 형식 검사 성공이고 완료가 아니며 `completion`·`direct_check`가 없어진다. `record --check`·`--review-required`는 사용 오류다. 기존 호출은 `record --map`으로 바꾸고 완료는 wf-verify의 실제 대조·필수 검토로 판단한다. prepare·finish와 필수 검토 조건은 그대로다. 새 합의 표와 설계 절차 변경은 포함하지 않는다. 운영 설치·발행은 하지 않았다.
-
 버전마다 설치되는 파일에서 무엇이 바뀌는지와 그 버전으로 업데이트할 때 알아 둘 것을 최신 순으로 둔다. 업데이트 방법은 [README.md](README.md) 「업데이트」에 있다.
+
+**v3.7.0 → v3.7.1.** AGENTS.md 「단계」 표에서 결과 검토의 끝 조건 문구만 바뀐다(도구가 완료 판정을 낸다는 표현을 뺐다). 평가에서 실제 목적지가 없는 요청에 특정 화면 이동을 강제하던 기준을 교정한다. 기록 검사 `record --map`은 기존 요구 표의 형식과 남은 항목만 반환한다. 종료 0은 형식 검사 성공이고 완료가 아니며 `completion`·`direct_check`가 없어진다. `record --check`·`--review-required`는 사용 오류다. 기존 호출은 `record --map`으로 바꾸고 완료는 wf-verify의 실제 대조·필수 검토로 판단한다. prepare·finish와 필수 검토 조건은 그대로다. 새 합의 표와 설계 절차 변경은 포함하지 않는다. 독립 검토가 필수인 작업을 빼먹었는지는 설치된 도구가 알려 주지 않는다: 기본 4 와 결과 검토 단계가 맡고, 평가의 `contract-export` 가 잰다. 실측은 [docs/measurements.md](docs/measurements.md) 「v3.7.1」.
 
 **v3.6 → v3.7.** 구조가 바뀐다. AGENTS.md 키트 영역의 기본 2·3 과 「선택」 절이 「단계」 표로 바뀐다: 제품 파일을 바꾸는 작업은 `wf-ask`(요구 확인) → `wf-build`(구현) → `wf-verify`(결과 검토)를 그때 읽고 끝 조건까지 수행하고, 요청이 바꿀 곳과 결과를 글자 그대로 정한 변경은 전처럼 바로 한다. `.agents/skills/guide.md` 가 없어지고 그 내용은 `wf-ask/SKILL.md`·`wf-ask/map.md`(작업 지도 형식)·`wf-ask/reader.md`(별도 독자에게 주는 지시문)·`wf-build/SKILL.md`·`wf-verify/SKILL.md` 로 옮겨 간다. 업데이트가 `guide.md` 를 지우고 새 파일을 둔다. 프로젝트 절·역할 스킬·문서가 `guide.md` 나 "선택 안내"를 가리키면 프로젝트가 직접 고치고, 프로젝트에 `wf-ask`·`wf-build` 라는 이름의 스킬 폴더가 이미 있으면 업데이트가 쓰기 전에 멈춘다(`wf-*` 는 키트 예약 이름). `verify.py record` 가 `--review-required` 를 받는다(독립 검토가 필수인 작업: 검토 없이는 완료가 `review-missing`). 다른 옵션·훅·설정 파일은 그대로다. 전역 진입 문장이 키트 파일([entry.md](entry.md))로 생겼다: 설치본이 없는 저장소에서는 단계 파일과 도구를 중앙 키트의 것으로 읽게 하므로, 전역 지침에 둔 사본을 이 파일과 맞춘다. 평가 실행기는 승인 관문(v3.0 이하) 지원을 뺐고(그 커밋은 그 태그의 `evals/` 로 비교), `evals/defects/` 를 지웠고, 구성 비교 실행기 `evals/goalflow/compare.py` 가 생겼다. 기본 4 에 독립 검토가 필수인 작업이 적힌다(사용자 요구, 검사 약화, 외부 시스템이 읽는 형식·계약 변경. 단계를 건너뛴 변경에도 적용). v3.6 까지 「선택」 절에 있던 앞의 둘에 외부 형식·계약 변경이 더해진 것이다. 실측은 [docs/measurements.md](docs/measurements.md) 「v3.7」. `verify.py` 의 종료 코드가 완료 판정을 따른다: 0 은 `completion` 이 `verified` 일 때(와 `prepare` 의 `ready`)뿐이고, 전에는 0 이던 완료 아닌 결과(`waiting-user`·`needs-review`·`check-failed`·`review-missing`·직접 검사 없는 `unverified`)는 6 으로 끝나며, `record` 의 형식 통과 상태 이름이 `ok` 에서 `recorded` 로 바뀐다(`finish` 의 `ok` 는 그대로).
 
