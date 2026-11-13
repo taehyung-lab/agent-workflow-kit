@@ -395,6 +395,24 @@ else
   cat "$goal_log"
 fi
 rm -f "$goal_log"
+# 검토 도구 결과 읽기(모델 호출 없음): 이어 붙인 꼬리 출력이 있어도 이번 실행의 결과로 읽는다.
+verdict_log=$(mktemp)
+if python3 -I "$here/verdicttest.py" > "$verdict_log" 2>&1; then
+  ok "검토 결과 읽기 $(tail -1 "$verdict_log")"
+else
+  ng "검토 결과 읽기"
+  cat "$verdict_log"
+fi
+rm -f "$verdict_log"
+# 평가가 재려는 것이 새지 않았는가(모델 호출 없음): 설치 지침에 평가 과제의 낱말이 없고, 표본에 홈 경로가 없다.
+leak_log=$(mktemp)
+if python3 -I "$here/leaktest.py" > "$leak_log" 2>&1; then
+  ok "누출 검사 $(tail -1 "$leak_log")"
+else
+  ng "누출 검사"
+  cat "$leak_log"
+fi
+rm -f "$leak_log"
 # 비교 보고의 판단 규칙(모델 호출 없음): 전부 뒤집힌 경우만 차이로 적는다.
 report_log=$(mktemp)
 if python3 -I "$here/reporttest.py" > "$report_log" 2>&1; then
