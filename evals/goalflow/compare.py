@@ -28,7 +28,7 @@ assert (TASK / "oracle.py").is_file(), f"과제 폴더가 없다: {TASK}"
 MP = Path(os.environ.get("CMP_SKILLS") or "/nonexistent")
 sys.path.insert(0, str(KIT / "evals"))
 from session import kit_checkout  # noqa: E402
-from transcript import read, commands  # noqa: E402
+from transcript import read, commands, replies  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from asked import asked  # noqa: E402
 from table import result_meta  # noqa: E402
@@ -143,7 +143,9 @@ for n in (1, 2, 3):
         cmds = commands(str(log))
     except Exception:
         cmds = []
-    last = final
+    # 모의 사용자는 이 턴에 에이전트가 쓴 글 전부를 읽는다. 마지막 글만 읽으면, 질문을 앞 글에 쓰고 마지막에 "위 질문에 답해 달라"고만 한 경우
+    # 분류기가 내용 없는 글을 보고 물은 것으로 세어 묻지 않은 답까지 준다(2026-11-13 표본 라벨 과제의 스킬 구성 3회가 그랬다).
+    last = "\n\n".join(replies(str(log))) or final
     rows.append({"turn": n, "rc": rc, "answered_now": sorted(answered - before), "seconds": secs, "product_changes": product_changes(), "reply_chars": len(final),
                  "question_marks": final.count("?") + final.count("？"), "reply": final[:6000],
                  "record_runs": sum(bool(re.search(r"verify\.py\s+record\b", c["command"])) for c in cmds),
