@@ -413,6 +413,15 @@ else
   cat "$chain_log"
 fi
 rm -f "$chain_log"
+# 프로젝트 지도의 경로(모델 호출 없음): 지도에 적힌 파일이 없어지면 맥락 도구가 알려 준다(파일이 있는지만 본다).
+map_log=$(mktemp)
+if python3 -I "$here/maptest.py" > "$map_log" 2>&1; then
+  ok "프로젝트 지도 경로 $(tail -1 "$map_log")"
+else
+  ng "프로젝트 지도 경로"
+  cat "$map_log"
+fi
+rm -f "$map_log"
 # 검토 도구 결과 읽기(모델 호출 없음): 이어 붙인 꼬리 출력이 있어도 이번 실행의 결과로 읽는다.
 verdict_log=$(mktemp)
 if python3 -I "$here/verdicttest.py" > "$verdict_log" 2>&1; then
