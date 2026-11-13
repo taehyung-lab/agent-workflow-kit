@@ -1,0 +1,79 @@
+{
+  "specimens": [
+    {
+      "code": "A1",
+      "name": "소나무",
+      "size": "normal",
+      "custody": "owned",
+      "retired": false
+    },
+    {
+      "code": "B1",
+      "name": "은행나무",
+      "size": "large",
+      "custody": "owned",
+      "retired": false
+    },
+    {
+      "code": "X1",
+      "name": "폐기 표본",
+      "size": "normal",
+      "custody": "owned",
+      "retired": true
+    },
+    {
+      "code": "L1",
+      "name": "대여 난초",
+      "size": "normal",
+      "custody": "loan",
+      "retired": false
+    },
+    {
+      "code": "M1",
+      "name": "참나무",
+      "size": "normal",
+      "custody": "owned",
+      "retired": false
+    },
+    {
+      "code": "m1",
+      "name": "단풍나무",
+      "size": "normal",
+      "custody": "owned",
+      "retired": false
+    }
+  ],
+  "sheets": [
+    {
+      "id": 1,
+      "status": "printed",
+      "items": [
+        {
+          "code": "A1",
+          "name": "솔나무(옛 전시명)",
+          "quantity": 3
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "status": "draft",
+      "items": [
+        {
+          "code": "A1",
+          "quantity": 2
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "status": "draft",
+      "items": [
+        {
+          "code": "L1",
+          "quantity": 1
+        }
+      ]
+    }
+  ]
+}

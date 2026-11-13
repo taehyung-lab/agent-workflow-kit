@@ -26,6 +26,7 @@ bash evals/run.sh clear-change,explain-only,contract-export HEAD codex 1   # 사
 | `run.sh` → `run.py` | `run.sh` 는 진입점이고 본체는 `run.py` 다: 턴 보내기, 독립 검증 루프, 외부 장애 분류, 결과 파일 남기기 |
 | `session.py` | 키트 커밋을 설치한 새 프로젝트 만들기와 하네스 세션(첫 턴·이어 가기·검토자 세션). Claude·Codex 의 차이(명령줄, Codex 임시 홈·훅/프로젝트 신뢰·네트워크 옵션, 제한 시간, 세션 id)는 이 파일의 두 어댑터에만 있다. `verdict.py session`·`goalflow/setup.py`·`goalflow/compare.py`·`flowtest.py`·`sandboxtest.py` 도 이것을 쓴다 |
 | `result.py` | 한 번의 실행에서 관찰한 사실을 받아 `meta.json` 을 만들고, 판정 검사의 종료 코드·첫 낱말로 PASS·FAIL·REVIEW·UNVERIFIED 를 정한다(`run.py` 와 `rejudge.py` 가 같은 함수를 쓴다) |
+| `chaintest.py` | 요청에서 완료까지의 연결 검사(모델 없음): AGENTS.md 「단계」 표와 단계 파일, 단계 사이에 넘겨주는 것과 돌아가는 길, 글 속의 링크·단계 이름·규칙 번호·절 이름이 실제로 닿는지 본다. 단계 파일의 문장을 옮기거나 이름을 바꾸면 여기의 넘겨주기 목록도 같이 고친다 |
 | `transcript.py` · `observe.py` | 두 하네스의 기록 형식은 `transcript.py` 만 읽고, `observe.py` 는 그 호출 목록에서 무엇을 관찰 사실로 셀지 정한다 |
 
 ## 사례 (cases/)
@@ -68,6 +69,8 @@ bash evals/run.sh clear-change,explain-only,contract-export HEAD codex 1   # 사
 | `samples/` | 판정 검사가 정말 위반을 잡는지 확인하는 표본(`pass-*`·`fail-*`·`review-*`). 일부는 실제 세션 기록에서 가져왔고 출처를 `source.txt` 에 적었다 |
 
 ## 지도에서 구현 완료까지
+
+같은 실행기로 도는 짧은 요청 과제 둘(주문 할인·회의실 예약)은 [goalflow/README.md](goalflow/README.md) 「다른 과제」에 있다. 요청·운영 문서가 정한 항목과 사용자만 아는 항목을 나눠 판정한다.
 
 [goalflow](goalflow/README.md)는 실행 가능한 회차 신청 앱을 먼저 조사하고, 목표·시나리오·요구·설계·확인을 연결한 지도를 검토·교정한 뒤 새 세션에 구현을 맡기는 사례다. 외부 판정기는 실제 저장·반환값을 읽고, 참가자 안내의 의미는 최종 독립 검토로 확인한다. 공개 검사 통과나 지도 작성 자체를 전체 완료로 세지 않는다. `selftest.sh`는 이 판정기의 정상 대조·결함 변이·관찰 불가 처리를 모델 없이 실행한다. 세 구성 비교(`goalflow/compare.py`)는 실행마다 `<이름>.meta.json` 도 남기므로 `report.py` 가 다른 사례와 같은 표에 사례 `goalflow` 로 보인다(키트 칸은 키트 커밋 또는 구성 이름 `skills`·`none`, 판정은 외부 판정 결과).
 
