@@ -14,6 +14,14 @@ tree=$(GIT_INDEX_FILE=$tmpidx git -C "$kitdir" add -A >/dev/null 2>&1 && GIT_IND
 if [ "$tree" = "$(git -C "$kitdir" rev-parse 'HEAD^{tree}')" ]; then REF=HEAD; else
   REF=$(git -C "$kitdir" -c user.name=selftest -c user.email=selftest@invalid commit-tree "$tree" -p HEAD -m selftest-worktree); fi
 printf '시험 대상 키트: %s\n' "$( [ "$REF" = HEAD ] && echo "HEAD $(git -C "$kitdir" rev-parse --short HEAD)" || echo "작업 트리 스냅숏 ${REF:0:7}(미커밋 변경 포함)")"
+# 교체한 환경과 이를 공유하는 사례가 실제로 준비되는지 확인한다(표본 판정만으로는 끊긴 source 경로를 못 찾는다).
+for fixture in cases/button-followthrough cases/recommend-from-context holdout/recommend-missing-goal; do
+  fixture_dir=$(mktemp -d)
+  if (cd "$fixture_dir" && bash "$here/$fixture/setup.sh") && [ -f "$fixture_dir/index.html" ] && {
+    if [ "$fixture" = cases/recommend-from-context ]; then [ -f "$fixture_dir/a.html" ]; else [ ! -e "$fixture_dir/a.html" ]; fi
+  }; then ok "$fixture: 실제 출발 환경 준비"; else ng "$fixture: 출발 환경 준비 실패"; fi
+  rm -rf "${fixture_dir:?}"
+done
 for dir in "$here"/cases/*/; do
   name=$(basename "$dir")
   for f in prompt.txt check.py samples/pass/transcript.jsonl samples/fail/transcript.jsonl; do
