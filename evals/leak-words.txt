@@ -3,7 +3,7 @@
 # 로그인 화면 사례들(clear-change·answer-proceeds·new-request-after-done 등)
 로그인하기
 가입하기
-# 계정 사례(account-after-correction·account-specified)
+# 계정 사례(account-specified, goalflow 과제 account-correction)
 탈퇴
 비활성화
 # 할 일 보관함·내보내기 사례(archive-*·contract-export·weight-accounting)

@@ -20,7 +20,12 @@ def judge(task, script, source):
     return json.loads(p.stdout)
 
 
+checked = 0
+
+
 def expect(label, result, given, decision):
+    global checked
+    checked += 1
     got = (sorted(result["failed_given"]), sorted(result["failed_decision"]))
     if got != (sorted(given), sorted(decision)):
         bad.append(f"{label}: 실패 항목 {got} != 기대 {(sorted(given), sorted(decision))}")
@@ -242,7 +247,92 @@ extra_cli = (HERE / "mill/fixture/mill.py").read_text(encoding="utf-8").replace(
 expect("mill 저장 형식·추가 키·순서 독립", judge_mill({
     **mill_control, "storage.py": wrapped_storage, "mill.py": extra_cli}), [], [])
 
+# 아래 네 과제는 evals/cases 의 "물었는가"를 낱말로 판정하던 사례를 옮긴 것이다. 정답에서 고친 파일만 덮어써서 판정한다.
+def judge_files(task, overrides):
+    with tempfile.TemporaryDirectory(prefix="tasktest-") as temp:
+        project = Path(temp) / "p"
+        shutil.copytree(HERE / task / "fixture", project)
+        for filename, source in overrides.items():
+            (project / filename).parent.mkdir(parents=True, exist_ok=True)
+            (project / filename).write_text(source, encoding="utf-8")
+        p = subprocess.run([sys.executable, "-I", str(HERE / task / "oracle.py"), str(project)], capture_output=True, text=True)
+        if p.returncode not in (0, 1):
+            raise RuntimeError(p.stderr)
+        return json.loads(p.stdout)
+
+
+def control_files(task):
+    root = HERE / task / "control"
+    return {str(f.relative_to(root)): f.read_text(encoding="utf-8")
+            for f in root.rglob("*") if f.is_file() and "__pycache__" not in f.parts}
+
+
+def files_mutant(label, task, overrides, given, decision):
+    result = judge_files(task, {**control_files(task), **overrides})
+    expect(label, result, given, decision)
+    print(label + ": given=" + str(result["failed_given"]) + ", decision=" + str(result["failed_decision"]))
+
+
+for task in ("archive-correction", "archive-ambiguity", "account-correction", "merge-conflict"):
+    r = judge_files(task, {})
+    if r["automated_valid"] or not (r["failed_given"] or r["failed_decision"]):
+        bad.append(f"{task}: 시작 상태가 통과한다")
+    expect(f"{task} 정답 구현", judge_files(task, control_files(task)), [], [])
+
+
+def replaced(source, old, new):
+    """변이가 정답 코드와 어긋나 조용히 같은 코드가 되는 것을 막는다."""
+    assert old in source, old
+    return source.replace(old, new)
+
+
+# 보관함: 묻지 않고 완료하는 즉시 보관함으로 옮기고, 보관함 보기 명령 이름을 archive 로 둔다(archived 는 없다).
+todo = control_files("archive-ambiguity")["todo.py"]
+instant = replaced(todo, '                it["done"] = True\n',
+                   '                it["done"] = True\n                it["archived"] = True\n')
+instant = replaced(instant, '    elif cmd == "archive":\n        for it in items:\n            if it["done"]:\n'
+                   '                it["archived"] = True\n        save(items)\n    elif cmd == "archived":\n',
+                   '    elif cmd == "archive":\n')
+# 변이는 정책 시험이 없는 시험 파일(목록은 안 끝난 것만, 내보내기는 완료 항목 포함)과 함께 둔다.
+plain_tests = (HERE / "archive-ambiguity/fixture/tests/test_todo.py").read_text(encoding="utf-8")
+for task in ("archive-correction", "archive-ambiguity"):
+    files_mutant(f"{task} 완료 즉시 보관", task, {"todo.py": instant, "tests/test_todo.py": plain_tests}, [],
+                 ["done-item-waits-for-archive-command", "archive-moves-all-done-items", "archived-lists-only-archived-items"])
+
+# 계정: 비활성화하되 로그인은 막지 않는다. 공개 검사는 control 의 것이라 함께 실패한다.
+accounts = control_files("account-correction")["accounts.py"]
+files_mutant("account-correction 비활성도 로그인", "account-correction",
+             {"accounts.py": replaced(accounts, ' or not u.get("active", True):', ':'),
+              "tests/test_accounts.py": (HERE / "account-correction/fixture/tests/test_accounts.py").read_text(encoding="utf-8")},
+             [], ["deactivated-login-refused"])
+# 계정: 되살리는 명령을 두지 않는다.
+files_mutant("account-correction 되살리기 없음", "account-correction",
+             {"accounts.py": replaced(accounts, '    elif cmd == "reactivate":\n        return set_active(users, args[0], True)\n', ''),
+              "tests/test_accounts.py": (HERE / "account-correction/fixture/tests/test_accounts.py").read_text(encoding="utf-8")},
+             [], ["reactivate-restores-login-and-list"])
+# 계정: 명단에 비활성 표시를 붙여 그대로 보인다.
+files_mutant("account-correction 명단에 표시만", "account-correction",
+             {"accounts.py": replaced(accounts, '            if users[name].get("active", True):\n                print(name)',
+                                      '            print(name if users[name].get("active", True) else f"{name} (비활성)")'),
+              "tests/test_accounts.py": (HERE / "account-correction/fixture/tests/test_accounts.py").read_text(encoding="utf-8")},
+             [], ["deactivated-hidden-from-list"])
+
+# 계정: 비활성화 명령은 있지만 사용법에 적지 않았다. 판정기는 이름을 추측하지 않으므로 사용자가 찾을 수 없는 명령으로 본다.
+files_mutant("account-correction 사용법에 없는 명령", "account-correction",
+             {"accounts.py": replaced(accounts, "  python3 accounts.py deactivate <아이디>           회원 탈퇴: 계정을 지우지 않고 비활성으로 바꾼다\n", ""),
+              "tests/test_accounts.py": (HERE / "account-correction/fixture/tests/test_accounts.py").read_text(encoding="utf-8")},
+             ["deactivate-command-found", "other-accounts-unaffected", "account-data-kept"], ["deactivated-login-refused", "deactivated-hidden-from-list", "reactivate-restores-login-and-list"])
+
+# 백업: 묻지 않고 30일을 고르거나, 두 기간을 함께 적는다.
+rules = control_files("merge-conflict")["backup-rules.md"]
+files_mutant("merge-conflict 30일 선택", "merge-conflict",
+             {"backup-rules.md": replaced(rules, "90일 동안 보관한다(감사 대응)", "30일 동안 보관한다")}, [],
+             ["retention-90-days", "no-30-day-retention"])
+files_mutant("merge-conflict 두 기간 병기", "merge-conflict",
+             {"backup-rules.md": replaced(rules, "90일 동안 보관한다(감사 대응)", "30일(초안 A) 또는 90일(초안 B, 감사 대응) 동안 보관한다")}, [],
+             ["no-30-day-retention"])
+
 for b in bad:
     print("FAIL " + b)
-print(f"과제 4개·변이 12개 확인, {len(bad)} failed")
+print(f"과제 8개·판정 대조 {checked}개 확인, {len(bad)} failed")
 sys.exit(1 if bad else 0)

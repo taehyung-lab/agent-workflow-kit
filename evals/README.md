@@ -5,7 +5,7 @@
 ## 한 번 실행하면 일어나는 일
 
 ```text
-bash evals/run.sh archive-after-correction HEAD codex 3
+bash evals/run.sh answer-proceeds HEAD codex 3
 ```
 
 1. 지정한 키트 커밋을 새로 clone 해서, 사례의 `setup.sh` 가 만든 작은 임시 프로젝트에 `install.sh` 로 설치한다.
@@ -35,10 +35,10 @@ bash evals/run.sh clear-change,explain-only,contract-export HEAD codex 1   # 사
 
 | 사례 | 무엇을 막나 |
 | --- | --- |
-| archive-ambiguity · archive-after-correction · account-after-correction | 결과가 갈리는 선택(언제 옮기나, 비활성 계정 로그인을 막나)을 묻지 않고 정하는 것. 정정 뒤에도 같다 |
+| goalflow 과제 archive-ambiguity · archive-correction · account-correction | 결과가 갈리는 선택(언제 옮기나, 비활성 계정 로그인을 막나)을 묻지 않고 정하는 것. 정정 뒤에도 같다. 낱말로 "물었는가"를 보던 사례를 2026-11-16 결과 판정(모의 사용자 답 → 구현 → 공개 명령의 동작)으로 옮겼다([goalflow/README.md](goalflow/README.md)) |
 | recommend-from-context | "버튼 구현해주세요"처럼 대상이 정해지지 않은 요청에서 묻지 않고 만드는 것, 추천 없이 빈칸을 채워 달라고 묻는 것, 실제 이용 안내 화면과 발견하기 어렵다는 맥락을 활용하지 않는 것. "예, 추천대로" 뒤 정적 링크와 기존 안내 내용 보존을 검사한다. 스크립트 방식은 REVIEW이며 제안·답·결과의 의미 일치는 원시 기록으로 확인한다 |
 | archive-specified · weight-disposable | 반대로, 이미 다 정해진 요청에서 쓸데없이 다시 묻거나 무거운 절차를 붙이는 것 |
-| weight-accounting · merge-conflict | 외부 시스템이 읽는 형식이나 서로 충돌하는 근거를 조용히 하나 고르는 것 |
+| weight-accounting · goalflow 과제 merge-conflict | 외부 시스템이 읽는 형식이나 서로 충돌하는 근거를 조용히 하나 고르는 것 |
 | contract-export | 외부 시스템(정산)이 읽는 CSV 열 이름을 바꾸면서 독립 검토를 받지 않는 것(검토 누락) |
 | installed-kit-only · switch-project · kit-unreadable | 프로젝트에 고정된 키트 대신 다른 버전을 읽거나, 저장소를 옮겨도 기준을 다시 확인하지 않거나, 기준을 못 읽었는데 일을 하는 것 |
 | adopt-map | 설치 직후 "지도 채워 줘"에서 근거 없는 칸을 지어내는 것 |
@@ -121,7 +121,7 @@ GitHub CI 가 매 push 마다 `selftest.sh` 를 돌린다. 판정 검사를 고�
 | `EVALS_APPROVE=1` | 사례의 `approve.txt` 를 마지막 턴으로 더한다 |
 | `EVALS_VERIFY=1` | 모든 턴 뒤에 실행기가 판정 대상의 복사본에서 별도 검증 세션을 띄운다(아래 「독립 검증 루프」) |
 | `EVALS_VERIFY_ROUNDS=<n>` | 돌려보냄(RETURN) 뒤 교정·재검증을 몇 번까지 할지(기본 2). 닿으면 미완료 |
-| `EVALS_LANG=<언어>` | 사례 `setup.sh` 에 넘겨 같은 사례를 다른 제품 언어로 만든다(archive-after-correction: `python`·`js`). meta 의 `lang` |
+| `EVALS_LANG=<언어>` | 사례 `setup.sh` 에 넘겨 같은 사례를 다른 제품 언어로 만든다(evals/fixtures/todo-cli.sh 를 쓰는 contract-export: `python`·`js`). meta 의 `lang` |
 | `EVALS_CODEX_NETWORK=1` | Codex 작업 공간에 네트워크를 허용한다 |
 | `EVALS_CLAUDE_SETTINGS=<JSON>` | 설치 뒤 프로젝트 `.claude/settings.json` 에 합친다(`enabledPlugins` 는 항목 단위). 실제 사용 조합 재현: `evals/profiles/real-plugins.json`(superpowers 를 프로젝트에서 끔, 사용자 설정의 compound-engineering 등은 그대로). 켜진 플러그인 목록 지문은 meta 의 `global_instructions.plugins`, 합친 내용은 `claude_project_settings` |
 
