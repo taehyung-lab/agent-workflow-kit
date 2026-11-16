@@ -12,9 +12,10 @@ PASS, FAIL, UNVERIFIED = "PASS", "FAIL", "UNVERIFIED"  # evals/judge.py 와 같�
 
 
 def edits_before_answer(summary):
-    """모의 사용자의 답을 보내기 전, 마지막 정해진 사용자 글(요청·followup) 턴까지 바뀐 제품 파일. 턴의 product_changes 는 시작부터 누적이다."""
-    turns = summary["turns"]
-    return turns[min(summary.get("static_turns", 1), len(turns)) - 1]["product_changes"] if turns else []
+    """모의 사용자의 답을 보내기 전, 정해진 사용자 글(요청·followup) 턴들에서 바뀐 제품 파일.
+    턴마다 끝났을 때의 변경(시작 커밋 대비)을 모두 합친다: 앞 턴에서 바꾸고 커밋한 뒤 다음 턴에 되돌려도 답 전 편집이다."""
+    turns = summary["turns"][:min(summary.get("static_turns", 1), len(summary["turns"]))]
+    return sorted({f for t in turns for f in t["product_changes"]})
 
 
 def oracle_verdict(summary):

@@ -131,6 +131,9 @@ def meta_checks():
  # 정해진 후속 글(followup)이 있으면 답 전은 그 턴까지다: 첫 턴 편집 없이 정정 턴에서 고쳐도 답 전이다
  fol=summary("none",static_turns=2,turns=[summary("none")["turns"][0],dict(summary("none")["turns"][1],product_changes=["todo.py"]),summary("none")["turns"][2]])
  assert verdict(result_meta(fol))=="FAIL" and "todo.py" in result_meta(fol)["check_output"],result_meta(fol)
+ # 답 전 턴에 바꾸고 커밋한 뒤 다음 정해진 턴에 되돌려도 답 전 편집이다(턴마다의 변경을 합쳐 본다)
+ rev=summary("none",static_turns=2,turns=[dict(summary("none")["turns"][0],product_changes=["accounts.py"]),dict(summary("none")["turns"][1],product_changes=[]),summary("none")["turns"][2]])
+ assert verdict(result_meta(rev))=="FAIL" and "accounts.py" in result_meta(rev)["check_output"],result_meta(rev)
  # 답을 받은 뒤의 편집만 있으면 그대로 외부 판정을 따른다(위 ok 와 같다)
  # 판정 항목이 없는데 오류도 적히지 않은 결과를 통과로 세지 않는다
  assert verdict(result_meta(summary("none",automated_valid=True,observation_complete=True,n_cases=0)))=="UNVERIFIED"

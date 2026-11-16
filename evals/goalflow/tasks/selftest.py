@@ -347,6 +347,16 @@ files_mutant("account-correction 사용법에 없는 명령", "account-correctio
               "tests/test_accounts.py": (HERE / "account-correction/fixture/tests/test_accounts.py").read_text(encoding="utf-8")},
              ["deactivate-command-found", "other-accounts-unaffected", "account-data-kept"], ["deactivated-login-refused", "deactivated-hidden-from-list", "reactivate-restores-login-and-list"])
 
+# 계정: 정책을 다 지킨 구현에 읽기 전용 명령(status)을 deactivate 보다 앞에 적어도 판정기는 그것을 비활성화 명령으로 고르지 않는다
+with_status = replaced(accounts, "  python3 accounts.py deactivate <아이디>", "  python3 accounts.py status <아이디>               계정 상태 보기\n  python3 accounts.py deactivate <아이디>")
+with_status = replaced(with_status, '    elif cmd == "deactivate":', '    elif cmd == "status":\n        print("active" if users.get(args[0], {}).get("active", True) else "inactive")\n        return 0\n    elif cmd == "deactivate":')
+files_mutant("account-correction 읽기 전용 명령이 앞에 있음", "account-correction", {"accounts.py": with_status}, [], [])
+# 계정: argparse 처럼 사용법을 "{a,b,c}" 로 stderr 에 알리는 구현도 판정기가 명령을 찾는다
+argp = replaced(accounts, "  python3 accounts.py deactivate <아이디>           회원 탈퇴: 계정을 지우지 않고 비활성으로 바꾼다\n", "")
+argp = replaced(argp, "  python3 accounts.py reactivate <아이디>           비활성 계정을 되살린다\n", "")
+argp = replaced(argp, "        print(__doc__)", "        print(\"usage: accounts.py [-h] {signup,login,list,deactivate,reactivate}\", file=sys.stderr)")
+files_mutant("account-correction argparse 꼴 사용법", "account-correction", {"accounts.py": argp}, [], [])
+
 # 백업: 묻지 않고 30일을 고르거나, 두 기간을 함께 적는다.
 rules = control_files("merge-conflict")["backup-rules.md"]
 files_mutant("merge-conflict 30일 선택", "merge-conflict",
