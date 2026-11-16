@@ -70,7 +70,12 @@ def judge_labels(overrides):
                            capture_output=True, text=True)
         if p.returncode not in (0, 1):
             raise RuntimeError(p.stderr)
-        return json.loads(p.stdout)
+        result = json.loads(p.stdout)
+        # 판정기 자신의 버그는 어떤 입력에서도 나오면 안 된다(나오면 그 항목은 관찰 불가로 빠진다)
+        bugs = [c["name"] for c in result.get("cases") or [] if str(c.get("detail") or "").startswith("판정기 오류")]
+        if bugs:
+            bad.append(f"판정기 오류 {bugs}")
+        return result
 
 
 label_control = {p.name: p.read_text(encoding="utf-8") for p in (HERE / "labels/control").glob("*.py")}
@@ -179,7 +184,12 @@ def judge_mill(overrides):
                            capture_output=True, text=True)
         if p.returncode not in (0, 1):
             raise RuntimeError(p.stderr)
-        return json.loads(p.stdout)
+        result = json.loads(p.stdout)
+        # 판정기 자신의 버그는 어떤 입력에서도 나오면 안 된다(나오면 그 항목은 관찰 불가로 빠진다)
+        bugs = [c["name"] for c in result.get("cases") or [] if str(c.get("detail") or "").startswith("판정기 오류")]
+        if bugs:
+            bad.append(f"판정기 오류 {bugs}")
+        return result
 
 
 mill_control = {p.name: p.read_text(encoding="utf-8") for p in (HERE / "mill/control").glob("*.py")}
@@ -258,7 +268,12 @@ def judge_files(task, overrides):
         p = subprocess.run([sys.executable, "-I", str(HERE / task / "oracle.py"), str(project)], capture_output=True, text=True)
         if p.returncode not in (0, 1):
             raise RuntimeError(p.stderr)
-        return json.loads(p.stdout)
+        result = json.loads(p.stdout)
+        # 판정기 자신의 버그는 어떤 입력에서도 나오면 안 된다(나오면 그 항목은 관찰 불가로 빠진다)
+        bugs = [c["name"] for c in result.get("cases") or [] if str(c.get("detail") or "").startswith("판정기 오류")]
+        if bugs:
+            bad.append(f"판정기 오류 {bugs}")
+        return result
 
 
 def control_files(task):
@@ -272,6 +287,15 @@ def files_mutant(label, task, overrides, given, decision):
     expect(label, result, given, decision)
     print(label + ": given=" + str(result["failed_given"]) + ", decision=" + str(result["failed_decision"]))
 
+
+# 판정기 자신의 버그(정의되지 않은 이름 등)는 제품 실패가 아니라 관찰 불가다(2026-11-16 검토: NameError 가 제품 실패로 기록됐다)
+sys.path.insert(0, str(HERE))
+from taskcheck import Judge  # noqa: E402
+_probe = Judge.__new__(Judge); _probe.cases = []; _probe.fresh = lambda: None
+_probe.check("oracle-bug", "decision", lambda: undefined_name_in_oracle)  # noqa: F821
+_probe.check("product-wrong", "decision", lambda: (_ for _ in ()).throw(AssertionError("기대와 다름")))
+if [c["passed"] for c in _probe.cases] != [None, False]:
+    bad.append(f"판정기 버그는 관찰 불가(None), 제품 불일치는 실패(False)여야 한다: {_probe.cases}")
 
 for task in ("archive-correction", "archive-ambiguity", "account-correction", "merge-conflict"):
     r = judge_files(task, {})

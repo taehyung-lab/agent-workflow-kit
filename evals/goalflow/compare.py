@@ -33,10 +33,12 @@ import pins  # noqa: E402
 from transcript import read, commands, replies  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from asked import asked  # noqa: E402
+from conversation import MockUser, product_changes as changes_since, product_print  # noqa: E402
 from table import result_meta  # noqa: E402
 
 arm, harness, idx, out = sys.argv[1], sys.argv[2], sys.argv[3], Path(sys.argv[4]).resolve()
-if (mismatch := pins.check(harness)):  # 고정한 CLI 가 아니면 같은 조건의 비교가 아니다
+# 고정한 CLI 가 아니면 같은 조건의 비교가 아니다. 모의 사용자(asked.py)는 하네스와 상관없이 claude CLI 로 돈다.
+for mismatch in filter(None, (pins.check(harness), pins.check("claude"))):
     sys.exit(mismatch)
 name = f"{arm}-{harness}-{idx}"
 out.mkdir(parents=True, exist_ok=True)
@@ -67,29 +69,13 @@ agents_md_bytes = (proj / "AGENTS.md").stat().st_size if (proj / "AGENTS.md").is
 request = next(f for f in (TASK / "request.txt", TASK / "fixture/request.txt") if f.is_file()).read_text(encoding="utf-8").strip()
 answer = (TASK / "answer.txt").read_text(encoding="utf-8").strip()
 topics = (TASK / "topics.txt").read_text(encoding="utf-8").strip()
-# 모의 사용자(MOCK=asked): 물은 정책만 답한다. answer.txt 의 세 항목 가운데 에이전트가 물은 것만 주고, 묻지 않은 것은 알려 주지 않는다.
+# 모의 사용자(MOCK=asked): 제품을 바꾸지 않은 턴에 드러낸 주제만 answer.txt 의 정책으로 답한다(conversation.py). all: 정책을 전부 알려 준다.
 MOCK = os.environ.get("MOCK", "asked")
-items = {int(m.group(1)): m.group(0).strip() for m in re.finditer(r"^(\d+)\. .*$", answer, re.M)}
 PREFIX = os.environ.get("CMP_PREFIX", "grilling 스킬로 요구를 확인한 다음 tdd 스킬로 구현해 주세요." if arm == "skills" else "")
 FIRST = (PREFIX + "\n\n" if PREFIX else "") + request
 # 정해진 사용자 글(요청, 있으면 followup.txt). 그 뒤 턴은 모의 사용자의 답, 마지막은 마무리 지시다.
 STATIC = [FIRST] + ([(TASK / "followup.txt").read_text(encoding="utf-8").strip()] if (TASK / "followup.txt").is_file() else [])
-ANSWER_TURN = len(STATIC) + 1
-CLOSE = "더 물을 것이 없으면 그대로 마무리해 주세요. 남은 질문이 있으면 추천안대로 정해 완료하고, 정한 내용과 실제 실행한 명령·결과를 보고해 주세요."
-answered = set()
-
-
-def next_prompt(n, last_reply):
-    if n <= len(STATIC):
-        return STATIC[n - 1]
-    if MOCK == "all":
-        return answer + "\n\n위 답으로 진행해 주세요." if n == ANSWER_TURN else CLOSE
-    new = [t for t in asked(last_reply, topics) if t not in answered]
-    answered.update(new)
-    told = "\n".join(items[t] for t in new)
-    if n == ANSWER_TURN:
-        return (told + "\n\n물으신 것은 위와 같이 해 주세요. 나머지는 추천안대로 진행해 주세요.") if new else "질문이 없으면 그대로 진행해 주세요."
-    return (told + "\n\n" if new else "") + CLOSE
+mock = MockUser(STATIC, answer, topics, asked, MOCK)
 
 # ---- 세션(전역 설정 격리) ----
 env = dict(os.environ)
@@ -130,17 +116,13 @@ def launch(n, prompt):
 
 
 def product_changes():
-    """제품 파일의 변경(작업 지도·키트·스킬·캐시·실행 중 생긴 데이터 파일 제외)."""
-    lines = sh(*G, "status", "--porcelain", "--untracked-files=all", cwd=proj).stdout.splitlines()
-    skip = ("work/", ".claude/", ".agents/", ".codex/", "AGENTS.md", "CLAUDE.md")
-    files = [l[3:] for l in lines]
-    return [f for f in files if not f.startswith(skip) and "__pycache__" not in f and not f.endswith((".pyc", ".db", ".sqlite", ".sqlite3", ".db-journal", ".db-wal", ".db-shm"))]
+    """시작 커밋과 다른 제품 파일(커밋했든 안 했든). 작업 지도·키트·스킬·캐시·실행 중 생긴 데이터 파일은 빼고 센다."""
+    return changes_since(proj, base)
 
 
-last = ""
-for n in range(1, ANSWER_TURN + 2):
-    before = set(answered)
-    prompt = next_prompt(n, last)
+for n in range(1, mock.turns + 1):
+    before, print_before = set(mock.answered), product_print(proj, base)
+    prompt = mock.prompt(n)
     rc, log, secs = launch(n, prompt)
     try:
         final = read(str(log))[1] or ""
@@ -152,8 +134,8 @@ for n in range(1, ANSWER_TURN + 2):
         cmds = []
     # 모의 사용자는 이 턴에 에이전트가 쓴 글 전부를 읽는다. 마지막 글만 읽으면, 질문을 앞 글에 쓰고 마지막에 "위 질문에 답해 달라"고만 한 경우
     # 분류기가 내용 없는 글을 보고 물은 것으로 세어 묻지 않은 답까지 준다(2026-11-13 표본 라벨 과제의 스킬 구성 3회가 그랬다).
-    last = "\n\n".join(replies(str(log))) or final
-    rows.append({"turn": n, "rc": rc, "answered_now": sorted(answered - before), "seconds": secs, "product_changes": product_changes(), "reply_chars": len(final),
+    mock.observe("\n\n".join(replies(str(log))) or final, product_print(proj, base) != print_before)
+    rows.append({"turn": n, "rc": rc, "answered_now": sorted(mock.answered - before), "seconds": secs, "product_changes": product_changes(), "reply_chars": len(final),
                  "question_marks": final.count("?") + final.count("？"), "reply": final[:6000],
                  "record_runs": sum(bool(re.search(r"verify\.py\s+record\b", c["command"])) for c in cmds),
                  "review_runs": sum(bool(re.search(r"verify\.py\s+prepare\b", c["command"])) for c in cmds),
@@ -180,7 +162,7 @@ if harness == "claude":
             init = {"skills": [s for s in ev.get("skills", []) if s in ("grilling", "tdd")], "plugins": len(ev.get("plugins", [])), "n_skills": len(ev.get("skills", []))}
             break
 summary = {"name": name, "task": TASK_NAME, "model": pins.model(harness), "harness_version": pins.cli_version(harness), "static_turns": len(STATIC), "arm": arm, "harness": harness, "run": int(idx) if idx.isdigit() else idx, "kit_ref": kit_ref, "kit_commit": kit_commit, "agents_md_bytes": agents_md_bytes, "base": base, "seconds": int(time.time() - started), "turns": rows,
-           "mock": MOCK, "answered": sorted(answered), "map": any((proj / "work").glob("*/work.md")), "final_changes": product_changes(), "init": init,
+           "mock": MOCK, "answered": sorted(mock.answered), "map": any((proj / "work").glob("*/work.md")), "final_changes": product_changes(), "init": init,
            "oracle_exit": oracle.returncode, "automated_valid": verdict.get("automated_valid"), "observation_complete": verdict.get("observation_complete"),
            "failed": [c.get("name") for c in cases if c.get("passed") is False], "failed_decision": verdict.get("failed_decision"), "unobserved": [c.get("name") for c in cases if c.get("passed") is None],
            "n_cases": len(cases), "oracle_error": verdict.get("error"), "public_tests_rc": smoke.returncode}

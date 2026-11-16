@@ -46,6 +46,8 @@ class Judge:
             passed, detail = True, None
         except AssertionError as e:
             passed, detail = False, str(e.args[0] if e.args else "")[:400]
+        except (NameError, ImportError, SyntaxError) as e:  # 판정기 코드의 버그: 제품을 관찰하지 못한 것이지 제품 실패가 아니다
+            passed, detail = None, "판정기 오류: " + repr(e)[:380]
         except Exception as e:
             passed, detail = False, repr(e)[:400]
         self.cases.append({"name": name, "kind": kind, "passed": passed, "detail": detail})
@@ -57,9 +59,11 @@ class Judge:
     def finish(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
         c = self.cases
-        result = {"automated_valid": all(x["passed"] for x in c), "observation_complete": True,
-                  "passed": sum(x["passed"] for x in c), "failed": sum(not x["passed"] for x in c), "total": len(c),
-                  "failed_given": [x["name"] for x in c if not x["passed"] and x["kind"] == "given"],
-                  "failed_decision": [x["name"] for x in c if not x["passed"] and x["kind"] == "decision"], "cases": c}
+        # passed: True 통과, False 실패, None 관찰 불가(판정기 오류). 관찰 불가는 실패로 세지 않고 관찰이 끝나지 않은 것으로 남긴다
+        result = {"automated_valid": all(x["passed"] is True for x in c), "observation_complete": all(x["passed"] is not None for x in c),
+                  "passed": sum(x["passed"] is True for x in c), "failed": sum(x["passed"] is False for x in c), "total": len(c),
+                  "failed_given": [x["name"] for x in c if x["passed"] is False and x["kind"] == "given"],
+                  "failed_decision": [x["name"] for x in c if x["passed"] is False and x["kind"] == "decision"],
+                  "unobserved": [x["name"] for x in c if x["passed"] is None], "cases": c}
         print(json.dumps(result, ensure_ascii=False, indent=1))
         sys.exit(0 if result["automated_valid"] else 1)

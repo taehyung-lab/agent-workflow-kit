@@ -59,7 +59,7 @@ def usage_commands():
 
 def find_deactivate():
     """비활성화 명령과 인자 꼴을 찾는다. 없으면 None."""
-    for name in usage_commands():
+    for name in USAGE_COMMANDS:
         for with_password in (False, True):
             j.fresh()
             j.run("signup", "kim", "pw1")
@@ -69,11 +69,12 @@ def find_deactivate():
     return None
 
 
+USAGE_COMMANDS = usage_commands()
 FOUND = find_deactivate()
 
 
 def deactivate(name, password):
-    assert FOUND, {"expected": "비활성화 명령", "tried": DEACTIVATE_NAMES}
+    assert FOUND, {"expected": "사용법에 적힌 비활성화 명령", "usage_commands": USAGE_COMMANDS}
     command, with_password = FOUND
     code, out = j.run(command, name, password) if with_password else j.run(command, name)
     assert code == 0, {"args": (command, name), "exit": code, "out": out}
@@ -110,7 +111,7 @@ def active_listed():
 
 
 def deactivate_found():
-    assert FOUND, {"expected": "비활성화 명령", "tried": DEACTIVATE_NAMES}
+    assert FOUND, {"expected": "사용법에 적힌 비활성화 명령", "usage_commands": USAGE_COMMANDS}
 
 
 def others_unaffected():

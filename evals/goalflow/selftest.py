@@ -145,5 +145,39 @@ def meta_checks():
   # 사용자 턴, 첫 답, 통과/판정(미확인은 분모에서 빠진다)
   assert by["0123456"][5:8]==["3","1200","1/1"] and by["skills"][5:8]==["2","1200","0/1"] and by["none"][5:8]==["3","1200","0/0"],r.stdout
 
+def conversation_checks():
+ """대화 진행(conversation.py) 시험: 모델 대신 낱말로 주제를 고르는 가짜 분류기를 쓴다."""
+ sys.path.insert(0,str(ROOT))
+ from conversation import MockUser,product_changes,product_print
+ answer="이렇게 해 주세요.\n\n1. 정책 일\n2. 정책 이\n3. 정책 삼\n"
+ fake=lambda text,topics:[n for n,w in ((1,"주제일"),(2,"주제이"),(3,"주제삼")) if w in text]
+ # 답을 받은 뒤 턴에 스스로 구현한 주제(그 턴에 제품이 바뀜)에는 정책을 알려 주지 않는다
+ m=MockUser(["요청"],answer,"t",fake)
+ assert m.prompt(1)=="요청"; m.observe("주제일 을 어떻게 할까요?",False)
+ p2=m.prompt(2); assert "1. 정책 일" in p2 and "2. 정책 이" not in p2,p2
+ m.observe("주제삼 은 제가 정해 구현했습니다",True)
+ p3=m.prompt(3); assert "정책 삼" not in p3 and p3.endswith("보고해 주세요."),p3
+ # 같은 글이라도 그 턴에 제품이 안 바뀌었으면(구현 전) 답한다
+ m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("주제일",False); m.prompt(2); m.observe("주제삼 은 이렇게 두고 진행하겠습니다",False)
+ assert "3. 정책 삼" in m.prompt(3)
+ # 정정 글이 있으면 답하기 전까지의 글을 함께 분류한다: 정정 턴 답이 앞 질문을 가리키기만 해도 놓치지 않는다
+ m=MockUser(["요청","사실은 이런 뜻"],answer,"t",fake)
+ m.prompt(1); m.observe("주제이 는 어떻게 할까요?",False); m.prompt(2); m.observe("위 질문에 답해 주세요.",False)
+ assert m.answer_turn==3 and "2. 정책 이" in m.prompt(3)
+ # 답 전 턴에 제품이 바뀌었으면 그 턴 글은 분류하지 않는다(그 실행은 답 전 구현으로 실패다)
+ m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("주제일 은 이렇게 구현했습니다",True)
+ assert m.prompt(2).startswith("질문이 없으면")
+ # 제품 변경은 시작 커밋과의 차이: 커밋해도 잡힌다
+ with tempfile.TemporaryDirectory(prefix="conv-") as d:
+  G=["git","-c","user.name=t","-c","user.email=t@invalid","-c","commit.gpgsign=false"]
+  run=lambda *a:subprocess.run([*G,*a],cwd=d,capture_output=True,check=True)
+  run("init","-q"); Path(d,"app.py").write_text("v1\n"); run("add","-A"); run("commit","-qm","base")
+  base=subprocess.run(["git","rev-parse","HEAD"],cwd=d,capture_output=True,text=True).stdout.strip()
+  before=product_print(d,base); assert product_changes(d,base)==[]
+  Path(d,"app.py").write_text("v2\n"); Path(d,"work").mkdir(); Path(d,"work/map.md").write_text("지도\n"); run("add","-A"); run("commit","-qm","agent")
+  assert product_changes(d,base)==["app.py"],product_changes(d,base)
+  assert product_print(d,base)!=before
+  Path(d,"new.py").write_text("x\n"); assert product_changes(d,base)==["app.py","new.py"]
+
 if __name__=="__main__":
- rows=run();print(json.dumps(rows,ensure_ascii=False,indent=2));meta_checks();print(f"{len(rows)} oracle controls passed, meta checks passed")
+ rows=run();print(json.dumps(rows,ensure_ascii=False,indent=2));meta_checks();conversation_checks();print(f"{len(rows)} oracle controls passed, meta checks passed, conversation checks passed")
