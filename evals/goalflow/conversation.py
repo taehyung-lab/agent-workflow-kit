@@ -8,14 +8,16 @@
     물어야 할 것을 첫 답 전에 찾지 못했으면 그 주제는 추천안대로 정해져 최종 동작 판정(oracle)에서 드러난다.
   - 답 뒤 턴의 새 질문을 판정하려고 정책 검사 결과·실패 문구로 "이미 구현했나"를 추론하던 장치는 2026-11-16 지웠다:
     정책 검사는 "정책에 맞나"에 답할 뿐 "구현했나"에 답하지 못했고(독립 검토 네 번 반려), 위 기준에서는 그 판정이 필요 없다.
-제품 변경은 파일 시스템에서 센다(대화 기록의 도구 호출은 쓰지 않는다):
-  - 턴이 끝났을 때 시작 커밋(base)과의 차이: 커밋해도 잡힌다(product_changes).
-  - 턴 동안 운영체제가 낸 파일 사건(turnwatch.py, macOS FSEvents): 쓰거나 만들거나 지운 파일이 모두 남아,
-    같은 턴 안에서 고쳤다가 되돌리거나 새 파일을 만들었다가 지워도 잡힌다. Write 든 셸이든 도구와 관계없고, 읽기·검색·시험 실행과
-    실패한 편집 호출(쓰지 않음)은 사건을 내지 않는다. 감시를 켜지 못하면 그 턴은 관찰 불가(증거 부족)다.
-    2026-11-16 지운 것: 대화 기록의 편집 호출 판별(셸 편집을 못 보거나 파일 이름만 적어도 편집으로 셈), 턴 앞뒤 변경 시각 비교(턴 안에서 만들고 지운 파일을 못 봄).
-  - 제품이 아닌 것: 작업 지도·키트·하네스 설정, 캐시, git 이 무시하는 경로, 빈 폴더 만들기·지우기, 그리고 시작 커밋에 없던 자료 파일(.json·.csv: 재현으로 앱을 실행하면 생기는 상태).
-    시작 커밋에 있던 자료(운영 자료 data.json 등)는 제품이다: 바꾸면 재현이 아니라 변경이다.
+제품 변경은 파일 시스템에서 센다(대화 기록의 도구 호출은 쓰지 않는다). 제품 파일은 시작 커밋의 파일과, 턴 끝에 남은 새 파일이다.
+  - 턴이 끝났을 때 시작 커밋(base)과의 차이(product_changes): 커밋해도, 새 파일도 잡힌다. git 이 무시하는 파일은 아니다.
+  - 턴 동안 운영체제가 낸 파일 사건(turnwatch.py, macOS FSEvents)이 시작 커밋의 제품 파일에 닿았나(turn_writes):
+    같은 턴 안에서 고쳤다가 되돌리거나, 그 파일이 든 폴더를 바꿔 끼웠다 되돌리거나, 지웠다가 git checkout 해도 잡힌다.
+    도구와 관계없고, 읽기·검색·시험 실행·실패한 편집 호출은 사건을 내지 않는다. 감시를 켜지 못하면 그 턴은 관찰 불가(증거 부족)다.
+  - 턴 안에서 생겼다 사라진 새 파일·폴더(시험 도구의 임시 캐시 폴더, 초안)는 제품이 된 적이 없어 보지 않는다. 무엇을 구현했는지는 최종 동작이 본다.
+  - 제품이 아닌 것: 작업 지도·키트·하네스 설정, 캐시, 시작 커밋에 없던 자료 파일(.json·.csv: 재현으로 앱을 실행하면 생기는 상태).
+    시작 커밋에 있던 자료(운영 자료 data.json 등)는 제품이다.
+  2026-11-16 지운 것: 대화 기록의 편집 호출 판별, 턴 앞뒤 변경 시각 비교, 프로젝트 안 모든 사건을 분류하던 규칙(git 무시 확인·폴더 옮기기 구분).
+  모든 사건을 분류하려다 시험 도구 캐시·빈 폴더마다 예외가 늘었다(재검토 3‴~3⁵). 제품 파일에 닿은 사건만 보면 예외가 필요 없다.
 """
 import json, re, subprocess
 from pathlib import Path
@@ -51,19 +53,13 @@ def product_changes(proj, base):
     return sorted({f for f in changed + new if f and _product(f, tracked)})
 
 
-def turn_writes(kinds, proj, base):
-    """턴 동안 사건이 난 경로({경로: 종류}, turnwatch.Watch.stop) 가운데 제품 변경.
-    - 파일 사건과 폴더 옮기기 사건은 제품 변경이다(폴더를 바꿔 끼웠다 되돌리면 폴더 이름 사건만 남는다: 재검토 3⁗).
-    - 폴더 만들기·지우기만 난 사건은 그 폴더가 시작 커밋의 파일을 품고 있을 때만 제품 변경이다(빈 폴더 만들기는 아니다).
-    - git 이 무시하는 경로(시험 도구 캐시·로그 등)는 product_changes 의 --exclude-standard 와 같은 까닭으로 뺀다(재검토 3‴)."""
-    tracked = base_files(proj, base)
-    holds = lambda d: any(f.startswith(d + "/") for f in tracked)
-    cand = sorted(p for p, kind in kinds.items() if _product(p, tracked) and (kind != "dir" or holds(p)))
-    if not cand:
-        return []
-    ignored = subprocess.run([*G, "check-ignore", "-z", "--stdin"], cwd=proj, input="\0".join(cand).encode(), capture_output=True).stdout
-    skip = set(ignored.decode("utf-8", "replace").split("\0"))
-    return [p for p in cand if p not in skip]
+def turn_writes(found, proj, base):
+    """턴 동안 사건이 난 경로({경로: 폴더인가}, turnwatch.Watch.stop) 가운데 시작 커밋의 제품 파일에 닿은 것:
+    그 파일 자체의 사건이거나, 그 파일을 품은 폴더의 사건(폴더 옮기기·지우기는 안의 파일마다 사건이 나지 않을 수 있다).
+    시작 커밋에 없던 경로는 여기서 보지 않는다: 턴 끝까지 남은 새 파일은 product_changes 가 잡고, 턴 안에서 생겼다 사라진 것
+    (시험 도구의 임시 폴더, 초안 파일)은 제품이 된 적이 없다."""
+    tracked = {f for f in base_files(proj, base) if _product(f)}
+    return sorted(p for p, is_dir in found.items() if p in tracked or (is_dir and any(f.startswith(p + "/") for f in tracked)))
 
 
 def log_readable(log):

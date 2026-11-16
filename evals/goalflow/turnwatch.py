@@ -26,7 +26,7 @@ for _f in ("FSEventStreamStart", "FSEventStreamStop", "FSEventStreamInvalidate",
 _LS.dispatch_queue_create.restype = ctypes.c_void_p
 _LS.dispatch_queue_create.argtypes = [ctypes.c_char_p, ctypes.c_void_p]
 _SINCE_NOW, _FILE_EVENTS, _NO_DEFER = 0xFFFFFFFFFFFFFFFF, 0x10, 0x2
-_IS_DIR, _RENAMED = 0x20000, 0x800  # kFSEventStreamEventFlagItemIsDir, ItemRenamed
+_IS_DIR = 0x20000  # kFSEventStreamEventFlagItemIsDir
 
 
 class Watch:
@@ -67,19 +67,14 @@ class Watch:
         _CS.FSEventStreamStop(self.stream); _CS.FSEventStreamInvalidate(self.stream); _CS.FSEventStreamRelease(self.stream)
 
     def stop(self):
-        """감시를 끝내고 그동안 사건이 난 경로를 {상대 경로: 종류} 로 돌려준다(.git 안 제외).
-        종류: file(파일 쓰기·만들기·지우기·이름 바꾸기), dir-moved(폴더 이름 바꾸기·옮기기: macOS 는 안의 파일마다 사건을 내지 않는다),
-        dir(폴더 만들기·지우기만). 어느 것이 제품 변경인지는 부르는 쪽(conversation.turn_writes)이 정한다."""
+        """감시를 끝내고 그동안 사건이 난 경로를 {상대 경로: 폴더인가} 로 돌려준다(.git 안 제외).
+        macOS 는 폴더를 옮기거나 지울 때 안의 파일마다 사건을 내지 않을 수 있어 폴더 사건도 남긴다. 무엇이 제품 변경인지는 부르는 쪽이 정한다."""
         self._barrier()
         self._close()
-        rank = {"dir": 0, "file": 1, "dir-moved": 2}
-        kinds = {}
+        found = {}
         with self.lock:
             for p, flag in self.out:
                 rel = os.path.relpath(p, self.root)
-                if rel in (".", ".git") or rel.startswith(".git/"):
-                    continue
-                kind = ("dir-moved" if flag & _RENAMED else "dir") if flag & _IS_DIR else "file"
-                if rank[kind] >= rank.get(kinds.get(rel), -1):
-                    kinds[rel] = kind
-        return kinds
+                if rel not in (".", ".git") and not rel.startswith(".git/"):
+                    found[rel] = found.get(rel, False) or bool(flag & _IS_DIR)
+        return found

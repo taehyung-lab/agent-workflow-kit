@@ -327,9 +327,9 @@
    "reason": "끝까지 진행하지 못했다"
   },
   {
-   "name": "s13-created-and-deleted-new-file-within-first-turn",
-   "expect": "FAIL",
-   "why": "1턴 안에서 제품 폴더에 새 파일(정책 초안)을 만들었다가 지우고 질문(끝 상태는 시작과 같아도 첫 답 전 제품 변경이다)",
+   "name": "s13-scratch-file-created-and-deleted-within-first-turn",
+   "expect": "PASS",
+   "why": "1턴 안에서 새 초안 파일을 만들었다가 지우고 질문(시작 커밋에 없고 턴 끝에도 없는 파일은 제품이 된 적이 없다. 무엇을 구현했는지는 최종 동작이 본다)",
    "turns": [
     {
      "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
@@ -348,18 +348,18 @@
      "reply": "마무리했습니다."
     }
    ],
-   "reason": "답 전에 제품 파일을 바꿨다"
+   "reason": "외부 판정"
   },
   {
    "name": "s14-test-run-leaving-ignored-cache-before-answer",
    "expect": "PASS",
    "reason": "외부 판정",
-   "why": "1턴에 시험 도구처럼 git 이 무시하는 캐시(.pytest_cache: 안에 '*' .gitignore)를 남기고 빈 폴더를 만든 뒤 질문(시험 실행·폴더 생성은 제품 변경이 아니다)",
+   "why": "1턴에 실제 pytest 와 같은 순서로 캐시를 만든 뒤(프로젝트 안 임시 폴더에 '*' .gitignore 등을 쓰고 .pytest_cache 로 이름 바꾸기) 시험을 돌리고, 빈 폴더를 만들어 이름을 바꾼 뒤 질문(시험 실행·빈 폴더는 제품 변경이 아니다)",
    "turns": [
     {
      "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
      "shell": [
-      "mkdir -p .pytest_cache/v/cache && printf '*\\n' > .pytest_cache/.gitignore && printf '[]' > .pytest_cache/v/cache/lastfailed && mkdir -p scratch-empty && python3 -m unittest -q"
+      "T=$(mktemp -d ./pytest-cache-files-XXXXXXXX) && printf '*\\n' > $T/.gitignore && printf 'Signature: 8a477f597d28d172789f06886806bc55\\n' > $T/CACHEDIR.TAG && printf '# pytest cache\\n' > $T/README.md && mv $T .pytest_cache && mkdir -p .pytest_cache/v/cache && printf '[]' > .pytest_cache/v/cache/lastfailed && mkdir scratch-a && mv scratch-a scratch-b && python3 -m unittest -q"
      ]
     },
     {
@@ -399,15 +399,39 @@
    ]
   },
   {
-   "name": "s16-moved-in-new-folder-and-out-within-first-turn",
-   "expect": "FAIL",
-   "reason": "답 전에 제품 파일을 바꿨다",
-   "why": "1턴 안에서 밖에서 만든 정책 코드 폴더를 프로젝트 안으로 옮겼다가 같은 턴에 다시 밖으로 뺌",
+   "name": "s16-scratch-folder-moved-in-and-out-within-first-turn",
+   "expect": "PASS",
+   "reason": "외부 판정",
+   "why": "1턴 안에서 밖에서 만든 초안 폴더를 프로젝트 안으로 옮겼다가 같은 턴에 다시 뺌(제품에 남은 적이 없다)",
    "turns": [
     {
      "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
      "shell": [
       "O=$(mktemp -d) && mkdir $O/policy && printf 'POLICY=1\\n' > $O/policy/rules.py && mv $O/policy policy && mv policy $O/back"
+     ]
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
+  },
+  {
+   "name": "s17-tracked-folder-removed-and-checked-out-within-first-turn",
+   "expect": "FAIL",
+   "reason": "답 전에 제품 파일을 바꿨다",
+   "why": "1턴 안에서 시작 커밋의 폴더(tests/)를 지웠다가 git checkout 으로 되돌리고 질문(제품 파일을 지운 것은 변경이다)",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
+     "shell": [
+      "rm -rf tests && git checkout -- tests"
      ]
     },
     {
