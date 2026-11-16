@@ -41,7 +41,9 @@ ID = r"[A-Z]{1,3}\d{1,3}"
 EXIT = {"ok": 0, "recorded": 0, "returned": 3, "incomplete": 4, "unverified": 5}  # state 로 정해지는 코드. record 는 이 값 그대로 끝나고, prepare 의 조기 종료·finish 는 exit_code 가 completion 까지 본다
 NOT_DONE = 6  # 검토 판정(ok)은 났지만 완료가 아니다: waiting-user·needs-review·check-failed·unverified(finish 와 prepare 의 조기 종료만 낸다)
 DIFF_LIMIT = 60000  # 검토자 입력에 넣는 diff 최대 바이트(넘으면 잘렸다고 적는다)
-KIT_PATHS = (".agents", ".claude", ".codex", "CLAUDE.md", "AGENTS.md")  # 비교하지 않는 키트·하네스 설정(저장소 맨 위만)
+HARNESS_PATHS = (".claude", ".codex")  # 하네스 설정(저장소 맨 위). 제품이 아니라 비교하지 않는다
+KIT_VERSION_FILE = ".agents/agent-workflow-kit.version"  # 있으면 키트가 설치된 저장소다
+KIT_REGION = ("<!-- agent-workflow-kit:begin -->", "<!-- agent-workflow-kit:end -->")  # AGENTS.md 의 키트 표시 영역
 
 
 VERIFIER_PROMPT = """당신은 별도 검증자다. 판정 대상은 아래 「대상 버전」의 폴더(판정 대상 버전의 고정 복사본)다. 아래 「판정 기준」 절이 가리키는 「검토자 기준」을 읽고 그 기준으로 판정한다.
@@ -370,15 +372,40 @@ def product_list(root):
     return sorted({os.fsdecode(f) for f in tracked + new if f and not f.startswith(b"work/")})
 
 
+def kit_owned(rel, installed):
+    """검토에서 빼는 파일인가(저장소 기준 상대 경로). 하네스 설정(맨 위 .claude·.codex)과, 키트가 설치된 저장소에서
+    키트가 설치한 파일(CLAUDE.md·버전 파일·.agents/skills 의 README.md 와 wf-* 폴더)이다. 설치기(install.sh owned)가 소유하는 범위와 같다.
+    프로젝트 역할 스킬은 제품이고, 키트가 설치되지 않은 저장소(키트 저장소 자체 등)의 .agents·AGENTS.md 도 제품이다.
+    AGENTS.md 는 파일이 아니라 키트 표시 영역만 빠진다(project_part)."""
+    parts = rel.split("/")
+    if parts[0] in HARNESS_PATHS:
+        return True
+    if not installed:
+        return False
+    return rel in ("CLAUDE.md", KIT_VERSION_FILE, ".agents/skills/README.md") or (len(parts) > 2 and parts[:2] == [".agents", "skills"] and parts[2].startswith("wf-"))
+
+
+def project_part(text):
+    """AGENTS.md 에서 키트 표시 영역(표시 줄 포함)을 뺀 프로젝트 부분."""
+    begin, end = KIT_REGION
+    if begin in text and end in text.split(begin, 1)[1]:
+        head, rest = text.split(begin, 1)
+        return head + rest.split(end, 1)[1]
+    return text
+
+
 def product_print(root):
     """지금 제품 파일 상태의 지문(작업 지도·키트·하네스 설정 제외). 검토하는 동안 원본이 바뀌었는지 볼 때 쓴다."""
     h = hashlib.sha256()
+    installed = Path(root, KIT_VERSION_FILE).is_file()
     for f in product_list(root):
-        if f.split("/")[0] in KIT_PATHS:
+        if kit_owned(f, installed):
             continue
         p = Path(root, f)
         try:
-            if p.is_symlink():
+            if f == "AGENTS.md" and installed and p.is_file() and not p.is_symlink():
+                h.update(b"A" + project_part(p.read_text(encoding="utf-8", errors="replace")).encode())
+            elif p.is_symlink():
                 h.update(b"L" + f.encode() + b"\0" + os.readlink(p).encode())
             elif p.is_file():
                 h.update(b"F" + f.encode() + b"\0" + str(p.stat().st_mode & 0o111).encode() + hashlib.sha256(p.read_bytes()).digest())
@@ -455,7 +482,8 @@ def materialize_rev(root, rev, dest):
 
 def diff(base, target, out):
     """(검토자 입력용 diff, 잘렸나, 실행이 실패했나). 전체 diff 는 out 파일에 남긴다."""
-    r = run(["diff", "-ruN", "-x", ".git", "-x", ".agents", "-x", "work", str(base), str(target)])
+    # 링크는 따라가지 않고 링크로 비교한다(.claude/skills 같은 링크가 같은 변경을 두 번 내거나, 대상 없는 링크가 잡음을 내지 않게)
+    r = run(["diff", "-ruN", "--no-dereference", "-x", ".git", "-x", "work", str(base), str(target)])
     text = r.stdout.decode("utf-8", "replace").replace(str(base), "a").replace(str(target), "b")
     Path(out).write_text(text, encoding="utf-8")
     failed = r.returncode not in (0, 1)  # diff: 0 같음, 1 다름, 2 오류
@@ -498,21 +526,43 @@ def opt(args, name, many=False):
     return vals if many else (vals[-1] if vals else None)
 
 
-def copy_kit_paths(vdir, base):
-    """키트·하네스 설정(맨 위 .agents·.claude·.codex·CLAUDE.md·AGENTS.md)은 비교에서 뺀다:
-    대상의 것을 시작 상태에도 그대로 두어 차이가 나지 않게 한다(링크 .claude/skills 를 따라간 키트 파일이 diff 를 채우지 않게)."""
-    for name in KIT_PATHS:
-        src, dst = vdir / name, base / name
-        if dst.is_symlink() or dst.is_file():
-            dst.unlink()
-        elif dst.is_dir():
-            shutil.rmtree(dst)
+def align_kit_files(vdir, base):
+    """검토에서 빼는 파일(kit_owned)은 대상의 것을 시작 상태에도 그대로 두어 diff 에 차이가 나지 않게 한다.
+    AGENTS.md 는 시작 상태의 키트 표시 영역만 대상의 것으로 바꿔, 프로젝트 부분의 변경만 diff 에 남긴다."""
+    installed = Path(vdir, KIT_VERSION_FILE).is_file()
+    def remove(p):
+        if p.is_symlink() or p.is_file():
+            p.unlink()
+        elif p.is_dir():
+            shutil.rmtree(p)
+    def owned_under(root):
+        out = []
+        for d, dirs, files in os.walk(root):
+            for n in dirs + files:
+                full = Path(d, n)
+                rel = full.relative_to(root).as_posix()
+                if rel.split("/")[0] == ".git":
+                    continue
+                if (full.is_symlink() or full.is_file()) and kit_owned(rel, installed):
+                    out.append(rel)
+        return out
+    for rel in owned_under(base):
+        remove(Path(base, rel))
+    for rel in owned_under(vdir):
+        src, dst = Path(vdir, rel), Path(base, rel)
+        dst.parent.mkdir(parents=True, exist_ok=True)
         if src.is_symlink():
             os.symlink(os.readlink(src), dst)
-        elif src.is_dir():
-            shutil.copytree(src, dst, symlinks=True)
-        elif src.is_file():
+        else:
             shutil.copy2(src, dst)
+    va, ba = Path(vdir, "AGENTS.md"), Path(base, "AGENTS.md")
+    if installed and va.is_file() and ba.is_file() and not va.is_symlink() and not ba.is_symlink():
+        begin, end = KIT_REGION
+        vt, bt = va.read_text(encoding="utf-8", errors="replace"), ba.read_text(encoding="utf-8", errors="replace")
+        if begin in vt and begin in bt and end in bt.split(begin, 1)[1] and end in vt.split(begin, 1)[1]:
+            region = begin + vt.split(begin, 1)[1].split(end, 1)[0] + end
+            head, rest = bt.split(begin, 1)
+            ba.write_text(head + region + rest.split(end, 1)[1], encoding="utf-8")
 
 
 USAGE = ("사용: verify.py record --map work/<작업명>/work.md\n"
@@ -713,7 +763,7 @@ def prepare(args):
                 tb.mkdir(parents=True, exist_ok=True)
         else:
             tb.mkdir(parents=True, exist_ok=True)
-        copy_kit_paths(tv, tb)
+        align_kit_files(tv, tb)
         text, tcut, tfailed = diff(tb, tv, tout)
         cut, failed = cut or tcut, failed or tfailed
         changes.append(f"### 대상 {name} ({troot})\n{text}" if multi and text.strip() else text)

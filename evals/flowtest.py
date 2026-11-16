@@ -521,5 +521,37 @@ exit 0
     check("대상 표와 --base 를 함께 주면 사용 오류(기준 커밋은 표의 행이 정한다)", r.returncode == 2)
     (lib_b / "src/index.txt").write_text("use old_name\n"); (proj / "home-note.txt").unlink()
 
+    # 검토에서 빼는 것은 키트가 설치한 파일과 하네스 설정뿐이다. 프로젝트 역할 스킬·AGENTS.md 프로젝트 절은 제품이고,
+    # 키트가 설치되지 않은 저장소(키트 저장소 자체)에서는 .agents·AGENTS.md 전부가 제품이다. 대상 표가 없어도 같다.
+    role = proj / ".agents/skills/role-x/SKILL.md"; role.parent.mkdir(parents=True, exist_ok=True); role.write_text("역할 규칙 v1\n")
+    sh(*G, "add", "-A", cwd=proj); sh(*G, "commit", "-qm", "role skill", cwd=proj)
+    agents_before, readme = (proj / "AGENTS.md").read_text(), proj / ".agents/skills/README.md"
+    readme_before = readme.read_text()
+    role.write_text("역할 규칙 v2 ROLE-CHANGE\n")
+    (proj / "AGENTS.md").write_text(agents_before + "\n- 프로젝트 약속 PROJECT-SECTION-CHANGE\n")
+    readme.write_text(readme_before + "KIT-FILE-CHANGE\n")
+    rd = prep("--request", req_file("역할 스킬 시도"))
+    sprompt = Path(rd["prompt_file"]).read_text() if rd.get("state") == "ready" else ""
+    check("키트가 설치된 저장소: 역할 스킬과 AGENTS.md 프로젝트 절의 변경은 검토되고, 키트가 설치한 파일의 변경은 빠진다",
+          "ROLE-CHANGE" in sprompt and "PROJECT-SECTION-CHANGE" in sprompt and "KIT-FILE-CHANGE" not in sprompt)
+    if rd.get("state") == "ready":
+        role.write_text("역할 규칙 v3 WHILE-REVIEW\n")
+    got = json.loads(fin(rd["kept"], json.dumps(OK), "--check", "PASS").stdout.strip().splitlines()[-1]) if rd.get("state") == "ready" else {}
+    check("키트가 설치된 저장소: 검토하는 동안 역할 스킬이 바뀌면 unverified", got.get("state") == "unverified")
+    role.write_text("역할 규칙 v1\n"); (proj / "AGENTS.md").write_text(agents_before); readme.write_text(readme_before)
+    kitlike, base_k = lib("kit-like", "kit tool\n")
+    (kitlike / ".agents/skills/x").mkdir(parents=True); (kitlike / ".agents/skills/x/SKILL.md").write_text("단계 v1\n")
+    sh(*G, "add", "-A", cwd=kitlike); sh(*G, "commit", "-qm", "skills", cwd=kitlike); base_k = sh(*G, "rev-parse", "HEAD", cwd=kitlike).stdout.strip()
+    (kitlike / ".agents/skills/x/SKILL.md").write_text("단계 v2 KIT-SKILL-CHANGE\n")
+    (kitlike / "AGENTS.md").write_text("# kit-like\nKIT-AGENTS-CHANGE\n")
+    rd = prep("--map", multi_map("multi-kitlike", f"| kit-like | {kitlike} | {base_k} |\n"))
+    kprompt = Path(rd["prompt_file"]).read_text() if rd.get("state") == "ready" else ""
+    check("키트가 설치되지 않은 대상(키트 저장소 자체): .agents/skills 와 AGENTS.md 변경이 검토된다",
+          "KIT-SKILL-CHANGE" in kprompt and "KIT-AGENTS-CHANGE" in kprompt)
+    if rd.get("state") == "ready":
+        (kitlike / ".agents/skills/x/SKILL.md").write_text("단계 v3 WHILE-REVIEW\n")
+    got = json.loads(fin(rd["kept"], json.dumps(ok_r1, ensure_ascii=False), "--check", "PASS").stdout.strip().splitlines()[-1]) if rd.get("state") == "ready" else {}
+    check("키트가 설치되지 않은 대상: 검토하는 동안 .agents 파일이 바뀌면 unverified", got.get("state") == "unverified")
+
 print(f"{ok} passed, {failed} failed")
 sys.exit(1 if failed else 0)
