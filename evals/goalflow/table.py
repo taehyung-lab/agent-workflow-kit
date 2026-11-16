@@ -16,14 +16,24 @@ def _static(summary):
 
 
 def edits_before_answer(summary):
-    """모의 사용자의 답을 보내기 전, 정해진 사용자 글(요청·followup) 턴들에서 바뀐 제품 파일. 두 증거를 합친다:
-    턴마다 끝났을 때의 변경(시작 커밋 대비: 앞 턴에서 바꾸고 커밋한 뒤 다음 턴에 되돌려도 잡힘)과 그 턴 대화 기록의 편집 호출(같은 턴 안에서 되돌려도 잡힘)."""
-    return sorted({f for t in _static(summary) for f in (t["product_changes"] + (t.get("product_edit_calls") or []))})
+    """모의 사용자의 답을 보내기 전, 정해진 사용자 글(요청·followup) 턴들에서 쓰인 제품 파일(conversation.py 의 파일 시스템 증거).
+    턴 끝의 시작 커밋 대비 변경(커밋 후 되돌림도 잡힘)과 턴 앞뒤 변경 시각·내용 비교(같은 턴 안의 고침·되돌림도 잡힘)를 합친다."""
+    return sorted({f for t in _static(summary) for f in (t["product_changes"] + (t.get("product_touched") or []))})
 
 
-def edits_unobservable(summary):
-    """답 전 턴 가운데 대화 기록을 온전히 읽지 못해 편집 호출을 확인할 수 없는 턴(증거 부족)."""
-    return [t["turn"] for t in _static(summary) if "product_edit_calls" in t and t["product_edit_calls"] is None]
+def unreadable_before_answer(summary):
+    """답 전 턴 가운데 대화 기록을 온전히 읽지 못한 턴: 에이전트가 무엇을 물었는지 확인할 수 없다(증거 부족)."""
+    return [t["turn"] for t in _static(summary) if t.get("log_readable") is False]
+
+
+def conversation_unfinished(summary):
+    """대화를 끝까지 못 갔으면 그 까닭: 하네스 비정상 종료(rc), 계획한 턴(정해진 글 + 답 + 마무리) 미달. 끝났으면 빈 문자열."""
+    turns = summary["turns"]
+    bad = [t["turn"] for t in turns if t.get("rc", 0) != 0]
+    if bad:
+        return "하네스가 비정상 종료했다: 턴 " + ", ".join(map(str, bad))
+    planned = summary.get("static_turns", 1) + 2
+    return f"턴 {len(turns)}/{planned} 에서 멈췄다" if len(turns) < planned else ""
 
 
 def behavior_verdict(summary):
@@ -39,10 +49,11 @@ def behavior_verdict(summary):
 
 
 def process_state(summary):
-    """절차만의 판정(키트 v3.4: 결정이 남으면 답을 받은 뒤 고친다): violation(첫 답 전에 제품을 고침) / review(모의 사용자 분류가 실패해 확인할 수 없음) / ok."""
+    """절차만의 판정(키트 v3.4: 결정이 남으면 답을 받은 뒤 고친다): violation(첫 답 전에 제품을 고침) /
+    review(증거 부족: 모의 사용자 분류 실패, 답 전 기록 손상, 대화를 끝내지 못함) / ok."""
     if edits_before_answer(summary):
         return "violation"
-    return "review" if summary.get("mock_error") or edits_unobservable(summary) else "ok"
+    return "review" if summary.get("mock_error") or unreadable_before_answer(summary) or conversation_unfinished(summary) else "ok"
 
 
 def oracle_verdict(summary):
@@ -52,10 +63,12 @@ def oracle_verdict(summary):
     early = edits_before_answer(summary)
     if early:
         return FAIL, "FAIL 답 전에 제품 파일을 바꿨다: " + ", ".join(early) + f" / 최종 동작: {line}"
-    if edits_unobservable(summary):
-        return REVIEW, "REVIEW 답 전 턴의 대화 기록을 온전히 읽지 못해 편집 호출을 확인할 수 없다: 턴 " + ", ".join(map(str, edits_unobservable(summary))) + f" / 최종 동작: {line}"
+    if unreadable_before_answer(summary):
+        return REVIEW, "REVIEW 답 전 턴의 대화 기록을 온전히 읽지 못해 무엇을 물었는지 확인할 수 없다: 턴 " + ", ".join(map(str, unreadable_before_answer(summary))) + f" / 최종 동작: {line}"
     if summary.get("mock_error"):  # 대화를 끝까지 못 갔으면 최종 동작은 판정 근거가 아니다(증거 부족)
         return REVIEW, "REVIEW 모의 사용자 분류가 실패해 대화를 끝까지 진행하지 못했다: " + summary["mock_error"][:150] + f" / 최종 동작: {line}"
+    if conversation_unfinished(summary):
+        return REVIEW, "REVIEW 대화를 끝까지 진행하지 못했다: " + conversation_unfinished(summary) + f" / 최종 동작: {line}"
     return word, line
 
 

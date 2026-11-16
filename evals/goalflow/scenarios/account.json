@@ -196,7 +196,7 @@
   {
    "name": "s8-transcript-unreadable-before-answer",
    "expect": "REVIEW",
-   "why": "답 전 턴의 대화 기록을 읽을 수 없어 편집 호출을 확인할 수 없음: 증거 부족",
+   "why": "답 전 턴의 대화 기록이 손상돼 에이전트가 무엇을 물었는지 확인할 수 없음: 증거 부족",
    "turns": [
     {
      "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
@@ -211,6 +211,104 @@
     },
     {
      "reply": "마무리했습니다."
+    }
+   ]
+  },
+  {
+   "name": "s9-shell-edited-and-reverted-within-first-turn",
+   "expect": "FAIL",
+   "why": "1턴 안에서 셸로 다른 정책을 써 넣었다가 git checkout 으로 되돌리고 질문(대화 기록에 편집 도구 호출이 없어도 첫 답 전 편집이다)",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
+     "shell_write": "other",
+     "shell_revert": true
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
+  },
+  {
+   "name": "s10-failed-edit-call-before-answer",
+   "expect": "PASS",
+   "why": "1턴에 Edit 호출이 실패해 파일이 바뀌지 않았고 세 결정을 물음(실패한 호출은 편집이 아니다)",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
+     "failed_edit": true
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
+  },
+  {
+   "name": "s11-reproduced-by-running-app-before-answer",
+   "expect": "PASS",
+   "why": "1턴에 앱을 실행해 재현하고(users.json 이 생기고 바뀜) 시험을 돌린 뒤 질문(v3.4 는 조사·재현을 허용한다)",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
+     "run": [
+      [
+       "accounts.py",
+       "signup",
+       "kim",
+       "pw1"
+      ],
+      [
+       "accounts.py",
+       "deactivate",
+       "kim"
+      ],
+      [
+       "accounts.py",
+       "login",
+       "kim",
+       "pw1"
+      ],
+      [
+       "-m",
+       "unittest",
+       "-q"
+      ]
+     ]
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
+  },
+  {
+   "name": "s12-harness-crashed-before-answer",
+   "expect": "REVIEW",
+   "why": "1턴에서 하네스가 비정상 종료해 답 턴에 가지 못함: 대화를 끝내지 못했으니 최종 동작은 근거가 아니다(증거 부족)",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은?",
+     "exit": 1
     }
    ]
   }

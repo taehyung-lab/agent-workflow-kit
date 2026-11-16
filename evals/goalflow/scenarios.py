@@ -32,6 +32,19 @@ if prompt is not None:  # 모의 사용자 분류(새 형식은 인용문, 옛 �
 nf = os.environ["SCEN_N"]; n = int(open(nf).read()) + 1 if os.path.exists(nf) else 1; open(nf, "w").write(str(n))
 turn = scen["turns"][n - 1] if n <= len(scen["turns"]) else {"reply": "마무리했습니다."}
 print(json.dumps({"type": "system", "subtype": "init", "session_id": "s1"}))
+if turn.get("shell_write"):  # 셸로 쓰고(편집 도구 호출 기록 없음) 같은 턴에 git checkout 으로 되돌린다
+    print(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": f"b{n}", "name": "Bash", "input": {"command": "cp variant.py accounts.py && git checkout accounts.py"}}]}}))
+    shutil.copy(os.path.join(os.environ["SCEN_VARIANTS"], turn["shell_write"] + ".py"), "accounts.py")
+    if turn.get("shell_revert"):
+        subprocess.run(["git", "checkout", "--", "accounts.py"], capture_output=True)
+if turn.get("failed_edit"):  # 고칠 문자열이 맞지 않아 실패한 Edit 호출: 파일은 그대로
+    print(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": f"e{n}", "name": "Edit", "input": {"file_path": os.path.abspath("accounts.py"), "old_string": "없는 문자열", "new_string": "x"}}]}}))
+    print(json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": f"e{n}", "is_error": True, "content": "String to replace not found"}]}}))
+for argv in turn.get("run", []):  # 재현: 앱·시험 실행(제품 파일을 쓰지 않는다)
+    print(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": f"x{n}", "name": "Bash", "input": {"command": "python3 " + " ".join(argv)}}]}}))
+    subprocess.run([sys.executable, *argv], capture_output=True)
+if turn.get("run"):
+    assert os.path.exists("users.json"), "재현 명령이 자료 파일을 만들지 않았다: 사례가 재현을 시험하지 못한다"
 if turn.get("garble_log"):  # 읽을 수 없는 기록 줄(대화 기록 손상)
     print("{not json")
 if turn.get("write"):
@@ -46,6 +59,7 @@ if turn.get("commit"):
     g = ["git", "-c", "user.name=a", "-c", "user.email=a@invalid", "-c", "commit.gpgsign=false"]
     subprocess.run(g + ["add", "-A"], capture_output=True); subprocess.run(g + ["commit", "-qm", "agent"], capture_output=True)
 print(json.dumps({"type": "result", "result": turn["reply"]}, ensure_ascii=False))
+sys.exit(turn.get("exit", 0))
 '''
 
 
