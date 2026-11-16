@@ -11,10 +11,20 @@ import glob, json, sys
 PASS, FAIL, UNVERIFIED = "PASS", "FAIL", "UNVERIFIED"  # evals/judge.py 와 같은 낱말
 
 
+def edits_before_answer(summary):
+    """모의 사용자의 답을 보내기 전, 마지막 정해진 사용자 글(요청·followup) 턴까지 바뀐 제품 파일. 턴의 product_changes 는 시작부터 누적이다."""
+    turns = summary["turns"]
+    return turns[min(summary.get("static_turns", 1), len(turns)) - 1]["product_changes"] if turns else []
+
+
 def oracle_verdict(summary):
-    """외부 판정(oracle.py) 결과로 정한 판정 낱말과 한 줄 설명.
-    판정기가 결과를 내지 못했으면 미확인, 실패한 항목이 하나라도 있으면 실패, 관찰하지 못한 항목이 있으면 미확인, 전부 통과하고 관찰이 끝났으면 통과다."""
+    """외부 판정(oracle.py) 결과와 답 전 편집으로 정한 판정 낱말과 한 줄 설명.
+    사용자 답(모의 사용자 턴) 전에 제품 파일을 바꿨으면 실패다: 과제마다 사용자만 아는 결정이 있고, 키트의 기준은 결정이 남으면 답을 받은 뒤 고치는 것이다.
+    그 밖에는 판정기가 결과를 내지 못했으면 미확인, 실패한 항목이 하나라도 있으면 실패, 관찰하지 못한 항목이 있으면 미확인, 전부 통과하고 관찰이 끝났으면 통과다."""
     n, failed, unobserved = summary["n_cases"], summary["failed"], summary["unobserved"]
+    early = edits_before_answer(summary)
+    if early:
+        return FAIL, "FAIL 답 전에 제품 파일을 바꿨다: " + ", ".join(early) + (f" / 외부 판정 {len(failed)}/{n} 실패: " + ", ".join(failed) if failed else "")
     if summary.get("oracle_error") or not n:
         return UNVERIFIED, "UNVERIFIED 외부 판정기가 결과를 내지 못했다: " + str(summary.get("oracle_error") or "판정 항목 없음")[:200]
     if failed:
@@ -35,11 +45,12 @@ def result_meta(summary):
     word, line = oracle_verdict(summary)
     return {"case": summary.get("task", "goalflow"), "kit_ref": summary["kit_ref"] if arm == "kit" else arm,
             "kit_commit": summary["kit_commit"] if arm == "kit" else arm, "harness": summary["harness"], "run": summary["run"],
+            "model": summary.get("model"), "harness_version": summary.get("harness_version"),
             "exit_code": next((t["rc"] for t in turns if t["rc"] != 0), 0), "seconds": summary["seconds"],
             "agents_md_bytes": summary["agents_md_bytes"], "check_passed": word == PASS, "check_needs_review": False,
             "check_unverified": word == UNVERIFIED, "check_output": line, "user_turns": len(turns),
             "observed": {"first_reply_chars": turns[0]["reply_chars"]}, "global_instructions": None,
-            "goalflow": {"arm": arm, "mock": summary["mock"], "answered": summary["answered"], "edits_before_answer": turns[0]["product_changes"],
+            "goalflow": {"arm": arm, "mock": summary["mock"], "answered": summary["answered"], "edits_before_answer": edits_before_answer(summary),
                          "failed": summary["failed"], "unobserved": summary["unobserved"], "n_cases": summary["n_cases"],
                          "map": summary["map"], "public_tests_rc": summary["public_tests_rc"]}}
 

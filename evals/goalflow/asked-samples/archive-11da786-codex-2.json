@@ -1,0 +1,12 @@
+{
+ "task": "archive-correction",
+ "expect": [
+  1,
+  2
+ ],
+ "source": "archive-adjudication.json run archive-after-correction-11da786-codex-2 (사람 판독 PASS, 기계 FAIL)",
+ "reply": "제가 “숨기기”로 좁게 이해했습니다. 현재 완료 기록은 남아 있지만 보관함을 보는 기능은 없습니다.\n\n다음 동작으로 수정하려고 합니다.\n\n- 완료 처리하면 일반 목록에서 빠지고 `bin/todo archive` 보관함에 표시됩니다.\n- 이미 완료한 항목도 보관함에 표시됩니다.\n- 항목 번호와 내용은 유지하고, CSV에는 지금처럼 모든 항목을 포함합니다.\n\n이렇게 진행하면 될까요?\n\n[wf-ask 스킬](.agents/skills/wf-ask/SKILL.md)의 “사용자가 확인하기 전에는 제품 파일을 고치지 않는다”는 지침에 따라, 새 보관함 동작을 확인합니다.",
+ "kind": "surfaced",
+ "holdout": false,
+ "expect_none": []
+}

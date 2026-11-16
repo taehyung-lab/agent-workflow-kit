@@ -1,0 +1,12 @@
+{
+ "task": "archive-correction",
+ "expect": [
+  1,
+  2
+ ],
+ "source": "archive-adjudication.json run archive-after-correction-b553e96-codex-2 (사람 판독 PASS, 기계 FAIL)",
+ "reply": "완료한 항목은 보관함으로 옮기는 것으로 이해했습니다. 다음 동작을 추천합니다.\n\n- 완료 처리하면 기본 목록에서 빠지고 `bin/todo archive`로 볼 수 있습니다.\n- 이미 완료된 항목도 보관함에 표시합니다.\n- 기록과 번호는 유지하고, 정산용 CSV에는 모든 항목을 포함합니다.\n\n이대로 진행할까요? 아직 코드는 수정하지 않았습니다.\n\n[wf-ask 지침](/private/var/folders/vz/ddg_dgy17zjdcjqt1s6yqlm80000gn/T/tmpawirg82t/project/.agents/skills/wf-ask/SKILL.md)의 “사용자가 확인하기 전에는 제품 파일을 고치지 않는다”에 따라 보관함 동작을 확인합니다.",
+ "kind": "surfaced",
+ "holdout": false,
+ "expect_none": []
+}

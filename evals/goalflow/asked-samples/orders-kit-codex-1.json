@@ -1,0 +1,13 @@
+{
+ "kind": "surfaced",
+ "task": "orders",
+ "expect": [
+  1
+ ],
+ "expect_none": [
+  2
+ ],
+ "holdout": true,
+ "source": "agent-workflow-kit-bounds/work/measure-bounds/tasks-new/orders/kit-codex-1.json turns[0].reply — 주제 1 만 추천과 함께 묻고 제품 파일을 고치지 않음",
+ "reply": "기존 운영 규칙에 “결제한 뒤 영수증 금액은 바뀌지 않는다”는 조건이 있어 적용 범위 확인이 필요합니다. [wf-ask](.agents/skills/wf-ask/SKILL.md)도 “사용자가 확인하기 전에는 제품 파일을 고치지 않는다”고 정하고 있습니다.\n\n**기존 결제 완료 주문은 금액을 유지하고, 기존 대기 주문과 새 주문부터 할인을 적용하는 것으로 진행할까요?** 이 방식을 추천합니다.\n\n진행하면 다음처럼 반영합니다.\n\n- 상품 합계 50,000원 이상이면 상품 금액의 10% 할인, 원 미만 버림\n- 배송비 3,000원은 기준·할인에서 제외\n- 영수증에 `discount` 추가, `total`에 할인 반영\n- 기존 결제 완료 주문의 `discount`는 0원으로 표시\n\n예를 들어 현재 대기 중인 60,000원 주문은 할인 6,000원, 배송비 포함 결제액 57,000원이 됩니다."
+}

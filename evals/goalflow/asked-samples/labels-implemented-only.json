@@ -1,0 +1,12 @@
+{
+ "task": "labels",
+ "expect": [],
+ "expect_none": [
+  2,
+  3
+ ],
+ "source": "합성 음성 표본: 묻지 않고 구현한 뒤 보고만 한 글. 이미 구현한 주제는 드러낸 것이 아니다",
+ "reply": "구현을 마쳤습니다. 대여 표본도 시트에 추가하고 확정할 수 있게 했고, M1 과 m1 은 서로 다른 표본으로 구별합니다. 시험 12개가 모두 통과했습니다(python3 -m unittest).",
+ "kind": "implemented",
+ "holdout": false
+}

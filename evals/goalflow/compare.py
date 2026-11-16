@@ -5,7 +5,8 @@
 
 키트의 채택 기준("같은 과제에서 스킬 설치 구성과 같거나 나은가")을 재는 실행기다. 실제 모델 세션을 띄우므로 시간과 비용이 든다.
 세션은 사용자 전역 설정과 격리한다: Claude 는 --setting-sources project, Codex 는 임시 HOME·CODEX_HOME(인증·모델 설정만).
-턴은 모든 구성이 같다: ① 요청 원문 ② 모의 사용자의 답 ③ 마무리 지시. 스킬 구성만 ①의 앞에 스킬을 쓰라는 한 줄이 붙는다.
+턴은 모든 구성이 같다: ① 요청 원문 (①′ 과제에 followup.txt 가 있으면 그 글 그대로: 정정처럼 정해진 두 번째 사용자 글) ② 모의 사용자의 답 ③ 마무리 지시.
+스킬 구성만 ①의 앞에 스킬을 쓰라는 한 줄이 붙는다. 모델과 CLI 는 evals/pins.json 으로 고정하고, 실제 CLI 버전이 다르면 시작하지 않는다.
 끝나면 프로젝트 밖에서 oracle.py 로 실제 저장·반환값을 판정한다.
 요약(<이름>.json)과 함께, 일반 결과 표(evals/report.py)가 읽는 <이름>.meta.json 을 쓴다(table.py 의 result_meta).
 
@@ -15,7 +16,7 @@
   CMP_REF     설치할 키트 커밋(기본 HEAD. 커밋하지 않은 수정은 들어가지 않는다)
   CMP_SKILLS  skills 구성에 설치할 스킬 저장소의 skills 폴더(예: mattpocock/skills 를 고정 커밋으로 받은 곳의 skills/). 그 안의 productivity/grilling·engineering/tdd 를 쓴다
   CMP_PREFIX  첫 요청 앞에 붙일 한 줄(기본: skills 구성만 "grilling 스킬로 요구를 확인한 다음 tdd 스킬로 구현해 주세요.")
-  MOCK        asked(기본): answer.txt 의 정책 가운데 에이전트가 물은 것만 답한다(물었는지는 asked.py 가 Haiku 로 분류). all: 세 정책을 전부 알려 준다
+  MOCK        asked(기본): answer.txt 의 정책 가운데 에이전트가 구현 전에 드러낸 주제(질문·추천·선언)만 답한다(asked.py 가 pins.json 의 모의 사용자 모델로 분류). all: 정책을 전부 알려 준다
 """
 import json, os, re, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
@@ -28,12 +29,15 @@ assert (TASK / "oracle.py").is_file(), f"과제 폴더가 없다: {TASK}"
 MP = Path(os.environ.get("CMP_SKILLS") or "/nonexistent")
 sys.path.insert(0, str(KIT / "evals"))
 from session import kit_checkout  # noqa: E402
+import pins  # noqa: E402
 from transcript import read, commands, replies  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from asked import asked  # noqa: E402
 from table import result_meta  # noqa: E402
 
 arm, harness, idx, out = sys.argv[1], sys.argv[2], sys.argv[3], Path(sys.argv[4]).resolve()
+if (mismatch := pins.check(harness)):  # 고정한 CLI 가 아니면 같은 조건의 비교가 아니다
+    sys.exit(mismatch)
 name = f"{arm}-{harness}-{idx}"
 out.mkdir(parents=True, exist_ok=True)
 work = Path(tempfile.mkdtemp(prefix="cmp-"))
@@ -68,19 +72,22 @@ MOCK = os.environ.get("MOCK", "asked")
 items = {int(m.group(1)): m.group(0).strip() for m in re.finditer(r"^(\d+)\. .*$", answer, re.M)}
 PREFIX = os.environ.get("CMP_PREFIX", "grilling 스킬로 요구를 확인한 다음 tdd 스킬로 구현해 주세요." if arm == "skills" else "")
 FIRST = (PREFIX + "\n\n" if PREFIX else "") + request
+# 정해진 사용자 글(요청, 있으면 followup.txt). 그 뒤 턴은 모의 사용자의 답, 마지막은 마무리 지시다.
+STATIC = [FIRST] + ([(TASK / "followup.txt").read_text(encoding="utf-8").strip()] if (TASK / "followup.txt").is_file() else [])
+ANSWER_TURN = len(STATIC) + 1
 CLOSE = "더 물을 것이 없으면 그대로 마무리해 주세요. 남은 질문이 있으면 추천안대로 정해 완료하고, 정한 내용과 실제 실행한 명령·결과를 보고해 주세요."
 answered = set()
 
 
 def next_prompt(n, last_reply):
-    if n == 1:
-        return FIRST
+    if n <= len(STATIC):
+        return STATIC[n - 1]
     if MOCK == "all":
-        return answer + "\n\n위 답으로 진행해 주세요." if n == 2 else CLOSE
+        return answer + "\n\n위 답으로 진행해 주세요." if n == ANSWER_TURN else CLOSE
     new = [t for t in asked(last_reply, topics) if t not in answered]
     answered.update(new)
     told = "\n".join(items[t] for t in new)
-    if n == 2:
+    if n == ANSWER_TURN:
         return (told + "\n\n물으신 것은 위와 같이 해 주세요. 나머지는 추천안대로 진행해 주세요.") if new else "질문이 없으면 그대로 진행해 주세요."
     return (told + "\n\n" if new else "") + CLOSE
 
@@ -102,12 +109,12 @@ def launch(n, prompt):
     global sid
     log = out / f"{name}.t{n}.jsonl"
     if harness == "claude":
-        cmd = ["claude", "-p", prompt, *(["--resume", sid] if sid else []), "--setting-sources", "project", "--output-format", "stream-json", "--verbose",
+        cmd = ["claude", "-p", prompt, *(["--resume", sid] if sid else []), *pins.flags("claude"), "--setting-sources", "project", "--output-format", "stream-json", "--verbose",
                "--dangerously-skip-permissions", "--max-turns", "80"]
     elif not sid:
-        cmd = ["codex", "exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", "-C", str(proj), prompt]
+        cmd = ["codex", "exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", *pins.flags("codex"), "-C", str(proj), prompt]
     else:
-        cmd = ["codex", "exec", "resume", "--json", "--skip-git-repo-check", "-c", 'sandbox_mode="workspace-write"', sid, prompt]
+        cmd = ["codex", "exec", "resume", "--json", "--skip-git-repo-check", "-c", 'sandbox_mode="workspace-write"', *pins.flags("codex"), sid, prompt]
     t0 = time.time()
     with open(log, "wb") as o, open(str(log) + ".err", "wb") as e:
         rc = subprocess.run(["perl", "-e", "alarm shift; exec @ARGV", "1800", *cmd], cwd=proj, stdin=subprocess.DEVNULL, stdout=o, stderr=e, env=env).returncode
@@ -131,7 +138,7 @@ def product_changes():
 
 
 last = ""
-for n in (1, 2, 3):
+for n in range(1, ANSWER_TURN + 2):
     before = set(answered)
     prompt = next_prompt(n, last)
     rc, log, secs = launch(n, prompt)
@@ -172,7 +179,7 @@ if harness == "claude":
         if ev.get("type") == "system" and ev.get("subtype") == "init":
             init = {"skills": [s for s in ev.get("skills", []) if s in ("grilling", "tdd")], "plugins": len(ev.get("plugins", [])), "n_skills": len(ev.get("skills", []))}
             break
-summary = {"name": name, "task": TASK_NAME, "arm": arm, "harness": harness, "run": int(idx) if idx.isdigit() else idx, "kit_ref": kit_ref, "kit_commit": kit_commit, "agents_md_bytes": agents_md_bytes, "base": base, "seconds": int(time.time() - started), "turns": rows,
+summary = {"name": name, "task": TASK_NAME, "model": pins.model(harness), "harness_version": pins.cli_version(harness), "static_turns": len(STATIC), "arm": arm, "harness": harness, "run": int(idx) if idx.isdigit() else idx, "kit_ref": kit_ref, "kit_commit": kit_commit, "agents_md_bytes": agents_md_bytes, "base": base, "seconds": int(time.time() - started), "turns": rows,
            "mock": MOCK, "answered": sorted(answered), "map": any((proj / "work").glob("*/work.md")), "final_changes": product_changes(), "init": init,
            "oracle_exit": oracle.returncode, "automated_valid": verdict.get("automated_valid"), "observation_complete": verdict.get("observation_complete"),
            "failed": [c.get("name") for c in cases if c.get("passed") is False], "failed_decision": verdict.get("failed_decision"), "unobserved": [c.get("name") for c in cases if c.get("passed") is None],
