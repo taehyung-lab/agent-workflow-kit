@@ -44,7 +44,7 @@ DIFF_LIMIT = 60000  # 검토자 입력에 넣는 diff 최대 바이트(넘으면
 KIT_PATHS = (".agents", ".claude", ".codex", "CLAUDE.md", "AGENTS.md")  # 비교하지 않는 키트·하네스 설정(저장소 맨 위만)
 
 
-VERIFIER_PROMPT = """당신은 별도 검증자다. 판정 대상은 아래 「대상 버전」의 폴더(판정 대상 버전의 고정 복사본)다. 그 폴더의 AGENTS.md 와 .agents/skills/wf-verify/SKILL.md 「검토자 기준」를 읽고 그 기준으로 판정한다.
+VERIFIER_PROMPT = """당신은 별도 검증자다. 판정 대상은 아래 「대상 버전」의 폴더(판정 대상 버전의 고정 복사본)다. 아래 「판정 기준」 절이 가리키는 「검토자 기준」을 읽고 그 기준으로 판정한다.
 제품 파일·검사·기준을 고치지 않는다(고치면 이 판정은 무효로 처리된다). 저장소의 실행·검사 명령을 실행해 실제 결과로 판정하며, 그때 생기는 임시 산출물은 괜찮다.
 요구의 근거는 아래 사용자 원문과 저장소의 외부 계약뿐이다. 구현자가 정한 내용은 근거가 아니다. 구현자의 자기평가는 받지 않는다.
 판정 범위는 이 변경이 바꾼 동작과, 연결 근거(같은 함수·같은 출력·같은 계약을 쓴다)가 있는 기존 보장뿐이다. 연결 없는 기능은 보지 않는다.
@@ -223,6 +223,53 @@ def context_text(text):
     return m.group(1).strip() if m else ""
 
 
+TARGET_COLUMNS = ("대상", "경로", "기준 커밋")
+
+
+def target_table(context, root):
+    """작업 지도 `## 맥락` 의 대상 표(머리줄 칸이 대상·경로·기준 커밋)를 읽는다. 여러 저장소 작업의 검토 대상과 기준 커밋을 이 표가 정한다.
+    표가 없으면 (None, []): 지도를 둔 저장소 하나가 대상이다. 있으면 (대상 목록, 형식 문제). 대상 단위는 git 작업 폴더라서
+    같은 저장소의 다른 worktree 는 다른 대상이다. 상대 경로는 지도를 둔 저장소 기준이다."""
+    lines = context.splitlines()
+    cells = lambda line: [c.strip() for c in line.strip().strip("|").split("|")] if line.lstrip().startswith("|") else []
+    for i, line in enumerate(lines):
+        head = cells(line)
+        if all(w in head for w in TARGET_COLUMNS) and i + 1 < len(lines) and re.match(r"^\s*\|[\s:|-]+\|?\s*$", lines[i + 1]):
+            break
+    else:
+        return None, []
+    targets, problems, seen = [], [], {}
+    for line in lines[i + 2:]:
+        row = cells(line)
+        if not row:
+            break
+        name, raw, base = (row[head.index(w)].strip("`").strip() if head.index(w) < len(row) else "" for w in TARGET_COLUMNS)
+        label = name or raw or "(이름 없음)"
+        path = Path(os.path.expanduser(raw)) if raw else None
+        if path is not None and not path.is_absolute():
+            path = Path(root, path)
+        top = run(["git", "rev-parse", "--show-toplevel"], cwd=path).stdout.decode().strip() if path and path.is_dir() else ""
+        if not name or not re.fullmatch(r"[\w.-]+", name):
+            problems.append(f"{label}: 대상 이름은 비지 않은 한 낱말(글자·숫자·._-)이어야 한다(검토 폴더 이름으로 쓴다)")
+        elif path is None or not path.is_dir():
+            problems.append(f"{label}: 경로 {raw or '(빈 칸)'} 가 없다")
+        elif not top or Path(top).resolve() != path.resolve():
+            problems.append(f"{label}: 경로 {raw} 는 git 작업 폴더 최상위가 아니다")
+        elif path.resolve() in seen or name in seen.values():
+            problems.append(f"{label}: 같은 작업 폴더나 이름을 두 번 적었다")
+        elif not base:
+            problems.append(f"{label}: 기준 커밋 칸이 비었다")
+        else:
+            sha = run(["git", "rev-parse", "--verify", "-q", base + "^{commit}"], cwd=path).stdout.decode().strip()
+            if not sha:
+                problems.append(f"{label}: 기준 커밋 {base} 을 찾지 못했다")
+            seen[path.resolve()] = name
+            targets.append({"name": name, "root": path.resolve(), "base": base, "sha": sha})
+    if not targets and not problems:
+        problems.append("대상 표에 행이 없다")
+    return targets, problems
+
+
 class ReviewInputs:
     """검토자에게 넘긴 근거 입력(지도의 기준·맥락, 원문·산출물 파일)의 읽기와 현재성 확인을 함께 소유한다."""
     VERSION = 3
@@ -342,6 +389,16 @@ def product_print(root):
     return h.hexdigest()
 
 
+def products_print(roots, multi):
+    """검토 대상 전체의 지문. 대상이 하나면 그 저장소의 지문 그대로(대상 표가 없던 때와 같다), 여럿이면 대상마다의 지문을 묶는다."""
+    if not multi:
+        return product_print(Path(roots[0]))
+    h = hashlib.sha256()
+    for r in roots:
+        h.update(r.encode() + b"\0" + product_print(Path(r)).encode())
+    return h.hexdigest()
+
+
 def freeze(root, dest):
     """판정 대상 버전을 복사본으로 고정하고 커밋한다. 무시된 파일(빌드 산출물 등)은 복사하지 않는다."""
     dest.mkdir(parents=True)
@@ -396,19 +453,26 @@ def materialize_rev(root, rev, dest):
                 p.chmod(0o755)
 
 
-def diff(base, target):
-    """(검토자 입력용 diff, 잘렸나, 실행이 실패했나). 전체 diff 는 base 옆 diff.txt 에 남긴다."""
+def diff(base, target, out):
+    """(검토자 입력용 diff, 잘렸나, 실행이 실패했나). 전체 diff 는 out 파일에 남긴다."""
     r = run(["diff", "-ruN", "-x", ".git", "-x", ".agents", "-x", "work", str(base), str(target)])
     text = r.stdout.decode("utf-8", "replace").replace(str(base), "a").replace(str(target), "b")
-    Path(base).parent.joinpath("diff.txt").write_text(text, encoding="utf-8")
+    Path(out).write_text(text, encoding="utf-8")
     failed = r.returncode not in (0, 1)  # diff: 0 같음, 1 다름, 2 오류
     if len(text.encode()) > DIFF_LIMIT:
         return text.encode()[:DIFF_LIMIT].decode("utf-8", "ignore") + f"\n(diff 가 {DIFF_LIMIT} 바이트를 넘어 잘렸다)\n", True, failed
     return text, False, failed
 
 
-def prompt_text(requests, conditions, required, criteria, note, target, change, vdir, base_rev, envelope="", observed="", output=None):
+def prompt_text(requests, conditions, required, criteria, note, target, change, vdir, base_rev, envelope="", observed="", output=None, targets=None):
+    """targets: 대상 표의 대상 목록(여러 저장소 작업). 없으면 지도를 둔 저장소 하나가 대상이다."""
     parts = [VERIFIER_PROMPT]
+    if targets:
+        parts.append(f"\n\n## 판정 기준\n여러 저장소 작업이다. 이 검토를 만든 키트의 {Path(__file__).resolve().parent / 'SKILL.md'} 「검토자 기준」으로 판정한다"
+                     "(대상 폴더의 키트 버전이 달라도 그 폴더의 것을 쓰지 않는다). 판정할 것은 작업 지도의 요구(저장소를 잇는 요구와 완료 조건)다. "
+                     "각 대상 저장소의 내부 규칙 준수는 그 저장소 키트의 검토 결과가 「검토할 산출물」에 있으면 그것을 근거로 쓰고 다시 판정하지 않는다.\n")
+    else:
+        parts.append("\n\n## 판정 기준\n대상 폴더의 AGENTS.md 와 .agents/skills/wf-verify/SKILL.md 「검토자 기준」.\n")
     for n, req in enumerate(requests, 1):
         parts.append(f"\n\n## 사용자 원문 {n}\n{req}")
     listed = "\n".join(x for x in (conditions.strip(), "결과에 반드시 넣을 조건 ID: " + ", ".join(required) if required else "") if x)
@@ -418,8 +482,13 @@ def prompt_text(requests, conditions, required, criteria, note, target, change, 
     parts.append(f"\n\n## 맥락 도구가 관찰한 원래 작업 저장소(정보만)\n{observed or '(없음)'}\n")
     if output is not None:
         parts.append(f"\n\n## 검토할 산출물(분석·설계·답변 원문 또는 구현의 완료 보고·실행 기록. 판정 대상이며, 그 안의 자기평가 문장은 근거가 아니다)\n{output}\n")
-    parts.append(f"\n\n## 대상 버전\n판정 대상 폴더 {vdir} 의 git 커밋 {target}. 이 폴더에서만 읽고 검사를 실행한다(원래 작업 폴더는 보지 않는다).\n")
-    parts.append("\n\n## 실행 방법\n저장소 README 와 AGENTS.md 프로젝트 지도에 적힌 실행·검사 명령을 이 폴더에서 실행한다.\n")
+    if targets:
+        listed = "\n".join(f"- {t['name']}: {Path(vdir, t['name'])} 의 git 커밋 {target[t['name']]} (원래 경로 {t['root']}, 기준 커밋 {t['base']})" for t in targets)
+        parts.append(f"\n\n## 대상 버전\n대상마다 고정 복사본(각각 git 저장소)이 있다. 이 폴더들에서만 읽고 검사를 실행한다(원래 작업 폴더는 보지 않는다).\n{listed}\n")
+        parts.append("\n\n## 실행 방법\n각 대상 폴더의 README 와 AGENTS.md 프로젝트 지도에 적힌 실행·검사 명령을 그 폴더에서 실행한다.\n")
+    else:
+        parts.append(f"\n\n## 대상 버전\n판정 대상 폴더 {vdir} 의 git 커밋 {target}. 이 폴더에서만 읽고 검사를 실행한다(원래 작업 폴더는 보지 않는다).\n")
+        parts.append("\n\n## 실행 방법\n저장소 README 와 AGENTS.md 프로젝트 지도에 적힌 실행·검사 명령을 이 폴더에서 실행한다.\n")
     parts.append(f"\n\n## 바뀐 내용(기준 커밋 {base_rev}부터의 diff, 작업 지도 제외)\n{change or '(바뀐 파일 없음)'}")
     return "".join(parts)
 
@@ -516,7 +585,8 @@ def record(args):
         return 2
     result = {"scope": "record", "map": map_rel, "state": "recorded", "reason": "", "review": "off", "open_decisions": [], "unconfirmed": []}
     path = Path(root, map_rel)
-    body = criteria_text(path.read_text(encoding="utf-8")) if path.is_file() else None
+    full = path.read_text(encoding="utf-8") if path.is_file() else ""
+    body = criteria_text(full) if path.is_file() else None
     if not body:
         result.update(state="unverified", reason=f"작업 지도 {map_rel} 가 없다" if body is None else "작업 지도의 `## 기준` 이 비었다")
         print(f"[verify] 미확인: {result['reason']}", file=sys.stderr)
@@ -526,6 +596,7 @@ def record(args):
         problems.insert(0, "`요청 원문` 항목이 없거나 비었다(사용자 글 그대로 옮긴다)")
     if not has_table or not record_rows(body)[0]:
         problems.append("요구 기록 표(머리줄에 '상태' 칸이 있는 표)가 없거나 행이 없다")
+    problems += [f"대상 표: {p}" for p in target_table(context_text(full), root)[1]]
     if problems:  # 형식이 틀린 표의 미정·미확인 목록은 믿을 수 없다: 표를 고치는 것이 먼저다
         result.update(state="returned", reason="작업 지도 요구 기록 형식: " + " / ".join(problems))
         print(f"[verify] 돌려보냄: {result['reason']}", file=sys.stderr)
@@ -545,6 +616,12 @@ def prepare(args):
     inputs = ReviewInputs(root, map_rel)
     if map_rel and inputs.map is None:  # 없는 지도 옆에 증거 폴더를 만들지 않는다
         raise FileNotFoundError(f"작업 지도 {map_rel} 가 없다")
+    # 대상 표가 있으면 검토 대상과 기준 커밋은 표의 행이 정한다(--base 와 함께 쓰면 어느 쪽인지 모호하다)
+    targets, target_problems = target_table(context_text(inputs.map), root) if inputs.map is not None else (None, [])
+    if targets is not None and opt(args, "--base"):
+        print("[verify] 작업 지도에 대상 표가 있으면 기준 커밋은 표의 행이 정한다. --base 를 함께 주지 않는다.\n" + USAGE, file=sys.stderr)
+        return 2
+    problems += [f"대상 표: {p}" for p in target_problems]
     if map_rel and any(Path(f).resolve() == Path(root, map_rel).resolve() for f in opt(args, "--request", True)):
         raise ValueError("작업 지도는 해석과 설계이며 요청 원문 파일을 대신할 수 없다")
     requests = [inputs.read(f, "request") for f in opt(args, "--request", True)]
@@ -566,12 +643,20 @@ def prepare(args):
         problems.append("산출물(--output) 파일이 비었다")
     conditions = inputs.read(opt(args, "--conditions"), "conditions") if opt(args, "--conditions") else ""
     envelope = f"### {map_rel}\n{body}" if inputs.map is not None and (body := context_text(inputs.map)) else ""
-    base_rev = opt(args, "--base") or "HEAD"
-    base_sha = run(["git", "rev-parse", "--verify", "-q", base_rev + "^{commit}"], cwd=root).stdout.decode().strip()
-    if not base_sha:
-        problems.append(f"기준 커밋 {base_rev} 을 찾지 못했다")
+    multi = targets is not None
+    if multi:
+        base_rev = "대상 표의 행마다"
+        base_key = [[str(t["root"]), t["sha"]] for t in targets]
+    else:
+        base_rev = opt(args, "--base") or "HEAD"
+        base_sha = run(["git", "rev-parse", "--verify", "-q", base_rev + "^{commit}"], cwd=root).stdout.decode().strip()
+        if not base_sha:
+            problems.append(f"기준 커밋 {base_rev} 을 찾지 못했다")
+        base_key = base_sha
+        targets_for_print = [str(root)]
+    roots = [str(t["root"]) for t in targets] if multi else targets_for_print
     # 검토 시도: 같은 요청 원문·기준 커밋·지도면 회차를 이어 센다. 다른 요청(새 원문)이나 다른 기준 커밋은 새 시도다.
-    attempt = hashlib.sha256(json.dumps([requests, base_sha, map_rel], ensure_ascii=False).encode()).hexdigest()[:16]
+    attempt = hashlib.sha256(json.dumps([requests, base_key, map_rel], ensure_ascii=False).encode()).hexdigest()[:16]
     state_file = (Path(root, map_rel).parent / "verify" if map_rel else Path(root, "work", "review")) / "state.json"
     vstate = json.loads(state_file.read_text()) if state_file.is_file() else {}
     if vstate.get("attempt") != attempt:
@@ -583,7 +668,7 @@ def prepare(args):
     result = {"round": n, "max_rounds": rounds_max}
     if asked_max != rounds_max:
         result["note"] = f"재검토 한도는 이 시도의 첫 회차에 정한 {rounds_max} 회다(--rounds {asked_max} 는 쓰지 않았다)"
-    start_print = product_print(root)
+    start_print = products_print(roots, multi)
     first_criteria = vstate.get("first_criteria", criteria)
     if len(ran) >= rounds_max:
         # 한도 뒤 재사용도 같은 근거에만 유효하다. 구기록은 입력이 없으므로 재사용하지 않는다.
@@ -603,28 +688,43 @@ def prepare(args):
             f"1회차 기준:\n{first_criteria or '(없음)'}\n") if changed else ""
     result["criteria_changed"] = changed
     vdir = keep / "target"
-    try:
-        target = freeze(root, vdir)
-    except RuntimeError as e:  # 고정 대상이 없으면 검토자를 띄우지 않고 미확인(남긴 폴더에 그대로 둔다)
-        target = None
-        problems.append(str(e))
-        vdir.mkdir(parents=True, exist_ok=True)
-    base = keep / "base"
-    if base_sha:
+    # 대상마다(대상 표가 없으면 지도를 둔 저장소 하나) 판정 대상을 고정하고 기준 커밋을 꺼내 diff 를 만든다.
+    # 하나라도 실패하면 전체가 미확인이다: 일부 대상만으로 판정을 맡기지 않는다.
+    units = [(t["name"], t["root"], t["sha"], vdir / t["name"], keep / "base" / t["name"], keep / f"diff-{t['name']}.txt") for t in targets] if multi \
+        else [(None, root, base_sha, vdir, keep / "base", keep / "diff.txt")]
+    target, changes, cut, failed = {} if multi else None, [], False, False
+    for name, troot, tsha, tv, tb, tout in units:
+        label = f"대상 {name}: " if multi else ""
         try:
-            materialize_rev(root, base_sha, base)
-        except (RuntimeError, ValueError, IndexError) as e:
-            problems.append(f"기준 상태를 꺼내지 못했다: {e}")
-            base.mkdir(exist_ok=True)
-    else:
-        base.mkdir()
-    copy_kit_paths(vdir, base)
-    change, cut, failed = diff(base, vdir)
+            commit = freeze(troot, tv)
+        except RuntimeError as e:  # 고정 대상이 없으면 검토자를 띄우지 않고 미확인(남긴 폴더에 그대로 둔다)
+            commit = None
+            problems.append(label + str(e))
+            tv.mkdir(parents=True, exist_ok=True)
+        if multi:
+            target[name] = commit
+        else:
+            target = commit
+        if tsha:
+            try:
+                materialize_rev(troot, tsha, tb)
+            except (RuntimeError, ValueError, IndexError) as e:
+                problems.append(f"{label}기준 상태를 꺼내지 못했다: {e}")
+                tb.mkdir(parents=True, exist_ok=True)
+        else:
+            tb.mkdir(parents=True, exist_ok=True)
+        copy_kit_paths(tv, tb)
+        text, tcut, tfailed = diff(tb, tv, tout)
+        cut, failed = cut or tcut, failed or tfailed
+        changes.append(f"### 대상 {name} ({troot})\n{text}" if multi and text.strip() else text)
+    change = "\n".join(c for c in changes if c.strip())
+    if len(change.encode()) > DIFF_LIMIT:
+        change, cut = change.encode()[:DIFF_LIMIT].decode("utf-8", "ignore") + f"\n(diff 가 {DIFF_LIMIT} 바이트를 넘어 잘렸다)\n", True
     # 근거가 불완전하면(diff 실패·잘림) 판정을 맡기지 않고 미확인이다. 전체 diff 는 남긴 폴더에 있다.
     if failed:
         problems.append("diff 실행이 실패했다")
     if cut:
-        problems.append(f"변경(diff)이 {DIFF_LIMIT} 바이트를 넘어 검토자 입력에 다 넣지 못했다(전체는 {keep / 'diff.txt'})")
+        problems.append(f"변경(diff)이 {DIFF_LIMIT} 바이트를 넘어 검토자 입력에 다 넣지 못했다(전체는 {keep} 의 diff 파일)")
     if not failed and not change.strip() and output is None:
         problems.append("검토할 것이 없다(입력 부족): 기준 커밋부터 바뀐 파일이 없고 산출물(--output)도 없다. 분석·설계만 한 작업은 답·보고서를 --output 으로 넘긴다")
     result.update(target=target, diff_truncated=cut)
@@ -642,11 +742,13 @@ def prepare(args):
         # 형식이 틀린 표의 미정·미확인 목록은 믿을 수 없다: 표를 고치는 것이 먼저다(완료 판정도 returned)
         result.update(state="returned", reason="작업 지도 요구 기록 형식: " + " / ".join(record_problems), open_decisions=[], unconfirmed=[])
         return finalize(result, rounds, {"ran": False, "target": target}, rounds_max, state_file, attempt, first_criteria)
-    prompt = prompt_text(requests, conditions, required, criteria, note, target, change, vdir, base_rev, envelope, observed_context(root), output)
+    observed = "\n".join(f"### 대상 {t['name']}\n{observed_context(t['root'])}" for t in targets) if multi else observed_context(root)
+    prompt = prompt_text(requests, conditions, required, criteria, note, target, change, vdir, base_rev, envelope, observed, output, targets if multi else None)
     (keep / "prompt.txt").write_text(prompt, encoding="utf-8")
     pending_round = {"state_file": str(state_file), "attempt": attempt, "first_criteria": first_criteria, "required": required, "rounds_max": rounds_max,
                      "round": n, "ran_before": len(ran), "start_print": start_print, "inputs": inputs.snapshot, "target": target,
-                     "vdir": str(vdir), "criteria_changed": changed, "root": str(root), "open_decisions": pending, "unconfirmed": unknown}
+                     "vdir": str(vdir), "criteria_changed": changed, "root": str(root), "roots": roots, "multi": multi,
+                     "names": [t["name"] for t in targets] if multi else [], "open_decisions": pending, "unconfirmed": unknown}
     (keep / "pending.json").write_text(json.dumps(pending_round, ensure_ascii=False), encoding="utf-8")
     ready = {"state": "ready", "round": n, "kept": str(keep), "prompt_file": str(keep / "prompt.txt"), "target_dir": str(vdir),
              "finish": f"python3 {Path(__file__).resolve()} finish --round {keep}"}
@@ -675,7 +777,7 @@ def finalize(result, rounds, entry, rounds_max, state_path, attempt, first_crite
 
 def stale(pd):
     """검토 입력을 만든 읽기와 같은 범위로 현재성을 확인한다. 구기록·삭제·읽기 실패도 현재가 아니다."""
-    return product_print(Path(pd["root"])) != pd["start_print"] or not ReviewInputs.current(pd.get("inputs"))
+    return products_print(pd.get("roots") or [pd["root"]], pd.get("multi", False)) != pd["start_print"] or not ReviewInputs.current(pd.get("inputs"))
 
 
 def finish(args):
@@ -699,8 +801,8 @@ def finish(args):
     vdir, n, rounds_max = Path(pd["vdir"]), pd["round"], pd["rounds_max"]
     result = {"round": n, "max_rounds": rounds_max, "required": pd["required"], "kept": str(keep), "target": pd["target"],
               "criteria_changed": pd.get("criteria_changed", False), "open_decisions": pd.get("open_decisions", []), "unconfirmed": pd.get("unconfirmed", [])}
-    touched = [l for l in run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=vdir).stdout.decode().splitlines()
-               if l and not l.startswith("??")]
+    touched = [l for d in ([vdir / n for n in pd.get("names") or []] or [vdir])
+               for l in run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=d).stdout.decode().splitlines() if l and not l.startswith("??")]
     verdict = judge(answer, pd["required"])
     result.update(conditions=verdict.get("conditions", []), out_of_scope=verdict.get("out_of_scope", []), final=answer)
     if touched:

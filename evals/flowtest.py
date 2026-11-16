@@ -472,5 +472,54 @@ exit 0
     check("검토자가 새 소스 파일을 바꾸면 여전히 unverified", got.get("state") == "unverified" and "추적 파일" in got.get("reason", ""))
     shutil.rmtree(cache); (proj / "extra.pyc").unlink(); (proj / "new_source.py").unlink()
 
+    # 여러 저장소 작업: 지도 `## 맥락` 의 대상 표(대상·경로·기준 커밋)가 검토 대상을 정한다. 지도를 둔 저장소(홈)는 표에 적었을 때만 대상이다.
+    def lib(name, text):
+        d = t / name; (d / "src").mkdir(parents=True); (d / "AGENTS.md").write_text(f"# {name}\n검사: grep\n"); (d / "src/index.txt").write_text(text)
+        sh(*G, "init", "-q", cwd=d); sh(*G, "add", "-A", cwd=d); sh(*G, "commit", "-qm", "base", cwd=d)
+        return d, sh(*G, "rev-parse", "HEAD", cwd=d).stdout.strip()
+    lib_a, base_a = lib("lib-a", "export old_name\n")
+    lib_b, base_b = lib("lib-b", "use old_name\n")
+    TARGET_HEAD = "| 대상 | 경로 | 기준 커밋 |\n| --- | --- | --- |\n"
+    def multi_map(name, rows):
+        mp = proj / "work" / name / "work.md"; mp.parent.mkdir(parents=True, exist_ok=True)
+        mp.write_text(f"# {name}\n\n## 맥락\n\n{TARGET_HEAD}{rows}\n## 기준\n\n- 요청 원문: lib-a 의 이름을 바꾸고 lib-b 가 새 이름을 쓰게 해 주세요 MULTI-REQ\n\n"
+                      + HEAD + "| R1 | lib-b → src/index.txt → new_name 사용 | 원문 | - | grep | 확정 |\n")
+        return f"work/{name}/work.md"
+    rows_ok = f"| lib-a | {lib_a} | {base_a} |\n| lib-b | {lib_b} | {base_b} |\n"
+    m_multi = multi_map("multi", rows_ok)
+    (lib_b / "src/index.txt").write_text("use new_name LIB-B-CHANGE\n")
+    (proj / "home-note.txt").write_text("HOME-CHANGE\n")
+    rd = prep("--map", m_multi)
+    mprompt = Path(rd["prompt_file"]).read_text() if rd.get("state") == "ready" else ""
+    check("대상 표: 표의 저장소마다 고정본과 기준부터의 diff 가 들어간다(두 번째 저장소의 변경도 검토된다)",
+          rd.get("state") == "ready" and "LIB-B-CHANGE" in mprompt and "lib-a" in mprompt and "lib-b" in mprompt
+          and (Path(rd["target_dir"]) / "lib-b/src/index.txt").read_text() == "use new_name LIB-B-CHANGE\n")
+    check("대상 표: 표에 없는 홈(지도를 둔 저장소)의 변경은 검토 대상이 아니다", rd.get("state") == "ready" and "HOME-CHANGE" not in mprompt)
+    check("대상 표: 대상마다 맥락 도구가 본 경로가 관찰 맥락에 들어간다", str(lib_a.resolve()) in mprompt and str(lib_b.resolve()) in mprompt)
+    check("대상 표: 판정 기준은 이 검토를 만든 키트의 검토자 기준, 실행·검사 명령은 각 대상 폴더의 AGENTS.md, 대상 저장소 내부 규칙은 그 저장소 검토 결과로 받는다",
+          str(verifier.parent / "SKILL.md") in mprompt and "각 대상 폴더" in mprompt and "내부 규칙" in mprompt)
+    got = json.loads(fin(rd["kept"], json.dumps(ok_r1, ensure_ascii=False), "--check", "PASS").stdout.strip().splitlines()[-1]) if rd.get("state") == "ready" else {}
+    check("대상 표: 아무것도 바뀌지 않으면 검토 판정으로 완료(verified)", got.get("state") == "ok" and got.get("completion") == "verified")
+    rd = prep("--map", m_multi, "--request", req_file("lib 두 번째 시도"))
+    if rd.get("state") == "ready":
+        (lib_a / "src/index.txt").write_text("export new_name WHILE-REVIEW\n")
+    got = json.loads(fin(rd["kept"], json.dumps(ok_r1, ensure_ascii=False), "--check", "PASS").stdout.strip().splitlines()[-1]) if rd.get("state") == "ready" else {}
+    check("대상 표: 검토하는 동안 어느 대상이라도 바뀌면 unverified", got.get("state") == "unverified")
+    (lib_a / "src/index.txt").write_text("export old_name\n")
+    rd = prep("--map", multi_map("multi-badbase", f"| lib-a | {lib_a} | {base_a} |\n| lib-b | {lib_b} | {'0' * 40} |\n"))
+    check("대상 표: 한 대상의 기준 커밋을 꺼내지 못하면 전체가 unverified(부분 통과 없음)", rd.get("state") == "unverified" and "lib-b" in rd.get("reason", ""))
+    rd = prep("--map", multi_map("multi-gone", f"| lib-a | {lib_a} | {base_a} |\n| gone | {t / 'gone'} | {base_b} |\n"))
+    check("대상 표: 경로가 없는 대상이 있으면 전체가 unverified", rd.get("state") == "unverified" and "gone" in rd.get("reason", ""))
+    for name, rows, why in (("tbl-sub", f"| lib-a | {lib_a / 'src'} | {base_a} |\n", "최상위"),
+                            ("tbl-nobase", f"| lib-a | {lib_a} |  |\n", "기준 커밋"),
+                            ("tbl-dup", f"| lib-a | {lib_a} | {base_a} |\n| again | {lib_a}/ | {base_a} |\n", "두 번")):
+        rc, o = rec(multi_map(name, rows))
+        check(f"record: 대상 표 형식 오류({why})는 returned", rc == 3 and o.get("state") == "returned" and why in o.get("reason", ""))
+    rc, o = rec(m_multi)
+    check("record: 올바른 대상 표는 형식 문제가 아니다", rc == 0 and o.get("state") == "recorded")
+    r = sh(sys.executable, "-I", str(verifier), "prepare", "--map", m_multi, "--base", "HEAD", cwd=proj, env=base_env)
+    check("대상 표와 --base 를 함께 주면 사용 오류(기준 커밋은 표의 행이 정한다)", r.returncode == 2)
+    (lib_b / "src/index.txt").write_text("use old_name\n"); (proj / "home-note.txt").unlink()
+
 print(f"{ok} passed, {failed} failed")
 sys.exit(1 if failed else 0)
