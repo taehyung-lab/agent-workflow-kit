@@ -14,7 +14,7 @@
     같은 턴 안에서 고쳤다가 되돌리거나 새 파일을 만들었다가 지워도 잡힌다. Write 든 셸이든 도구와 관계없고, 읽기·검색·시험 실행과
     실패한 편집 호출(쓰지 않음)은 사건을 내지 않는다. 감시를 켜지 못하면 그 턴은 관찰 불가(증거 부족)다.
     2026-11-16 지운 것: 대화 기록의 편집 호출 판별(셸 편집을 못 보거나 파일 이름만 적어도 편집으로 셈), 턴 앞뒤 변경 시각 비교(턴 안에서 만들고 지운 파일을 못 봄).
-  - 제품이 아닌 것: 작업 지도·키트·하네스 설정, 캐시, 그리고 시작 커밋에 없던 자료 파일(.json·.csv: 재현으로 앱을 실행하면 생기는 상태).
+  - 제품이 아닌 것: 작업 지도·키트·하네스 설정, 캐시, git 이 무시하는 경로, 폴더 자체의 사건(빈 폴더 만들기), 그리고 시작 커밋에 없던 자료 파일(.json·.csv: 재현으로 앱을 실행하면 생기는 상태).
     시작 커밋에 있던 자료(운영 자료 data.json 등)는 제품이다: 바꾸면 재현이 아니라 변경이다.
 """
 import json, re, subprocess
@@ -52,9 +52,15 @@ def product_changes(proj, base):
 
 
 def turn_writes(paths, proj, base):
-    """턴 동안 파일 사건이 난 경로(turnwatch.Watch.stop) 가운데 제품 파일."""
+    """턴 동안 파일 사건이 난 경로(turnwatch.Watch.stop) 가운데 제품 파일. git 이 무시하는 경로(시험 도구 캐시·로그 등)는
+    product_changes 의 --exclude-standard 와 같은 까닭으로 뺀다: 그 파일은 저장소의 제품이 아니다(2026-11-16 재검토 3‴)."""
     tracked = base_files(proj, base)
-    return sorted(p for p in paths if _product(p, tracked))
+    cand = sorted(p for p in paths if _product(p, tracked))
+    if not cand:
+        return []
+    ignored = subprocess.run([*G, "check-ignore", "-z", "--stdin"], cwd=proj, input="\0".join(cand).encode(), capture_output=True).stdout
+    skip = set(ignored.decode("utf-8", "replace").split("\0"))
+    return [p for p in cand if p not in skip]
 
 
 def log_readable(log):

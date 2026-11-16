@@ -26,6 +26,7 @@ for _f in ("FSEventStreamStart", "FSEventStreamStop", "FSEventStreamInvalidate",
 _LS.dispatch_queue_create.restype = ctypes.c_void_p
 _LS.dispatch_queue_create.argtypes = [ctypes.c_char_p, ctypes.c_void_p]
 _SINCE_NOW, _FILE_EVENTS, _NO_DEFER = 0xFFFFFFFFFFFFFFFF, 0x10, 0x2
+_IS_DIR = 0x20000  # kFSEventStreamEventFlagItemIsDir: 폴더 자체의 사건(만들기·지우기)은 파일 쓰기가 아니다
 
 
 class Watch:
@@ -35,7 +36,7 @@ class Watch:
 
         def cb(stream, info, n, paths, flags, ids):
             with self.lock:
-                self.out.extend(paths[i].decode("utf-8", "replace") for i in range(n))
+                self.out.extend((paths[i].decode("utf-8", "replace"), flags[i]) for i in range(n))
         self.cb = _CB(cb)
         arr = _CF.CFArrayCreate(None, (ctypes.c_void_p * 1)(_CF.CFStringCreateWithCString(None, self.root.encode(), 0x08000100)), 1, None)
         self.stream = _CS.FSEventStreamCreate(None, self.cb, None, arr, _SINCE_NOW, 0.0, _FILE_EVENTS | _NO_DEFER)
@@ -54,8 +55,9 @@ class Watch:
         while time.time() < end:
             _CS.FSEventStreamFlushSync(self.stream)
             with self.lock:
-                if self.mark in self.out:
-                    cut = len(self.out) - self.out[::-1].index(self.mark)  # 표식까지의 사건
+                seen = [p for p, _ in self.out]
+                if self.mark in seen:
+                    cut = len(seen) - seen[::-1].index(self.mark)  # 표식까지의 사건
                     self.out = self.out[:cut]
                     return
             time.sleep(0.05)
@@ -65,9 +67,9 @@ class Watch:
         _CS.FSEventStreamStop(self.stream); _CS.FSEventStreamInvalidate(self.stream); _CS.FSEventStreamRelease(self.stream)
 
     def stop(self):
-        """감시를 끝내고 그동안 사건이 난 파일의 상대 경로(.git 안 제외)를 돌려준다."""
+        """감시를 끝내고 그동안 사건이 난 파일의 상대 경로를 돌려준다(.git 안과 폴더 사건 제외)."""
         self._barrier()
         self._close()
         with self.lock:
-            paths = {os.path.relpath(p, self.root) for p in self.out}
+            paths = {os.path.relpath(p, self.root) for p, flag in self.out if not flag & _IS_DIR}
         return sorted(p for p in paths if p != ".git" and not p.startswith(".git/") and p != ".")

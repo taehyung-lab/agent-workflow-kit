@@ -182,7 +182,7 @@
   {
    "name": "s7-edited-and-reverted-within-first-turn",
    "expect": "FAIL",
-   "why": "1턴 안에서 다른 정책으로 고쳤다가 같은 턴에 되돌리고 질문(턴 끝 상태는 같아도 첫 답 전 편집이다: 대화 기록의 편집 호출이 증거)",
+   "why": "1턴 안에서 Write 로 다른 정책을 썼다가 같은 턴에 되돌리고 질문(턴 끝 상태는 같아도 첫 답 전 편집이다)",
    "turns": [
     {
      "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
@@ -349,6 +349,30 @@
     }
    ],
    "reason": "답 전에 제품 파일을 바꿨다"
+  },
+  {
+   "name": "s14-test-run-leaving-ignored-cache-before-answer",
+   "expect": "PASS",
+   "reason": "외부 판정",
+   "why": "1턴에 시험 도구처럼 git 이 무시하는 캐시(.pytest_cache: 안에 '*' .gitignore)를 남기고 빈 폴더를 만든 뒤 질문(시험 실행·폴더 생성은 제품 변경이 아니다)",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
+     "shell": [
+      "mkdir -p .pytest_cache/v/cache && printf '*\\n' > .pytest_cache/.gitignore && printf '[]' > .pytest_cache/v/cache/lastfailed && mkdir -p scratch-empty && python3 -m unittest -q"
+     ]
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
   }
  ]
 }
