@@ -499,7 +499,17 @@ def diff(base, target, out):
             kept.append(chunk)
     text = "".join(kept).replace(str(base), "a").replace(str(target), "b")
     if removed:
-        text += f"\n지운 파일 {len(removed)}개(내용은 기준 사본 {base} 에 있다):\n" + "".join(f"- {f}\n" for f in removed)
+        # 통째로 없어진 폴더는 맨 위 없어진 폴더 하나와 파일 수로 묶는다
+        groups = {}
+        for f in removed:
+            parts, top = f.split("/"), f
+            for i in range(1, len(parts)):
+                if not os.path.lexists(os.path.join(str(target), *parts[:i])):
+                    top = "/".join(parts[:i]) + "/"
+                    break
+            groups[top] = groups.get(top, 0) + 1
+        text += f"\n지운 파일 {len(removed)}개(내용은 기준 사본 {base} 에 있다):\n" + "".join(
+            f"- {g} (파일 {n}개)\n" if g.endswith("/") else f"- {g}\n" for g, n in groups.items())
     if len(text.encode()) > DIFF_LIMIT:
         return text.encode()[:DIFF_LIMIT].decode("utf-8", "ignore") + f"\n(diff 가 {DIFF_LIMIT} 바이트를 넘어 잘렸다)\n", True, failed
     return text, False, failed

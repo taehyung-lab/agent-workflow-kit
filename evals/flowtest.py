@@ -473,15 +473,20 @@ exit 0
     shutil.rmtree(cache); (proj / "extra.pyc").unlink(); (proj / "new_source.py").unlink()
 
     # 지운 파일은 내용을 diff 에 싣지 않고 목록과 기준 사본 경로로 보인다(큰 삭제가 검토 입력 한도를 채우지 않게. 내용은 기준 사본에 그대로 있다)
-    (proj / "old-notes.txt").write_text("DELETED-CONTENT 1\n" * 50); sh(*G, "add", "-A", cwd=proj); sh(*G, "commit", "-qm", "old notes", cwd=proj)
-    (proj / "old-notes.txt").unlink(); (proj / "ui.txt").write_text("button=로그인하기 DEL-CASE\nbutton_en=Login\n")
+    (proj / "old-notes.txt").write_text("DELETED-CONTENT 1\n" * 50)
+    for i in range(5):
+        (proj / "old-case" / "samples" / str(i)).mkdir(parents=True, exist_ok=True); (proj / "old-case" / "samples" / str(i) / "t.txt").write_text("DELETED-CONTENT\n")
+    sh(*G, "add", "-A", cwd=proj); sh(*G, "commit", "-qm", "old notes", cwd=proj)
+    (proj / "old-notes.txt").unlink(); shutil.rmtree(proj / "old-case"); (proj / "ui.txt").write_text("button=로그인하기 DEL-CASE\nbutton_en=Login\n")
     rd = prep("--request", req_file("삭제 표시 시도"))
     dprompt = Path(rd["prompt_file"]).read_text() if rd.get("state") == "ready" else ""
     check("지운 파일: 검토 입력에는 지운 파일 경로와 기준 사본 위치만 있고 내용은 없다(고친 파일의 diff 는 그대로)",
           "old-notes.txt" in dprompt and "DELETED-CONTENT" not in dprompt and "지운 파일" in dprompt and "DEL-CASE" in dprompt
           and (Path(rd["kept"]) / "base/old-notes.txt").is_file())
-    sh(*G, "checkout", "-q", "--", "old-notes.txt", cwd=proj); (proj / "ui.txt").write_text("button=로그인\nbutton_en=Login\n")
-    sh(*G, "rm", "-q", "old-notes.txt", cwd=proj); sh(*G, "commit", "-qm", "drop notes", cwd=proj)
+    dchange = dprompt[dprompt.find("## 바뀐 내용"):]  # 맥락 도구 관찰(바뀐 파일 이름)은 따로 보이므로 diff 절만 본다
+    check("지운 파일: 통째로 없어진 폴더는 파일마다가 아니라 폴더 하나와 파일 수로 보인다", "old-case/ (파일 5개)" in dchange and "old-case/samples/0" not in dchange)
+    sh(*G, "checkout", "-q", "--", "old-notes.txt", "old-case", cwd=proj); (proj / "ui.txt").write_text("button=로그인\nbutton_en=Login\n")
+    sh(*G, "rm", "-rq", "old-notes.txt", "old-case", cwd=proj); sh(*G, "commit", "-qm", "drop notes", cwd=proj)
 
     # 여러 저장소 작업: 지도 `## 맥락` 의 대상 표(대상·경로·기준 커밋)가 검토 대상을 정한다. 지도를 둔 저장소(홈)는 표에 적었을 때만 대상이다.
     def lib(name, text):
