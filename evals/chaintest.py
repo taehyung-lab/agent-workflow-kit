@@ -22,7 +22,7 @@ HANDOFFS = [
     ("wf-build/SKILL.md", "실행한 명령과 실제 출력을 요구별로 남긴다", "wf-verify/SKILL.md", "요구마다 실행한 명령과 실제 출력으로 확인한다", "구현의 증거 → 결과 검토"),
     ("wf-ask/SKILL.md", "`wf-verify` 의 보고에 밝힌다", "wf-verify/SKILL.md", "묻지 않고 기존 방식대로 정한 표시", "묻지 않고 정한 표시 → 완료 보고"),
     ("wf-build/SKILL.md", "`wf-ask` 로 돌아간다", "wf-ask/SKILL.md", "답이 연 가지를 다시 편다", "구현 중 새 선택 → 요구 확인"),
-    ("wf-verify/SKILL.md", "`wf-ask` 로 돌아가 묻는다", "wf-ask/SKILL.md", "남은 항목을 한 번에 보낸다", "확인받지 않은 결정 → 요구 확인"),
+    ("wf-verify/SKILL.md", "`wf-ask` 로 돌아가 묻는다", "wf-ask/SKILL.md", "한 번에 보낸다", "확인받지 않은 결정 → 요구 확인"),
     ("wf-verify/SKILL.md", "요구는 `wf-ask`, 설계·코드·검사는 `wf-build`", "AGENTS.md", "원인이 앞 단계에 있으면 그 단계를 다시 호출한다", "검토 반환 → 원인 단계"),
     ("wf-verify/SKILL.md", "승인된 후속 작업이 있으면 이어서 한다", "AGENTS.md", "사용자가 승인한 후속 작업", "완료 → 후속 작업"),
     ("AGENTS.md", "`wf-verify` 의 독립 검토를 받는다", "wf-verify/SKILL.md", "AGENTS.md 기본 4가 정한 작업", "필수 독립 검토"),
