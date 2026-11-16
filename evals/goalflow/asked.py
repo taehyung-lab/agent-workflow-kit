@@ -31,8 +31,8 @@ def _plain(text):
     return re.sub(r"[\s*`_>\-•]+", "", text)
 
 
-def asked(reply, topics):
-    """드러낸 주제 번호 목록. 모델이 옮긴 문장이 실제 글에 있을 때만 센다(모델의 해석이 아니라 글에 있는 근거로 고른다)."""
+def surfaced(reply, topics):
+    """드러낸 주제 → 그 주제를 드러낸 인용문(증거). 모델이 옮긴 문장이 실제 글에 있을 때만 센다(모델의 해석이 아니라 글에 있는 근거로 고른다)."""
     reply = reply[:12000]
     numbers = {int(n) for n in re.findall(r"^(\d+)\.", topics, re.M)}
     d = tempfile.mkdtemp()
@@ -43,7 +43,12 @@ def asked(reply, topics):
         raise RuntimeError("모의 사용자 판단 실패: " + (r.stdout + r.stderr)[-300:])
     quotes = json.loads(m.group(0))["quotes"]
     body = _plain(reply)
-    return sorted(int(k) for k, q in quotes.items() if k.isdigit() and int(k) in numbers and isinstance(q, str) and len(_plain(q)) >= 4 and _plain(q) in body)
+    return {int(k): q for k, q in sorted(quotes.items()) if k.isdigit() and int(k) in numbers and isinstance(q, str) and len(_plain(q)) >= 4 and _plain(q) in body}
+
+
+def asked(reply, topics):
+    """드러낸 주제 번호 목록(surfaced 의 주제만)."""
+    return sorted(surfaced(reply, topics))
 
 
 if __name__ == "__main__":

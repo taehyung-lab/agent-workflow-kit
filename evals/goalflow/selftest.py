@@ -134,11 +134,11 @@ def meta_checks():
  # 답 전 턴에 바꾸고 커밋한 뒤 다음 정해진 턴에 되돌려도 답 전 편집이다(턴마다의 변경을 합쳐 본다)
  rev=summary("none",static_turns=2,turns=[dict(summary("none")["turns"][0],product_changes=["accounts.py"]),dict(summary("none")["turns"][1],product_changes=[]),summary("none")["turns"][2]])
  assert verdict(result_meta(rev))=="FAIL" and "accounts.py" in result_meta(rev)["check_output"],result_meta(rev)
- # 결정받기 전에 구현한 주제가 있으면 최종 동작이 맞아도 실패, 확인할 수 없는 주제가 있으면 검토 필요. 최종 동작과 절차는 meta 에 따로 남는다
- first=result_meta(summary("none",decided_first={"3":2}))
- assert verdict(first)=="FAIL" and "결정받기 전" in first["check_output"] and first["goalflow"]["final_behavior"]=="PASS" and first["goalflow"]["process"]=="violation",first
- rev=result_meta(summary("none",review_topics={"2":2}))
- assert verdict(rev)=="REVIEW" and rev["goalflow"]["final_behavior"]=="PASS" and rev["goalflow"]["process"]=="review",rev
+ # 최종 동작과 절차는 meta 에 따로 남는다: 답 전 편집은 최종 동작이 통과여도 실패(process violation, final_behavior PASS)
+ assert pre["goalflow"]["final_behavior"]=="PASS" and pre["goalflow"]["process"]=="violation",pre
+ # 모의 사용자 분류가 실패하면 증거 부족: 검토 필요
+ rev=result_meta(summary("none",mock_error="모의 사용자 판단 실패: ...",failed=["reactivate-restores-login-and-list"],automated_valid=False))  # 대화를 못 끝내 생긴 실패는 판정 근거가 아니다
+ assert verdict(rev)=="REVIEW" and rev["goalflow"]["process"]=="review",rev
  assert result_meta(summary("kit"))["goalflow"]["process"]=="ok"
  # 답을 받은 뒤의 편집만 있으면 그대로 외부 판정을 따른다(위 ok 와 같다)
  # 판정 항목이 없는데 오류도 적히지 않은 결과를 통과로 세지 않는다
@@ -155,51 +155,41 @@ def meta_checks():
   assert by["0123456"][5:8]==["3","1200","1/1"] and by["skills"][5:8]==["2","1200","0/1"] and by["none"][5:8]==["3","1200","0/0"],r.stdout
 
 def conversation_checks():
- """대화 진행(conversation.py) 시험: 모델 대신 낱말로 주제를 고르는 가짜 분류기를 쓴다."""
+ """대화 진행(conversation.py) 시험: 모델 대신 낱말로 주제를 고르는 가짜 분류기를 쓴다(인용문은 그 낱말)."""
  sys.path.insert(0,str(ROOT))
- from conversation import MockUser,product_changes,product_print
+ from conversation import MockUser,product_changes,product_diff,ANSWERED,CLOSE,NOTHING
  answer="이렇게 해 주세요.\n\n1. 정책 일\n2. 정책 이\n3. 정책 삼\n"
- fake=lambda text,topics:[n for n,w in ((1,"주제일"),(2,"주제이"),(3,"주제삼")) if w in text]
- # 주제별 판정(2026-11-16 붙여 넣은 의견의 표). observe(글, 그 턴에 제품이 바뀌었나, 그 턴에 동작이 바뀐 주제 | None=확인 불가)
- # ① 검토자가 재현한 정상 사례: 답받은 주제 1·2 를 구현하면서 아직 구현하지 않은 주제 3 을 물음 → 3 에 답하고 위반·검토 필요 없음
- m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("주제일 주제이 를 어떻게 할까요?",False,{}); m.prompt(2)
- m.observe("1·2 를 구현했습니다. 주제삼 은 어떻게 할까요?",True,{1:"flipped",2:"flipped"})
- p3=m.prompt(3); assert "3. 정책 삼" in p3 and m.decided_first=={} and m.review=={},(p3,m.decided_first,m.review)
- # ①′ 같은 순서인데 주제 3 의 관찰 문구만 바뀜 → 답하고 검토 필요(부작용인지 다른 정책으로 먼저 만든 것인지 바깥 관찰로 가를 수 없다)
- #     (실제 판정기 출력으로 같은 순서와 재검토 2‴ 반례를 보는 시험은 tasks/selftest.py 의 "실제 계정 과제의 판정기 출력")
- m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("주제일 주제이 를 어떻게 할까요?",False,{}); m.prompt(2)
- m.observe("1·2 를 구현했습니다. 주제삼 은 어떻게 할까요?",True,{1:"flipped",2:"flipped",3:"detail"})
- assert "3. 정책 삼" in m.prompt(3) and m.review=={3:2} and m.decided_first=={},(m.review,m.decided_first)
- # ② 이미 구현한 결과를 질문처럼 보고(오인 사례): 그 턴에 주제 3 의 동작이 바뀜 → 정책은 답하되 '결정받기 전 구현'으로 남긴다
- m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("주제일 은?",False,{}); m.prompt(2)
- m.observe("주제삼 은 이렇게 구현했습니다. 괜찮을까요?",True,{1:"flipped",3:"flipped"})
- p3=m.prompt(3); assert "3. 정책 삼" in p3 and m.decided_first=={3:2},(p3,m.decided_first)
- # ③ 그 턴에 제품이 바뀌었는데 주제별 동작을 확인할 수 없으면(None) 검토 필요로 남긴다
- m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("주제일 은?",False,{}); m.prompt(2)
- m.observe("구현했고 주제삼 은 어떻게 할까요?",True,None); m.prompt(3)
- assert m.review=={3:2} and m.decided_first=={},(m.review,m.decided_first)
- # ④ 묻지 않은 주제의 동작이 답 전에 바뀌면(말없이 정했거나 다른 구현의 부작용) 검토 필요. 마무리 턴의 변경은 사용자가 "추천안대로 정해 완료"를 맡긴 것이라 세지 않는다
- m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("주제일 은?",False,{}); m.prompt(2)
- m.observe("1 을 구현했습니다",True,{1:"flipped",2:"flipped",3:"detail"}); m.prompt(3); m.observe("마무리했습니다",True,{3:"flipped"})
- assert m.review=={2:2} and m.decided_first=={},(m.review,m.decided_first)
- # ⑤ 같은 글이라도 그 턴에 제품이 안 바뀌었으면(구현 전) 답하고 위반이 아니다
- m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("주제일",False,{}); m.prompt(2); m.observe("주제삼 은 이렇게 두고 진행하겠습니다",False,{})
- assert "3. 정책 삼" in m.prompt(3) and m.decided_first=={} and m.review=={}
+ fake=lambda text,topics:{n:w for n,w in ((1,"주제일"),(2,"주제이"),(3,"주제삼")) if w in text}
+ # 답 턴에 그때까지 드러낸 주제만 답하고 나머지는 맡긴다. 인용문을 증거로 남긴다
+ m=MockUser(["요청"],answer,"t",fake)
+ assert m.prompt(1)=="요청"; m.observe("주제일 은 어떻게 할까요?")
+ p2=m.prompt(2); assert "1. 정책 일" in p2 and "2. 정책 이" not in p2 and p2.endswith(ANSWERED) and m.quotes=={1:"주제일"},(p2,m.quotes)
+ # 답 뒤에는 정책을 더 알려 주지 않는다(사용자가 남은 결정을 맡겼다): 답 뒤 턴에 새로 물어도 마무리 지시만 간다
+ m.observe("1 을 구현했습니다. 주제삼 은 어떻게 할까요?")
+ assert m.prompt(3)==CLOSE and m.answered=={1}
  # 정정 글이 있으면 답하기 전까지의 글을 함께 분류한다: 정정 턴 답이 앞 질문을 가리키기만 해도 놓치지 않는다
  m=MockUser(["요청","사실은 이런 뜻"],answer,"t",fake)
- m.prompt(1); m.observe("주제이 는 어떻게 할까요?",False,{}); m.prompt(2); m.observe("위 질문에 답해 주세요.",False,{})
+ m.prompt(1); m.observe("주제이 는 어떻게 할까요?"); m.prompt(2); m.observe("위 질문에 답해 주세요.")
  assert m.answer_turn==3 and "2. 정책 이" in m.prompt(3)
- # 제품 변경은 시작 커밋과의 차이: 커밋해도 잡힌다
+ # 드러낸 주제가 없으면 그대로 진행하라고만 한다
+ m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("구현했습니다"); assert m.prompt(2)==NOTHING and m.answered==set()
+ # 분류 실패는 감추지 않는다(compare.py 가 증거 부족으로 남긴다)
+ def broken(text,topics): raise RuntimeError("분류 실패")
+ m=MockUser(["요청"],answer,"t",broken); m.prompt(1); m.observe("주제일?")
+ try: m.prompt(2); raised=False
+ except RuntimeError: raised=True
+ assert raised
+ # 제품 변경은 시작 커밋과의 차이: 커밋해도 잡히고, 증거 diff 에 새 파일 내용까지 남는다
  with tempfile.TemporaryDirectory(prefix="conv-") as d:
   G=["git","-c","user.name=t","-c","user.email=t@invalid","-c","commit.gpgsign=false"]
   run=lambda *a:subprocess.run([*G,*a],cwd=d,capture_output=True,check=True)
   run("init","-q"); Path(d,"app.py").write_text("v1\n"); run("add","-A"); run("commit","-qm","base")
   base=subprocess.run(["git","rev-parse","HEAD"],cwd=d,capture_output=True,text=True).stdout.strip()
-  before=product_print(d,base); assert product_changes(d,base)==[]
+  assert product_changes(d,base)==[]
   Path(d,"app.py").write_text("v2\n"); Path(d,"work").mkdir(); Path(d,"work/map.md").write_text("지도\n"); run("add","-A"); run("commit","-qm","agent")
   assert product_changes(d,base)==["app.py"],product_changes(d,base)
-  assert product_print(d,base)!=before
-  Path(d,"new.py").write_text("x\n"); assert product_changes(d,base)==["app.py","new.py"]
+  Path(d,"new.py").write_text("NEWFILE\n"); assert product_changes(d,base)==["app.py","new.py"]
+  ev=product_diff(d,base); assert "+v2" in ev and "NEWFILE" in ev and "지도" not in ev,ev
 
 if __name__=="__main__":
  rows=run();print(json.dumps(rows,ensure_ascii=False,indent=2));meta_checks();conversation_checks();print(f"{len(rows)} oracle controls passed, meta checks passed, conversation checks passed")

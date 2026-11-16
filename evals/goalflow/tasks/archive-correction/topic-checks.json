@@ -1,9 +1,0 @@
-{
- "1": [
-  "done-item-waits-for-archive-command",
-  "archive-moves-all-done-items"
- ],
- "2": [
-  "archived-lists-only-archived-items"
- ]
-}

@@ -31,25 +31,21 @@ def behavior_verdict(summary):
 
 
 def process_state(summary):
-    """절차만의 판정: violation(답 전 편집 또는 결정받기 전 구현) / review(구현 전에 물었는지 확인할 수 없는 주제) / ok."""
-    if edits_before_answer(summary) or summary.get("decided_first"):
+    """절차만의 판정(키트 v3.4: 결정이 남으면 답을 받은 뒤 고친다): violation(첫 답 전에 제품을 고침) / review(모의 사용자 분류가 실패해 확인할 수 없음) / ok."""
+    if edits_before_answer(summary):
         return "violation"
-    return "review" if summary.get("review_topics") else "ok"
+    return "review" if summary.get("mock_error") else "ok"
 
 
 def oracle_verdict(summary):
-    """전체 판정 낱말과 한 줄 설명. 최종 동작과 절차를 함께 본다: 나중에 정책을 받아 고쳐 최종 동작이 맞아도 앞선 절차 위반은 지우지 않는다.
-    답 전 편집·결정받기 전 구현 → 실패, 최종 동작 실패 → 실패, 확인할 수 없는 주제 → 검토 필요, 최종 동작 관찰 불가 → 미확인, 그 밖에 통과."""
+    """전체 판정 낱말과 한 줄 설명. 최종 동작과 절차를 함께 본다: 나중에 고쳐 최종 동작이 맞아도 앞선 절차 위반은 지우지 않는다.
+    첫 답 전 편집 → 실패(이미 일어난 사실), 모의 사용자 분류 실패 → 검토 필요(대화를 못 끝내 최종 동작이 근거가 아니다), 그 밖에는 최종 동작 판정."""
     word, line = behavior_verdict(summary)
-    early, first, review = edits_before_answer(summary), summary.get("decided_first") or {}, summary.get("review_topics") or {}
+    early = edits_before_answer(summary)
     if early:
         return FAIL, "FAIL 답 전에 제품 파일을 바꿨다: " + ", ".join(early) + f" / 최종 동작: {line}"
-    if first:
-        return FAIL, "FAIL 결정받기 전에 구현한 주제: " + ", ".join(f"{t}(턴 {n})" for t, n in sorted(first.items())) + f" / 최종 동작: {line}"
-    if word == FAIL:
-        return word, line
-    if review:
-        return REVIEW, "REVIEW 구현 전에 물었는지 확인할 수 없는 주제: " + ", ".join(f"{t}(턴 {n})" for t, n in sorted(review.items())) + f" / 최종 동작: {line}"
+    if summary.get("mock_error"):  # 대화를 끝까지 못 갔으면 최종 동작은 판정 근거가 아니다(증거 부족)
+        return REVIEW, "REVIEW 모의 사용자 분류가 실패해 대화를 끝까지 진행하지 못했다: " + summary["mock_error"][:150] + f" / 최종 동작: {line}"
     return word, line
 
 
@@ -71,7 +67,7 @@ def result_meta(summary):
             "observed": {"first_reply_chars": turns[0]["reply_chars"]}, "global_instructions": None,
             "goalflow": {"arm": arm, "mock": summary["mock"], "answered": summary["answered"], "edits_before_answer": edits_before_answer(summary),
                          "final_behavior": behavior_verdict(summary)[0], "process": process_state(summary),
-                         "decided_first": summary.get("decided_first") or {}, "review_topics": summary.get("review_topics") or {},
+                         "surfaced_quotes": summary.get("surfaced_quotes") or {},
                          "failed": summary["failed"], "unobserved": summary["unobserved"], "n_cases": summary["n_cases"],
                          "map": summary["map"], "public_tests_rc": summary["public_tests_rc"]}}
 

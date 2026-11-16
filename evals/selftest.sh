@@ -422,6 +422,14 @@ else
   ng "과제 판정기"
   cat "$task_log"
 fi
+# 판정기 사례: 기대 판정(키트의 요구 확정 기준에서 정함)이 있는 대화를 가짜 하네스로 compare.py 끝까지 돌려 판정이 맞는지 본다(모델 없음)
+scen_log=$(mktemp)
+if python3 -I "$here/goalflow/scenarios.py" > "$scen_log" 2>&1; then
+  ok "판정기 사례 $(tail -1 "$scen_log")"
+else
+  ng "판정기 사례"
+  cat "$scen_log"
+fi
 rm -f "$task_log"
 # 요청에서 완료까지의 연결(모델 호출 없음): 단계 표·단계 사이 넘겨주기·글 속 가리킴이 끊기지 않았다.
 chain_log=$(mktemp)

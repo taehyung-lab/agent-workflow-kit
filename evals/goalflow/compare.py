@@ -32,8 +32,8 @@ from session import kit_checkout  # noqa: E402
 import pins  # noqa: E402
 from transcript import read, commands, replies  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from asked import asked  # noqa: E402
-from conversation import MockUser, changed_topics, product_changes as changes_since, product_print, topic_behavior  # noqa: E402
+from asked import surfaced  # noqa: E402
+from conversation import MockUser, product_changes as changes_since, product_diff  # noqa: E402
 from table import result_meta  # noqa: E402
 
 arm, harness, idx, out = sys.argv[1], sys.argv[2], sys.argv[3], Path(sys.argv[4]).resolve()
@@ -69,13 +69,13 @@ agents_md_bytes = (proj / "AGENTS.md").stat().st_size if (proj / "AGENTS.md").is
 request = next(f for f in (TASK / "request.txt", TASK / "fixture/request.txt") if f.is_file()).read_text(encoding="utf-8").strip()
 answer = (TASK / "answer.txt").read_text(encoding="utf-8").strip()
 topics = (TASK / "topics.txt").read_text(encoding="utf-8").strip()
-# 모의 사용자(MOCK=asked): 제품을 바꾸지 않은 턴에 드러낸 주제만 answer.txt 의 정책으로 답한다(conversation.py). all: 정책을 전부 알려 준다.
+# 모의 사용자(MOCK=asked): 답 턴에 그때까지 드러낸 주제만 answer.txt 의 정책으로 답하고 나머지는 맡긴다(conversation.py). all: 정책을 전부 알려 준다.
 MOCK = os.environ.get("MOCK", "asked")
 PREFIX = os.environ.get("CMP_PREFIX", "grilling 스킬로 요구를 확인한 다음 tdd 스킬로 구현해 주세요." if arm == "skills" else "")
 FIRST = (PREFIX + "\n\n" if PREFIX else "") + request
 # 정해진 사용자 글(요청, 있으면 followup.txt). 그 뒤 턴은 모의 사용자의 답, 마지막은 마무리 지시다.
 STATIC = [FIRST] + ([(TASK / "followup.txt").read_text(encoding="utf-8").strip()] if (TASK / "followup.txt").is_file() else [])
-mock = MockUser(STATIC, answer, topics, asked, MOCK)
+mock = MockUser(STATIC, answer, topics, surfaced, MOCK)
 
 # ---- 세션(전역 설정 격리) ----
 env = dict(os.environ)
@@ -120,10 +120,14 @@ def product_changes():
     return changes_since(proj, base)
 
 
-behavior = topic_behavior(TASK, proj)  # 주제별 판정 항목 결과(턴 앞뒤로 비교해 그 턴에 동작이 바뀐 주제를 안다)
+mock_error = None
 for n in range(1, mock.turns + 1):
-    before, print_before = set(mock.answered), product_print(proj, base)
-    prompt = mock.prompt(n)
+    before = set(mock.answered)
+    try:
+        prompt = mock.prompt(n)
+    except RuntimeError as e:  # 모의 사용자 분류 실패: 증거 부족(검토 필요)으로 남기고 멈춘다
+        mock_error = str(e)[:300]
+        break
     rc, log, secs = launch(n, prompt)
     try:
         final = read(str(log))[1] or ""
@@ -135,10 +139,8 @@ for n in range(1, mock.turns + 1):
         cmds = []
     # 모의 사용자는 이 턴에 에이전트가 쓴 글 전부를 읽는다. 마지막 글만 읽으면, 질문을 앞 글에 쓰고 마지막에 "위 질문에 답해 달라"고만 한 경우
     # 분류기가 내용 없는 글을 보고 물은 것으로 세어 묻지 않은 답까지 준다(2026-11-13 표본 라벨 과제의 스킬 구성 3회가 그랬다).
-    product_changed = product_print(proj, base) != print_before
-    after = topic_behavior(TASK, proj) if product_changed else behavior  # 제품이 그대로면 동작도 그대로다
-    mock.observe("\n\n".join(replies(str(log))) or final, product_changed, changed_topics(behavior, after))
-    behavior = after
+    mock.observe("\n\n".join(replies(str(log))) or final)
+    (out / f"{name}.t{n}.diff").write_text(product_diff(proj, base), encoding="utf-8")  # 증거: 그 턴이 끝났을 때의 제품 변경
     rows.append({"turn": n, "rc": rc, "answered_now": sorted(mock.answered - before), "seconds": secs, "product_changes": product_changes(), "reply_chars": len(final),
                  "question_marks": final.count("?") + final.count("？"), "reply": final[:6000],
                  "record_runs": sum(bool(re.search(r"verify\.py\s+record\b", c["command"])) for c in cmds),
@@ -167,7 +169,7 @@ if harness == "claude":
             break
 summary = {"name": name, "task": TASK_NAME, "model": pins.model(harness), "mock_user_model": pins.mock_user_model() if MOCK == "asked" else None, "harness_version": pins.cli_version(harness), "static_turns": len(STATIC), "arm": arm, "harness": harness, "run": int(idx) if idx.isdigit() else idx, "kit_ref": kit_ref, "kit_commit": kit_commit, "agents_md_bytes": agents_md_bytes, "base": base, "seconds": int(time.time() - started), "turns": rows,
            "mock": MOCK, "answered": sorted(mock.answered),
-           "decided_first": {str(t): n for t, n in mock.decided_first.items()}, "review_topics": {str(t): n for t, n in mock.review.items()}, "map": any((proj / "work").glob("*/work.md")), "final_changes": product_changes(), "init": init,
+           "surfaced_quotes": {str(t): q for t, q in mock.quotes.items()}, "mock_error": mock_error, "map": any((proj / "work").glob("*/work.md")), "final_changes": product_changes(), "init": init,
            "oracle_exit": oracle.returncode, "automated_valid": verdict.get("automated_valid"), "observation_complete": verdict.get("observation_complete"),
            "failed": [c.get("name") for c in cases if c.get("passed") is False], "failed_decision": verdict.get("failed_decision"), "unobserved": [c.get("name") for c in cases if c.get("passed") is None],
            "n_cases": len(cases), "oracle_error": verdict.get("error"), "public_tests_rc": smoke.returncode}
