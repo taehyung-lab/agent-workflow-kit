@@ -251,7 +251,7 @@ def target_table(context, root):
         if path is not None and not path.is_absolute():
             path = Path(root, path)
         top = run(["git", "rev-parse", "--show-toplevel"], cwd=path).stdout.decode().strip() if path and path.is_dir() else ""
-        if not name or not re.fullmatch(r"[\w.-]+", name):
+        if not name or not re.fullmatch(r"[\w.-]+", name) or set(name) == {"."}:
             problems.append(f"{label}: 대상 이름은 비지 않은 한 낱말(글자·숫자·._-)이어야 한다(검토 폴더 이름으로 쓴다)")
         elif path is None or not path.is_dir():
             problems.append(f"{label}: 경로 {raw or '(빈 칸)'} 가 없다")

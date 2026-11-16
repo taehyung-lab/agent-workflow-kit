@@ -512,7 +512,8 @@ exit 0
     check("대상 표: 경로가 없는 대상이 있으면 전체가 unverified", rd.get("state") == "unverified" and "gone" in rd.get("reason", ""))
     for name, rows, why in (("tbl-sub", f"| lib-a | {lib_a / 'src'} | {base_a} |\n", "최상위"),
                             ("tbl-nobase", f"| lib-a | {lib_a} |  |\n", "기준 커밋"),
-                            ("tbl-dup", f"| lib-a | {lib_a} | {base_a} |\n| again | {lib_a}/ | {base_a} |\n", "두 번")):
+                            ("tbl-dup", f"| lib-a | {lib_a} | {base_a} |\n| again | {lib_a}/ | {base_a} |\n", "두 번"),
+                            ("tbl-dots", f"| .. | {lib_a} | {base_a} |\n", "이름")):
         rc, o = rec(multi_map(name, rows))
         check(f"record: 대상 표 형식 오류({why})는 returned", rc == 3 and o.get("state") == "returned" and why in o.get("reason", ""))
     rc, o = rec(m_multi)
