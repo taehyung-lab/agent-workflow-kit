@@ -3,6 +3,8 @@
   python3 -I evals/goalflow/scenarios.py [키트 폴더 ...]
 
 키트 폴더를 주지 않으면 이 저장소의 판정기를 돈다. 여러 폴더(다른 커밋의 worktree)를 주면 같은 사례로 판정기 버전을 나란히 비교한다.
+사례는 기대 판정(expect)과 판정 이유에 들어 있어야 할 말(reason)을 함께 정한다: 낱말만 맞고 이유가 다르면(예: 절차 위반을 봐야 할 사례가
+최종 동작 때문에 실패) "<낱말>?" 로 보이고 맞음에 세지 않는다.
 보이는 것: 사례별 판정, 그리고 판정기마다 맞음·잘못된 통과(기대가 실패·검토 필요인데 통과)·잘못된 실패(기대가 통과·검토 필요인데 실패)·검토 필요 수.
 "통과가 늘었나"가 아니라 "잘못 판정하는 일과 사람이 읽어야 하는 몫이 줄었나"를 보려는 것이다. 첫 판정기가 기대와 하나라도 다르면 종료 1.
 
@@ -45,6 +47,12 @@ for argv in turn.get("run", []):  # 재현: 앱·시험 실행(제품 파일을 
     subprocess.run([sys.executable, *argv], capture_output=True)
 if turn.get("run"):
     assert os.path.exists("users.json"), "재현 명령이 자료 파일을 만들지 않았다: 사례가 재현을 시험하지 못한다"
+for cmd in turn.get("shell", []):  # 셸 명령(도구 호출 기록은 Bash 하나)
+    print(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": f"s{n}", "name": "Bash", "input": {"command": cmd}}]}}))
+    subprocess.run(cmd, shell=True, capture_output=True)
+if turn.get("control"):  # 과제의 정답 구현(control/)을 그대로 쓴다
+    for f in os.listdir(os.environ["SCEN_CONTROL"]):
+        shutil.copy(os.path.join(os.environ["SCEN_CONTROL"], f), f)
 if turn.get("garble_log"):  # 읽을 수 없는 기록 줄(대화 기록 손상)
     print("{not json")
 if turn.get("write"):
@@ -82,12 +90,13 @@ def variants(task_dir, out):
 def run_case(kit, suite, case, work):
     task_dir = kit / "evals/goalflow/tasks" / suite["task"]
     d = Path(tempfile.mkdtemp(dir=work)); (d / "bin").mkdir(); (d / "v").mkdir()
-    variants(task_dir, d / "v")
+    if suite.get("variants", True):
+        variants(task_dir, d / "v")
     (d / "bin/claude").write_text(FAKE, encoding="utf-8"); (d / "bin/claude").chmod(0o755)
     (d / "scen.json").write_text(json.dumps(case, ensure_ascii=False), encoding="utf-8")
     (d / "pins.json").write_text(json.dumps({"claude": {"cli": "fake 0", "model": "m"}, "codex": {"cli": "fake 0", "model": "m"}, "mock_user": "m"}))
     env = {**os.environ, "PATH": f"{d / 'bin'}:{os.environ['PATH']}", "CMP_TASK": suite["task"], "EVALS_PINS": str(d / "pins.json"),
-           "SCEN_FILE": str(d / "scen.json"), "SCEN_N": str(d / "n"), "SCEN_VARIANTS": str(d / "v")}
+           "SCEN_FILE": str(d / "scen.json"), "SCEN_N": str(d / "n"), "SCEN_VARIANTS": str(d / "v"), "SCEN_CONTROL": str(task_dir / "control")}
     subprocess.run([sys.executable, "-I", str(kit / "evals/goalflow/compare.py"), "none", "claude", "1", str(d / "out")],
                    env=env, capture_output=True, text=True, timeout=600)
     metas = list((d / "out").glob("*.meta.json"))
@@ -108,6 +117,8 @@ def main(kits):
                 row = []
                 for i, kit in enumerate(kits):
                     word, line = run_case(kit, suite, case, Path(work))
+                    if word == case["expect"] and case["reason"] not in line:  # 판정 낱말이 맞아도 이유가 다르면 우연히 맞은 것이다
+                        word = word + "?"
                     t = tally[kit.name]
                     t["검토 필요"] += word == "REVIEW"
                     if word == case["expect"]:
@@ -117,7 +128,7 @@ def main(kits):
                     elif word == "FAIL":
                         t["잘못된 실패"] += 1
                     else:
-                        t["그 밖"] += 1
+                        t["그 밖"] += 1  # 오류·이유가 다른 판정
                     mismatch_first += i == 0 and word != case["expect"]
                     row.append(f"{word}{'' if word == case['expect'] else '✗'}")
                 print(f"{case['name']:<48} 기대 {case['expect']:<7} " + "  ".join(f"{n}: {w}" for n, w in zip(names, row)))

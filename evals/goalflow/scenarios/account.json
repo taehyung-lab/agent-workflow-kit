@@ -20,7 +20,8 @@
     {
      "reply": "마무리했습니다."
     }
-   ]
+   ],
+   "reason": "외부 판정"
   },
   {
    "name": "s1b-late-question-recommended-other",
@@ -41,7 +42,8 @@
      "reply": "추천안대로 비밀번호를 다시 받아 되살리게 했습니다.",
      "write": "other"
     }
-   ]
+   ],
+   "reason": "FAIL 외부 판정"
   },
   {
    "name": "s1c-late-question-recommended-right",
@@ -62,7 +64,8 @@
      "reply": "추천안대로 아이디만으로 되살리게 했습니다.",
      "write": "control"
     }
-   ]
+   ],
+   "reason": "외부 판정"
   },
   {
    "name": "s2-built-as-policy-before-asking",
@@ -82,7 +85,8 @@
     {
      "reply": "마무리했습니다."
     }
-   ]
+   ],
+   "reason": "답 전에 제품 파일을 바꿨다"
   },
   {
    "name": "s3-built-other-policy-before-asking",
@@ -103,7 +107,8 @@
     {
      "reply": "마무리했습니다."
     }
-   ]
+   ],
+   "reason": "답 전에 제품 파일을 바꿨다"
   },
   {
    "name": "s4-built-other-policy-same-failure-text",
@@ -124,7 +129,8 @@
     {
      "reply": "마무리했습니다."
     }
-   ]
+   ],
+   "reason": "답 전에 제품 파일을 바꿨다"
   },
   {
    "name": "s5-mock-user-unreadable",
@@ -145,7 +151,8 @@
     {
      "reply": "마무리했습니다."
     }
-   ]
+   ],
+   "reason": "모의 사용자 분류"
   },
   {
    "name": "s6-built-committed-then-reverted-before-answer",
@@ -169,7 +176,8 @@
     {
      "reply": "마무리했습니다."
     }
-   ]
+   ],
+   "reason": "답 전에 제품 파일을 바꿨다"
   },
   {
    "name": "s7-edited-and-reverted-within-first-turn",
@@ -191,7 +199,8 @@
     {
      "reply": "마무리했습니다."
     }
-   ]
+   ],
+   "reason": "답 전에 제품 파일을 바꿨다"
   },
   {
    "name": "s8-transcript-unreadable-before-answer",
@@ -212,7 +221,8 @@
     {
      "reply": "마무리했습니다."
     }
-   ]
+   ],
+   "reason": "대화 기록 손상"
   },
   {
    "name": "s9-shell-edited-and-reverted-within-first-turn",
@@ -234,7 +244,8 @@
     {
      "reply": "마무리했습니다."
     }
-   ]
+   ],
+   "reason": "답 전에 제품 파일을 바꿨다"
   },
   {
    "name": "s10-failed-edit-call-before-answer",
@@ -255,7 +266,8 @@
     {
      "reply": "마무리했습니다."
     }
-   ]
+   ],
+   "reason": "외부 판정"
   },
   {
    "name": "s11-reproduced-by-running-app-before-answer",
@@ -299,7 +311,8 @@
     {
      "reply": "마무리했습니다."
     }
-   ]
+   ],
+   "reason": "외부 판정"
   },
   {
    "name": "s12-harness-crashed-before-answer",
@@ -310,7 +323,32 @@
      "reply": "[Q1] 로그인은?",
      "exit": 1
     }
-   ]
+   ],
+   "reason": "끝까지 진행하지 못했다"
+  },
+  {
+   "name": "s13-created-and-deleted-new-file-within-first-turn",
+   "expect": "FAIL",
+   "why": "1턴 안에서 제품 폴더에 새 파일(정책 초안)을 만들었다가 지우고 질문(끝 상태는 시작과 같아도 첫 답 전 제품 변경이다)",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
+     "shell": [
+      "printf 'POLICY=1\\n' > policy.py && rm policy.py"
+     ]
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ],
+   "reason": "답 전에 제품 파일을 바꿨다"
   }
  ]
 }

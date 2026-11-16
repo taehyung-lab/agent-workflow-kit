@@ -9,24 +9,34 @@
   - 답 뒤 턴의 새 질문을 판정하려고 정책 검사 결과·실패 문구로 "이미 구현했나"를 추론하던 장치는 2026-11-16 지웠다:
     정책 검사는 "정책에 맞나"에 답할 뿐 "구현했나"에 답하지 못했고(독립 검토 네 번 반려), 위 기준에서는 그 판정이 필요 없다.
 제품 변경은 파일 시스템에서 센다(대화 기록의 도구 호출은 쓰지 않는다):
-  - 턴이 끝났을 때 시작 커밋(base)과의 차이: 커밋해도 잡힌다.
-  - 턴 앞뒤의 파일 변경 시각(ctime): 같은 턴 안에서 고쳤다가 되돌려 내용이 같아도 잡힌다. 쓰기만 이 시각을 바꾸고 에이전트가 되돌릴 수 없으며,
-    읽기·검색·시험 실행은 바꾸지 않는다. Write 든 셸이든 도구와 관계없고, 실패한 편집 호출(쓰지 않음)은 잡히지 않는다.
-    대화 기록에서 편집을 읽던 방식은 2026-11-16 지웠다: 셸 편집을 못 보거나(경로 명시 기록만), 파일 이름을 적기만 해도 편집으로 셌다(셸 판별).
-  한계: 한 턴 안에서 새 파일을 만들었다가 지우면 앞뒤 어느 쪽에도 없어 잡히지 않는다.
+  - 턴이 끝났을 때 시작 커밋(base)과의 차이: 커밋해도 잡힌다(product_changes).
+  - 턴 동안 운영체제가 낸 파일 사건(turnwatch.py, macOS FSEvents): 쓰거나 만들거나 지운 파일이 모두 남아,
+    같은 턴 안에서 고쳤다가 되돌리거나 새 파일을 만들었다가 지워도 잡힌다. Write 든 셸이든 도구와 관계없고, 읽기·검색·시험 실행과
+    실패한 편집 호출(쓰지 않음)은 사건을 내지 않는다. 감시를 켜지 못하면 그 턴은 관찰 불가(증거 부족)다.
+    2026-11-16 지운 것: 대화 기록의 편집 호출 판별(셸 편집을 못 보거나 파일 이름만 적어도 편집으로 셈), 턴 앞뒤 변경 시각 비교(턴 안에서 만들고 지운 파일을 못 봄).
+  - 제품이 아닌 것: 작업 지도·키트·하네스 설정, 캐시, 그리고 시작 커밋에 없던 자료 파일(.json·.csv: 재현으로 앱을 실행하면 생기는 상태).
+    시작 커밋에 있던 자료(운영 자료 data.json 등)는 제품이다: 바꾸면 재현이 아니라 변경이다.
 """
-import hashlib, json, re, subprocess
+import json, re, subprocess
 from pathlib import Path
 
-# 제품이 아닌 것: 작업 지도·키트·하네스 설정, 실행이 만든 캐시와 앱이 저장하는 자료(.json·.csv 포함).
-# 자료는 앱 상태다: v3.4 가 허용하는 재현(앱 실행)이 만들고 바꾼다. 정책은 코드·문서에 구현된다(2026-11-16 사례 s11).
+# 제품이 아닌 것: 작업 지도·키트·하네스 설정, 실행이 만든 캐시. 자료 파일(STORE)은 시작 커밋에 없을 때만 제품이 아니다(new_state).
 SKIP = ("work/", ".claude/", ".agents/", ".codex/", "AGENTS.md", "CLAUDE.md")
-DATA = (".pyc", ".db", ".sqlite", ".sqlite3", ".db-journal", ".db-wal", ".db-shm", ".json", ".csv")
+DATA = (".pyc", ".db", ".sqlite", ".sqlite3", ".db-journal", ".db-wal", ".db-shm")
+STORE = (".json", ".csv")
 G = ["git", "-c", "core.fsmonitor=false"]
 
 
-def _product(path):
-    return not path.startswith(SKIP) and "__pycache__" not in path and not path.endswith(DATA)
+def _product(path, tracked=None):
+    """제품 파일인가. tracked(시작 커밋의 파일 집합)를 주면 거기 없던 자료 파일(재현이 만든 앱 상태)은 제품이 아니다."""
+    if path.startswith(SKIP) or "__pycache__" in path or path.endswith(DATA):
+        return False
+    return not (tracked is not None and path.endswith(STORE) and path not in tracked)
+
+
+def base_files(proj, base):
+    """시작 커밋에 있는 파일 집합."""
+    return set(_git(proj, "ls-tree", "-r", "--name-only", "-z", base).decode("utf-8", "replace").split("\0")) - {""}
 
 
 def _git(proj, *args):
@@ -37,27 +47,14 @@ def product_changes(proj, base):
     """시작 커밋 base 와 지금 작업 폴더가 다른 제품 파일(커밋했든 안 했든, 새 파일 포함)."""
     changed = _git(proj, "diff", "--name-only", "-z", base).decode("utf-8", "replace").split("\0")
     new = _git(proj, "ls-files", "--others", "--exclude-standard", "-z").decode("utf-8", "replace").split("\0")
-    return sorted({f for f in changed + new if f and _product(f)})
+    tracked = base_files(proj, base)
+    return sorted({f for f in changed + new if f and _product(f, tracked)})
 
 
-def product_snapshot(proj):
-    """지금 작업 폴더의 제품 파일마다 (변경 시각, 내용 지문)."""
-    names = _git(proj, "ls-files", "-z", "--cached", "--others", "--exclude-standard").decode("utf-8", "replace").split("\0")
-    snap = {}
-    for f in {n for n in names if n and _product(n)}:
-        path = Path(proj, f)
-        try:
-            st = path.stat()
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        except OSError:
-            continue
-        snap[f] = (st.st_ctime_ns, digest)
-    return snap
-
-
-def touched_files(before, after):
-    """두 스냅숏 사이에 쓰인 제품 파일: 생기거나 없어졌거나, 내용 또는 변경 시각이 바뀐 것."""
-    return sorted(f for f in set(before) | set(after) if before.get(f) != after.get(f))
+def turn_writes(paths, proj, base):
+    """턴 동안 파일 사건이 난 경로(turnwatch.Watch.stop) 가운데 제품 파일."""
+    tracked = base_files(proj, base)
+    return sorted(p for p in paths if _product(p, tracked))
 
 
 def log_readable(log):
