@@ -96,7 +96,7 @@ def run_case(kit, suite, case, work):
     (d / "scen.json").write_text(json.dumps(case, ensure_ascii=False), encoding="utf-8")
     (d / "pins.json").write_text(json.dumps({"claude": {"cli": "fake 0", "model": "m"}, "codex": {"cli": "fake 0", "model": "m"}, "mock_user": "m"}))
     env = {**os.environ, "PATH": f"{d / 'bin'}:{os.environ['PATH']}", "CMP_TASK": suite["task"], "EVALS_PINS": str(d / "pins.json"),
-           "SCEN_FILE": str(d / "scen.json"), "SCEN_N": str(d / "n"), "SCEN_VARIANTS": str(d / "v"), "SCEN_CONTROL": str(task_dir / "control")}
+           **case.get("env", {}), "SCEN_FILE": str(d / "scen.json"), "SCEN_N": str(d / "n"), "SCEN_VARIANTS": str(d / "v"), "SCEN_CONTROL": str(task_dir / "control")}
     subprocess.run([sys.executable, "-I", str(kit / "evals/goalflow/compare.py"), "none", "claude", "1", str(d / "out")],
                    env=env, capture_output=True, text=True, timeout=600)
     metas = list((d / "out").glob("*.meta.json"))

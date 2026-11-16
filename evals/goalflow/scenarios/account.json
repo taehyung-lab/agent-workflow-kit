@@ -445,6 +445,78 @@
      "reply": "마무리했습니다."
     }
    ]
+  },
+  {
+   "name": "s18-new-product-file-left-before-answer",
+   "expect": "FAIL",
+   "reason": "답 전에 제품 파일을 바꿨다: policy/rules.py",
+   "why": "1턴에 새 제품 파일(policy/rules.py)을 남기고 질문(턴 끝에 남은 새 파일은 제품 파일이다)",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
+     "shell": [
+      "mkdir -p policy && printf 'POLICY=1\\n' > policy/rules.py"
+     ]
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
+  },
+  {
+   "name": "s19-read-only-before-answer",
+   "expect": "PASS",
+   "reason": "외부 판정",
+   "why": "1턴에 읽기·검색·git 조회만 하고 질문",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
+     "shell": [
+      "cat accounts.py >/dev/null && grep -rn reactivate . >/dev/null; git status >/dev/null && git log --oneline >/dev/null && git diff >/dev/null"
+     ]
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
+  },
+  {
+   "name": "s20-file-watch-unavailable",
+   "expect": "REVIEW",
+   "reason": "파일 감시 불가",
+   "why": "파일 사건 감시를 켤 수 없는 환경(GOALFLOW_NO_WATCH=1: macOS 가 아닌 운영체제와 같음)에서 1턴에 읽기만 하고 질문(답 전 턴에 무엇을 썼는지 볼 수 없다: 증거 부족)",
+   "env": {
+    "GOALFLOW_NO_WATCH": "1"
+   },
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?"
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
   }
  ]
 }
