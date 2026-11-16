@@ -481,39 +481,28 @@ def materialize_rev(root, rev, dest):
 
 
 def diff(base, target, out):
-    """(검토자 입력용 diff, 잘렸나, 실행이 실패했나). 전체 diff 는 out 파일에 남긴다.
+    """(검토자 입력용 diff, 잘렸나, 실행이 실패했나). 전체 diff(지운 파일 내용 포함)는 out 파일에 남긴다.
     검토자 입력에서 지운 파일은 내용 대신 경로만 「지운 파일」 목록으로 보인다: 내용은 기준 사본(base)에 그대로 있고,
-    지운 내용을 통째로 실으면 큰 삭제가 입력 한도를 채워 고친·새 파일을 검토하지 못한다."""
-    # 링크는 따라가지 않고 링크로 비교한다(.claude/skills 같은 링크가 같은 변경을 두 번 내거나, 대상 없는 링크가 잡음을 내지 않게)
-    r = run(["diff", "-ruN", "--no-dereference", "-x", ".git", "-x", "work", str(base), str(target)])
-    raw = r.stdout.decode("utf-8", "replace")
-    Path(out).write_text(raw.replace(str(base), "a").replace(str(target), "b"), encoding="utf-8")
-    failed = r.returncode not in (0, 1)  # diff: 0 같음, 1 다름, 2 오류
+    지운 내용을 통째로 실으면 큰 삭제가 입력 한도를 채워 고친·새 파일을 검토하지 못한다.
+    diff 출력을 사후에 골라내지 않는다: --unidirectional-new-file 은 새 파일만 내용으로 보이고 지운 파일·폴더는 "Only in" 한 줄로 낸다.
+    링크는 따라가지 않고 링크로 비교한다(.claude/skills 같은 링크가 같은 변경을 두 번 내거나, 대상 없는 링크가 잡음을 내지 않게)."""
+    common = ["--no-dereference", "-x", ".git", "-x", "work", str(base), str(target)]
+    full = run(["diff", "-ruN", *common])
+    Path(out).write_text(full.stdout.decode("utf-8", "replace").replace(str(base), "a").replace(str(target), "b"), encoding="utf-8")
+    r = run(["diff", "-ru", "--unidirectional-new-file", *common])
+    failed = r.returncode not in (0, 1) or full.returncode not in (0, 1)  # diff: 0 같음, 1 다름, 2 오류
     kept, removed = [], []
-    for chunk in re.split(r"(?m)^(?=diff -ruN )", raw):
-        # 머리줄: "diff -ruN <옵션들> <기준 파일> <대상 파일>". 대상 쪽 경로는 target 폴더 아래에서 시작한다
-        m = re.match(r"diff -ruN .* (" + re.escape(str(target)) + r"/[^\n]*)\n", chunk)
-        if m and not os.path.lexists(m.group(1)):
-            removed.append(os.path.relpath(m.group(1), str(target)))
-            # diff 가 머리줄 없이 내는 줄(바이너리 변경, 폴더↔파일 바뀜, 읽기 오류)이 이 덩어리 끝에 붙어 있으면 지운 파일과 함께 버리지 않는다
-            # 남길 줄은 그 모양으로 고른다(줄은 "\n" 으로만 나눈다: 지운 파일 안의 \r·폼피드로 끊긴 글이 남는 줄로 섞이지 않게)
-            orphans = [l + "\n" for l in chunk.split("\n")[1:] if l.startswith(("Binary files ", "File ", "Only in ", "diff: ", "Common subdirectories"))]
-            kept.extend(orphans)
-        else:
-            kept.append(chunk)
-    text = "".join(kept).replace(str(base), "a").replace(str(target), "b")
+    for line in r.stdout.decode("utf-8", "replace").split("\n"):
+        m = re.match(r"Only in (" + re.escape(str(base)) + r")(/[^:]*)?: (.*)$", line)
+        if not m:
+            kept.append(line)
+            continue
+        rel = ((m.group(2) or "").lstrip("/") + "/" + m.group(3)).lstrip("/")
+        p = Path(base, rel)
+        removed.append(f"- {rel}/ (파일 {sum(1 for f in p.rglob('*') if f.is_file() or f.is_symlink())}개)" if p.is_dir() and not p.is_symlink() else f"- {rel}")
+    text = "\n".join(kept).replace(str(base), "a").replace(str(target), "b")
     if removed:
-        # 통째로 없어진 폴더는 맨 위 없어진 폴더 하나와 파일 수로 묶는다
-        groups = {}
-        for f in removed:
-            parts, top = f.split("/"), f
-            for i in range(1, len(parts)):
-                if not os.path.lexists(os.path.join(str(target), *parts[:i])):
-                    top = "/".join(parts[:i]) + "/"
-                    break
-            groups[top] = groups.get(top, 0) + 1
-        text += f"\n지운 파일 {len(removed)}개(내용은 기준 사본 {base} 에 있다):\n" + "".join(
-            f"- {g} (파일 {n}개)\n" if g.endswith("/") else f"- {g}\n" for g, n in groups.items())
+        text += f"\n지운 파일·폴더 {len(removed)}개(내용은 기준 사본 {base} 에 있다):\n" + "\n".join(removed) + "\n"
     if len(text.encode()) > DIFF_LIMIT:
         return text.encode()[:DIFF_LIMIT].decode("utf-8", "ignore") + f"\n(diff 가 {DIFF_LIMIT} 바이트를 넘어 잘렸다)\n", True, failed
     return text, False, failed

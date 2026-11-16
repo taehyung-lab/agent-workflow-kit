@@ -296,20 +296,21 @@ python3 -I - "$here" <<'PY' && ok "비교 보고: 섞인 결과는 말할 수 �
 import json, subprocess, sys, tempfile
 from pathlib import Path
 here = Path(sys.argv[1])
-def meta(d, case, commit, passed, review=False, gi="a", model="m"):
+def meta(d, case, commit, passed, review=False, gi="a", model="m", mock="u"):
     m = {"case": case, "harness": "claude", "kit_commit": commit * 5, "input": "original", "check_passed": passed, "check_needs_review": review,
-         "check_unverified": False, "global_instructions": {"g": gi}, "harness_version": "1", "judge_version": "j", "model": model,
+         "check_unverified": False, "global_instructions": {"g": gi}, "harness_version": "1", "judge_version": "j", "model": model, "mock_user_model": mock,
          "observed": {"first_reply_chars": 100}, "completion": "not-verified"}
-    Path(d, f"{case}-{commit}-{passed}-{review}-{gi}-{model}.meta.json").write_text(json.dumps(m))
+    Path(d, f"{case}-{commit}-{passed}-{review}-{gi}-{model}-{mock}.meta.json").write_text(json.dumps(m))
 with tempfile.TemporaryDirectory() as d:
     meta(d, "reg", "aaaaaaaa", True); meta(d, "reg", "bbbbbbbb", False)
     meta(d, "rec", "aaaaaaaa", False); meta(d, "rec", "bbbbbbbb", False)
     meta(d, "rev", "aaaaaaaa", False); meta(d, "rev", "bbbbbbbb", False, review=True)
     meta(d, "cmp", "aaaaaaaa", True); meta(d, "cmp", "bbbbbbbb", True, gi="b")
     meta(d, "mdl", "aaaaaaaa", True); meta(d, "mdl", "bbbbbbbb", True, model="other")
+    meta(d, "mck", "aaaaaaaa", True); meta(d, "mck", "bbbbbbbb", True, mock="other")
     out = subprocess.run([sys.executable, "-I", str(here / "report.py"), "--compare", "aaaaaaa", "bbbbbbb", d], capture_output=True, text=True).stdout
     row = lambda c: next(l for l in out.splitlines() if l.startswith(c + " "))
-    assert "말할 수 없음" in row("reg") and "퇴보" not in row("reg") and "재발" in row("rec") and "재발" not in row("rev") and "사람 판독 대기" in row("rev") and "비교 불가: 전역 지침" in row("cmp") and "비교 불가: 모델" in row("mdl"), out
+    assert "말할 수 없음" in row("reg") and "퇴보" not in row("reg") and "재발" in row("rec") and "재발" not in row("rev") and "사람 판독 대기" in row("rev") and "비교 불가: 전역 지침" in row("cmp") and "비교 불가: 모델" in row("mdl") and "비교 불가: 모의 사용자 모델" in row("mck"), out
 PY
 python3 -I - "$here" <<'PY' && ok "완료 분류: 모두 관찰로 확인했을 때만 완료(직접 증거 없음·REVIEW·미정·미확인은 완료 아님), 실패는 대기보다 먼저, 필수 검토 미수행=review-missing" || ng "완료 분류"
 import sys; sys.path.insert(0, sys.argv[1]); from verdict import completion as c

@@ -22,7 +22,7 @@
      python3 -I evals/report.py --compare <기준 커밋> <대상 커밋> <결과 폴더 ...>   (run.sh <사례> 기준..대상 이 끝에 부른다)
 
 --compare 는 같은 사례·언어·하네스·입력의 두 커밋 실행을 한 줄로 나란히 보인다(통과/판정, 검토 필요, 외부 장애, 답 대기, 첫 답 중앙값).
-비교 조건(하네스 버전·모델·전역 지침 지문·판정기 버전)이 다르면 "비교 불가"와 그 항목을 적는다.
+비교 조건(하네스 버전·모델·모의 사용자 모델·전역 지침 지문·판정기 버전)이 다르면 "비교 불가"와 그 항목을 적는다.
 표시의 맨 앞은 이 줄로 무엇을 말할 수 있는가다(decide). 통과 수는 그 과제를 그 횟수만큼 돌려 본 관찰이고, 두 커밋의 차이는 따로 확인해야 하는 주장이다.
   "차이: 개선"·"차이: 퇴보"  양쪽을 2회 이상 돌렸고 한쪽은 전부 실패, 다른 쪽은 전부 통과다(전부 뒤집힌 경우만 차이로 적는다).
   "회귀 확인용"              양쪽 모두 전부 통과다. 기준이 이미 통과하는 사례라 두 커밋의 우열을 가르지 못한다.
@@ -86,7 +86,7 @@ def compare(base, target, roots):
         if not b or not t:
             marks.append("한쪽 실행 없음")
         else:
-            diff = [k for k, f in (("하네스 버전", lambda m: m.get("harness_version")), ("모델", lambda m: m.get("model")),
+            diff = [k for k, f in (("하네스 버전", lambda m: m.get("harness_version")), ("모델", lambda m: m.get("model")), ("모의 사용자 모델", lambda m: m.get("mock_user_model")),
                                    ("전역 지침", lambda m: json.dumps(m.get("global_instructions"), sort_keys=True)), ("판정기", lambda m: m.get("judge_version")))
                     if {f(m) for m in b} != {f(m) for m in t}]
             if diff:

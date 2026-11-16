@@ -45,7 +45,7 @@ def result_meta(summary):
     word, line = oracle_verdict(summary)
     return {"case": summary.get("task", "goalflow"), "kit_ref": summary["kit_ref"] if arm == "kit" else arm,
             "kit_commit": summary["kit_commit"] if arm == "kit" else arm, "harness": summary["harness"], "run": summary["run"],
-            "model": summary.get("model"), "harness_version": summary.get("harness_version"),
+            "model": summary.get("model"), "mock_user_model": summary.get("mock_user_model"), "harness_version": summary.get("harness_version"),
             "exit_code": next((t["rc"] for t in turns if t["rc"] != 0), 0), "seconds": summary["seconds"],
             "agents_md_bytes": summary["agents_md_bytes"], "check_passed": word == PASS, "check_needs_review": False,
             "check_unverified": word == UNVERIFIED, "check_output": line, "user_turns": len(turns),

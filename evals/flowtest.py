@@ -501,6 +501,9 @@ exit 0
     (dd / "b/ae-cr.txt").write_bytes(b"old1\rold2\rSECRET-CR\r"); (dd / "b/af-ff.txt").write_bytes(b"x\x0cSECRET-FF\n")
     dtext = _v.diff(dd / "b", dd / "g", dd / "full.txt")[0]
     check("지운 파일 안의 \\r·폼피드로 끊긴 글도 검토 입력에 새어 나오지 않는다", "SECRET-CR" not in dtext and "SECRET-FF" not in dtext and "ae-cr.txt" in dtext)
+    (dd / "b/ag-gone.txt").write_text("gone\n"); os.symlink("x1", dd / "b/ah-link"); os.symlink("x2", dd / "g/ah-link"); os.symlink("x1", dd / "b/ai-deadlink")
+    dtext = _v.diff(dd / "b", dd / "g", dd / "full.txt")[0]
+    check("지운 파일 바로 뒤의 바뀐 심볼릭 링크 줄이 남고, 지운 링크도 지운 파일 목록에 오른다", "ah-link" in dtext and "ai-deadlink" in dtext and "ag-gone.txt" in dtext)
     check("지운 파일 뒤의 머리줄 없는 diff 줄(바이너리 변경·폴더가 파일로 바뀜)이 검토 입력에 남는다",
           "ab.bin" in dtext and "ad-swap" in dtext and "aa-gone.txt" in dtext and "gone\n" not in dtext.replace("aa-gone", "").replace("ac-gone", ""))
 
