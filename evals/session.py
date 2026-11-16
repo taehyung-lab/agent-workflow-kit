@@ -258,7 +258,7 @@ class Codex(Harness):
             return None
         home = _codex_home()  # 검토자는 구현자와 홈을 나눠 쓰지 않는다
         try:
-            return _review([exe, "exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", "-C", str(directory), prompt],
+            return _review([exe, "exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", *_model_flags("codex"), "-C", str(directory), prompt],
                            directory, log, {"CODEX_HOME": home})
         finally:
             shutil.rmtree(home, ignore_errors=True)

@@ -80,6 +80,7 @@ for a in "$@"; do case "$a" in *"당신은 별도 검증자다"*) p="$a";; esac;
 [ -n "$p" ] || exit 1
 n=$(cat "$FAKE_DIR/n" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$FAKE_DIR/n"
 printf '%s' "$p" > "$FAKE_DIR/vprompt.$n"
+printf '%s\n' "$@" > "$FAKE_DIR/args.$n"
 [ -z "${{FAKE_VWRITE:-}}" ] || echo changed >> ui.txt
 [ -z "${{FAKE_TOUCH_ORIG:-}}" ] || echo changed-while-verifying >> "$FAKE_TOUCH_ORIG"
 line=$(sed -n "${{n}}p" "$FAKE_DIR/verdicts")
@@ -139,6 +140,9 @@ exit 0
           a[1].get("round") == 1 and [a[1].get("state"), b[1].get("state"), out.get("state")] == ["returned", "incomplete", "incomplete"] and prompt == "")
     check("--request 로 준 뒤 메시지도 사용자 원문으로 들어간다", "AFTER-MARKER" in a[2] and "REQ-MARKER" in a[2])
     rc, out, prompt = verify(mp, [OK], harness="codex", extra=("--request", req_file("codex 시도")))
+    import pins as _pins  # flowtest 는 evals/ 를 모듈 경로에 둔다
+    codex_args = [Path(f).read_text() for f in sorted(t.glob("tmp*/args.*")) if Path(f).read_text().startswith("exec\n")]
+    check("Codex 검토자 호출에도 고정한 모델을 넘긴다", bool(codex_args) and all("-m\n" + _pins.model("codex") + "\n" in a for a in codex_args))
     check("Codex 검토 하네스도 같은 실행기·형식으로 판정한다", rc == 6 and out.get("state") == "ok" and out.get("completion") == "unverified" and "| B1 |" in prompt)
     # 미확인
     rc, out, _ = verify(mp, [""], extra=("--request", req_file("빈 답 시도")))
@@ -487,6 +491,16 @@ exit 0
     check("지운 파일: 통째로 없어진 폴더는 파일마다가 아니라 폴더 하나와 파일 수로 보인다", "old-case/ (파일 5개)" in dchange and "old-case/samples/0" not in dchange)
     sh(*G, "checkout", "-q", "--", "old-notes.txt", "old-case", cwd=proj); (proj / "ui.txt").write_text("button=로그인\nbutton_en=Login\n")
     sh(*G, "rm", "-rq", "old-notes.txt", "old-case", cwd=proj); sh(*G, "commit", "-qm", "drop notes", cwd=proj)
+
+    # 머리줄 없이 나오는 diff 줄(바이너리 변경, 폴더↔파일 바뀜)은 앞의 지운 파일 덩어리와 함께 버리지 않는다
+    import importlib.util as _iu
+    _spec = _iu.spec_from_file_location("installed_verify", verifier); _v = _iu.module_from_spec(_spec); _spec.loader.exec_module(_v)
+    dd = Path(tempfile.mkdtemp(dir=t)); (dd / "b").mkdir(); (dd / "g").mkdir()
+    (dd / "b/aa-gone.txt").write_text("gone\n"); (dd / "b/ab.bin").write_bytes(b"\x00\x01old"); (dd / "g/ab.bin").write_bytes(b"\x00\x02new")
+    (dd / "b/ac-gone.txt").write_text("gone\n"); (dd / "b/ad-swap").mkdir(); (dd / "b/ad-swap/in.txt").write_text("x\n"); (dd / "g/ad-swap").write_text("now a file\n")
+    dtext = _v.diff(dd / "b", dd / "g", dd / "full.txt")[0]
+    check("지운 파일 뒤의 머리줄 없는 diff 줄(바이너리 변경·폴더가 파일로 바뀜)이 검토 입력에 남는다",
+          "ab.bin" in dtext and "ad-swap" in dtext and "aa-gone.txt" in dtext and "gone\n" not in dtext.replace("aa-gone", "").replace("ac-gone", ""))
 
     # 여러 저장소 작업: 지도 `## 맥락` 의 대상 표(대상·경로·기준 커밋)가 검토 대상을 정한다. 지도를 둔 저장소(홈)는 표에 적었을 때만 대상이다.
     def lib(name, text):

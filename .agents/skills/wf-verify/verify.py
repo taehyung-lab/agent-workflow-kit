@@ -495,6 +495,9 @@ def diff(base, target, out):
         m = re.match(r"diff -ruN .* (" + re.escape(str(target)) + r"/[^\n]*)\n", chunk)
         if m and not os.path.lexists(m.group(1)):
             removed.append(os.path.relpath(m.group(1), str(target)))
+            # diff 가 머리줄 없이 내는 줄(바이너리 변경, 폴더↔파일 바뀜, 읽기 오류)이 이 덩어리 끝에 붙어 있으면 지운 파일과 함께 버리지 않는다
+            orphans = [l for l in chunk.splitlines(keepends=True)[1:] if not l.startswith(("--- ", "+++ ", "@@", "-", "+", " ", "\\"))]
+            kept.extend(orphans)
         else:
             kept.append(chunk)
     text = "".join(kept).replace(str(base), "a").replace(str(target), "b")
