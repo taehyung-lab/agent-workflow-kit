@@ -4,6 +4,23 @@
 
 키트를 바꿀 때 새 세션으로 잰 결과를 날짜·버전별로 둔 기록이다. 기록마다 무엇을 셌고 무엇을 세지 않았는지를 함께 적는다. 원시 기록은 커밋하지 않는다. 다시 실행하는 방법은 [evals/README.md](../evals/README.md)에 있다.
 
+## v3.9.0: 여러 저장소 검토(대상 표)와 검토 제외 범위 교정 (2026-11-16)
+
+대상: v3.8.0(11da786) 대 `feat/work-targets`(66769c9). 원시 기록은 작업 폴더 `agent-workflow-kit-targets/evals/results/20261116/`, 독립 검토 기록은 홈 레포 `~/repos/agent-home/work/kit-work-targets/`(로컬).
+
+**도구 약속(모델 없음).** `evals/flowtest.py` 118 통과·0 실패. 새 시험 18개(대상 표 13, 검토 제외 범위 4, 이름 1)는 구현 전에 실패를 확인했다. `selftest.sh` 248·0, `tests/install.test.sh` 47·0. 실제 저장소 web-kit·dt-admin-web·그 v2 worktree 를 HEAD 기준 대상 표로 prepare: 세 diff 모두 0바이트, "검토할 것이 없다"(교정 전에는 v2 의 대상 없는 링크 때문에 "unknown type" 7줄로 ready).
+
+**독립 검토.** 1회차 RETURN: 맨 위 `.agents`·`AGENTS.md` 를 통째로 빼서 키트 저장소·홈의 제품 변경이 검토되지 않음(v3.8.0 부터 있던 동작, 사용자 결정으로 표가 없을 때도 교정). 2회차 RETURN: 지도의 요청 원문에 두 번째 사용자 답이 빠짐, 발행 단계가 요구 표에 있음. 요청 원문을 고친 새 시도 1회차 OK(필수 14개 충족), finish verified.
+
+**발행 평가(사례당 1회, 모델·CLI 미고정 실행기).** 맥락 사례 10개와 진입 사례 3개.
+
+| 모델 | 66769c9 | 실패 사례의 v3.8.0 |
+| --- | --- | --- |
+| Claude | 11 통과, `ctx-same-name` 사람 판독 1(지금 대상의 사번과 옆 worktree 의 이메일을 구별해 통과로 읽음), `ctx-auth-scenario` 실패 1 | `ctx-auth-scenario` 실패 |
+| Codex | 12 통과, `ctx-auth-scenario` 실패 1 | `ctx-auth-scenario` 실패 |
+
+기존 실패 목록: `ctx-auth-scenario`(두 모델, 두 버전). 결정 문서에서 정책을 인용하고 "정해 주실 것: 없습니다"라고 쓴 뒤 "이렇게 두고 진행하는 것" 목록의 확인을 기다리며 구현하지 않았다. 원인 후보는 `wf-ask` 6 의 두 묶음 구조이고 교정은 따로 잰다. 세지 않은 것: 대상 표를 쓰는 여러 저장소 작업을 모델이 실제로 하는지(사례 없음), 반복 횟수 1의 변동.
+
 ## v3.8.0: 요구 확인 단계 재작성: 고른 것을 지우지 않고 보인다 (2026-11-13 측정, 2026-11-16 발행)
 
 대상: main(cae049c) 대 `wf-ask` 2~6 단계를 다시 쓴 커밋(cf5c4f7). Codex. 원시 기록은 작업 폴더 `agent-workflow-kit-bounds/work/measure-bounds/`(`tasks-new/`·`tasks-main/`·`regress-new/`)에 있다.
