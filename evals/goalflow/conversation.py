@@ -5,9 +5,10 @@
 인정하지 않는다: 그 주제가 이미 구현됐는지는 주제별 판정 항목(<과제>/topic-checks.json)의 턴 앞뒤 결과로 따로 확인한다(2026-11-16 결정).
   - 그 턴에 제품이 안 바뀌었다 → 구현 전 질문.
   - 그 턴에 그 주제의 판정 항목 통과 여부가 바뀌었다 → 그 주제의 동작이 생겼다: 결정받기 전 구현(decided_first). 나중에 정책을 받아 고쳐도 지우지 않는다.
-  - 통과 여부가 그대로다 → 구현 전 질문. 관찰 문구만 바뀐 것은 근거로 쓰지 않는다: 다른 주제를 구현하면 공통 코드 때문에 함께 바뀌어
-    정상과 위반을 가르지 못했다(2026-11-16 재검토 2″: 비활성화를 구현하면 되살리기 항목의 실패 사유가 바뀐다). 그 주제를 "아직 안 만든 것"과
-    "없음으로 정한 것"은 코드 상태가 같고, 묻고 답을 받아 구현하면 정상이며 묻지 않고 끝내면 최종 동작이 실패로 잡힌다.
+  - 통과 여부는 그대로인데 관찰 문구가 바뀌었다 → 검토 필요(review). 바깥 관찰로는 "다른 주제 구현의 부작용"과 "그 주제를 원문과 다른 정책으로
+    먼저 만든 것"이 같은 모양이라 가를 수 없다(2026-11-16 재검토 2″·2‴: 비활성화만 구현해도, 되살리기를 비밀번호를 받는 다른 정책으로 만들어도
+    되살리기 항목은 실패 그대로이고 문구만 바뀐다). 구별할 수 없는 것을 통과·실패로 확정하지 않는다.
+  - 그 주제의 판정 항목 결과가 그대로다 → 구현 전 질문.
   - 주제별 동작을 확인할 수 없다(판정기가 결과를 못 냄, 대응 파일 없음) → 검토 필요(review).
   - 묻지 않은 주제의 판정 항목 통과 여부가 답 전에 바뀌었다(말없이 정했거나 다른 구현의 부작용) → 검토 필요. 마무리 턴의 변경은 사용자가 "추천안대로 정해 완료"를 맡긴 것이라 세지 않는다.
 턴 전체의 파일 변경으로 주제를 한꺼번에 버리지 않는다: 답받은 주제를 구현하면서 새 주제를 묻는 것은 정상이다.
@@ -116,7 +117,7 @@ class MockUser:
                 change = None if not product_changed else "unknown" if topic_changed is None else topic_changed.get(t)
                 if change == "flipped":
                     self.decided_first.setdefault(t, turn)
-                elif change == "unknown":
+                elif change in ("detail", "unknown"):
                     self.review.setdefault(t, turn)
             for t, how in (topic_changed or {}).items():
                 if how == "flipped" and t not in surfaced and t not in self.answered and t not in new and t in self.items:

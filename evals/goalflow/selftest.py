@@ -165,11 +165,11 @@ def conversation_checks():
  m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("주제일 주제이 를 어떻게 할까요?",False,{}); m.prompt(2)
  m.observe("1·2 를 구현했습니다. 주제삼 은 어떻게 할까요?",True,{1:"flipped",2:"flipped"})
  p3=m.prompt(3); assert "3. 정책 삼" in p3 and m.decided_first=={} and m.review=={},(p3,m.decided_first,m.review)
- # ①′ 같은 순서인데 주제 3 의 관찰 문구만 바뀜(공통 코드의 부작용: 계정 과제에서 비활성화를 구현하면 되살리기 항목의 실패 사유가 바뀐다) → 답하고 정상
- #     (실제 판정기 출력으로 같은 순서를 보는 시험은 tasks/selftest.py 의 "실제 계정 과제의 판정기 출력")
+ # ①′ 같은 순서인데 주제 3 의 관찰 문구만 바뀜 → 답하고 검토 필요(부작용인지 다른 정책으로 먼저 만든 것인지 바깥 관찰로 가를 수 없다)
+ #     (실제 판정기 출력으로 같은 순서와 재검토 2‴ 반례를 보는 시험은 tasks/selftest.py 의 "실제 계정 과제의 판정기 출력")
  m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("주제일 주제이 를 어떻게 할까요?",False,{}); m.prompt(2)
  m.observe("1·2 를 구현했습니다. 주제삼 은 어떻게 할까요?",True,{1:"flipped",2:"flipped",3:"detail"})
- assert "3. 정책 삼" in m.prompt(3) and m.review=={} and m.decided_first=={},(m.review,m.decided_first)
+ assert "3. 정책 삼" in m.prompt(3) and m.review=={3:2} and m.decided_first=={},(m.review,m.decided_first)
  # ② 이미 구현한 결과를 질문처럼 보고(오인 사례): 그 턴에 주제 3 의 동작이 바뀜 → 정책은 답하되 '결정받기 전 구현'으로 남긴다
  m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("주제일 은?",False,{}); m.prompt(2)
  m.observe("주제삼 은 이렇게 구현했습니다. 괜찮을까요?",True,{1:"flipped",3:"flipped"})
