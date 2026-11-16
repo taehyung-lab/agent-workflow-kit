@@ -52,6 +52,15 @@ for dir in "$here"/cases/*/; do
     rm -rf "${project:?}"
   done
 done
+# 관찰 도구 표본: 사례 판정과 따로, 기록에서 관찰 사실(편집 흔적·독립 검증 주장·검증 실행 결과)을 기대값대로 읽는지 본다.
+# 2026-11-16 낱말 판정 사례를 지우면서 그 사례 폴더에 있던 관찰 표본을 여기로 옮겼다(관찰 시험은 낱말 판정과 무관하다).
+for sample in "$here"/observe-samples/*/*/; do
+  sample=${sample%/}; group=$(dirname "$sample")
+  names=$( [ ! -f "$group/observe.txt" ] || cat "$group/observe.txt")
+  got=$(python3 -I "$here/observe.py" "$sample/transcript.jsonl" $names 2>&1)
+  python3 -I -c 'import json,sys; g=json.loads(sys.argv[1]); w=json.load(open(sys.argv[2])); sys.exit(any(g.get(k, KeyError) != v for k, v in w.items()))' "$got" "$sample/observe.json" 2>/dev/null \
+    && ok "관찰 표본 $(basename "$group")/$(basename "$sample") 기대값과 같음" || ng "관찰 표본 $(basename "$group")/$(basename "$sample") 다름: $got"
+done
 # 사례 규모: 실패 종류마다 사례를 늘리지 않는지 추세를 보려고 사례·표본 수와 바이트를 찍는다(판정에는 쓰지 않는다).
 printf 'size cases=%s samples=%s bytes=%s\n' "$(ls -d "$here"/cases/*/ | wc -l | tr -d ' ')" "$(ls -d "$here"/cases/*/samples/*/ | wc -l | tr -d ' ')" "$(du -sk "$here/cases" | cut -f1)KiB"
 # 실행기: 문법과, 잘못된 인자에서 모델을 부르지 않고 실패하는지
