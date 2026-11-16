@@ -1,0 +1,10 @@
+{
+ "1": [
+  "hold-does-not-block-new-booking",
+  "hold-over-confirmed-allowed",
+  "confirming-hold-over-confirmed-refused"
+ ],
+ "2": [
+  "existing-overlap-left-alone-but-moves-checked"
+ ]
+}

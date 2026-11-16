@@ -33,7 +33,7 @@ import pins  # noqa: E402
 from transcript import read, commands, replies  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from asked import asked  # noqa: E402
-from conversation import MockUser, product_changes as changes_since, product_print  # noqa: E402
+from conversation import MockUser, changed_topics, product_changes as changes_since, product_print, topic_behavior  # noqa: E402
 from table import result_meta  # noqa: E402
 
 arm, harness, idx, out = sys.argv[1], sys.argv[2], sys.argv[3], Path(sys.argv[4]).resolve()
@@ -120,6 +120,7 @@ def product_changes():
     return changes_since(proj, base)
 
 
+behavior = topic_behavior(TASK, proj)  # 주제별 판정 항목 결과(턴 앞뒤로 비교해 그 턴에 동작이 바뀐 주제를 안다)
 for n in range(1, mock.turns + 1):
     before, print_before = set(mock.answered), product_print(proj, base)
     prompt = mock.prompt(n)
@@ -134,7 +135,10 @@ for n in range(1, mock.turns + 1):
         cmds = []
     # 모의 사용자는 이 턴에 에이전트가 쓴 글 전부를 읽는다. 마지막 글만 읽으면, 질문을 앞 글에 쓰고 마지막에 "위 질문에 답해 달라"고만 한 경우
     # 분류기가 내용 없는 글을 보고 물은 것으로 세어 묻지 않은 답까지 준다(2026-11-13 표본 라벨 과제의 스킬 구성 3회가 그랬다).
-    mock.observe("\n\n".join(replies(str(log))) or final, product_print(proj, base) != print_before)
+    product_changed = product_print(proj, base) != print_before
+    after = topic_behavior(TASK, proj) if product_changed else behavior  # 제품이 그대로면 동작도 그대로다
+    mock.observe("\n\n".join(replies(str(log))) or final, product_changed, changed_topics(behavior, after))
+    behavior = after
     rows.append({"turn": n, "rc": rc, "answered_now": sorted(mock.answered - before), "seconds": secs, "product_changes": product_changes(), "reply_chars": len(final),
                  "question_marks": final.count("?") + final.count("？"), "reply": final[:6000],
                  "record_runs": sum(bool(re.search(r"verify\.py\s+record\b", c["command"])) for c in cmds),
@@ -162,7 +166,8 @@ if harness == "claude":
             init = {"skills": [s for s in ev.get("skills", []) if s in ("grilling", "tdd")], "plugins": len(ev.get("plugins", [])), "n_skills": len(ev.get("skills", []))}
             break
 summary = {"name": name, "task": TASK_NAME, "model": pins.model(harness), "mock_user_model": pins.mock_user_model() if MOCK == "asked" else None, "harness_version": pins.cli_version(harness), "static_turns": len(STATIC), "arm": arm, "harness": harness, "run": int(idx) if idx.isdigit() else idx, "kit_ref": kit_ref, "kit_commit": kit_commit, "agents_md_bytes": agents_md_bytes, "base": base, "seconds": int(time.time() - started), "turns": rows,
-           "mock": MOCK, "answered": sorted(mock.answered), "map": any((proj / "work").glob("*/work.md")), "final_changes": product_changes(), "init": init,
+           "mock": MOCK, "answered": sorted(mock.answered),
+           "decided_first": {str(t): n for t, n in mock.decided_first.items()}, "review_topics": {str(t): n for t, n in mock.review.items()}, "map": any((proj / "work").glob("*/work.md")), "final_changes": product_changes(), "init": init,
            "oracle_exit": oracle.returncode, "automated_valid": verdict.get("automated_valid"), "observation_complete": verdict.get("observation_complete"),
            "failed": [c.get("name") for c in cases if c.get("passed") is False], "failed_decision": verdict.get("failed_decision"), "unobserved": [c.get("name") for c in cases if c.get("passed") is None],
            "n_cases": len(cases), "oracle_error": verdict.get("error"), "public_tests_rc": smoke.returncode}

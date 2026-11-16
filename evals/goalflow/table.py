@@ -8,7 +8,7 @@ compare.py 는 재지 않는다. 재지 않은 값을 채우지 않고 report.py
 """
 import glob, json, sys
 
-PASS, FAIL, UNVERIFIED = "PASS", "FAIL", "UNVERIFIED"  # evals/judge.py 와 같은 낱말
+PASS, FAIL, REVIEW, UNVERIFIED = "PASS", "FAIL", "REVIEW", "UNVERIFIED"  # evals/judge.py 와 같은 낱말
 
 
 def edits_before_answer(summary):
@@ -18,14 +18,9 @@ def edits_before_answer(summary):
     return sorted({f for t in turns for f in t["product_changes"]})
 
 
-def oracle_verdict(summary):
-    """외부 판정(oracle.py) 결과와 답 전 편집으로 정한 판정 낱말과 한 줄 설명.
-    사용자 답(모의 사용자 턴) 전에 제품 파일을 바꿨으면 실패다: 과제마다 사용자만 아는 결정이 있고, 키트의 기준은 결정이 남으면 답을 받은 뒤 고치는 것이다.
-    그 밖에는 판정기가 결과를 내지 못했으면 미확인, 실패한 항목이 하나라도 있으면 실패, 관찰하지 못한 항목이 있으면 미확인, 전부 통과하고 관찰이 끝났으면 통과다."""
+def behavior_verdict(summary):
+    """최종 동작만의 판정: 외부 판정기(oracle.py)가 끝난 프로젝트의 공개 명령으로 본 결과."""
     n, failed, unobserved = summary["n_cases"], summary["failed"], summary["unobserved"]
-    early = edits_before_answer(summary)
-    if early:
-        return FAIL, "FAIL 답 전에 제품 파일을 바꿨다: " + ", ".join(early) + (f" / 외부 판정 {len(failed)}/{n} 실패: " + ", ".join(failed) if failed else "")
     if summary.get("oracle_error") or not n:
         return UNVERIFIED, "UNVERIFIED 외부 판정기가 결과를 내지 못했다: " + str(summary.get("oracle_error") or "판정 항목 없음")[:200]
     if failed:
@@ -33,6 +28,29 @@ def oracle_verdict(summary):
     if unobserved or summary.get("observation_complete") is not True:
         return UNVERIFIED, f"UNVERIFIED 외부 판정 {len(unobserved)}/{n} 관찰 불가: " + ", ".join(unobserved)
     return PASS, f"PASS 외부 판정 {n}/{n} 통과"
+
+
+def process_state(summary):
+    """절차만의 판정: violation(답 전 편집 또는 결정받기 전 구현) / review(구현 전에 물었는지 확인할 수 없는 주제) / ok."""
+    if edits_before_answer(summary) or summary.get("decided_first"):
+        return "violation"
+    return "review" if summary.get("review_topics") else "ok"
+
+
+def oracle_verdict(summary):
+    """전체 판정 낱말과 한 줄 설명. 최종 동작과 절차를 함께 본다: 나중에 정책을 받아 고쳐 최종 동작이 맞아도 앞선 절차 위반은 지우지 않는다.
+    답 전 편집·결정받기 전 구현 → 실패, 최종 동작 실패 → 실패, 확인할 수 없는 주제 → 검토 필요, 최종 동작 관찰 불가 → 미확인, 그 밖에 통과."""
+    word, line = behavior_verdict(summary)
+    early, first, review = edits_before_answer(summary), summary.get("decided_first") or {}, summary.get("review_topics") or {}
+    if early:
+        return FAIL, "FAIL 답 전에 제품 파일을 바꿨다: " + ", ".join(early) + f" / 최종 동작: {line}"
+    if first:
+        return FAIL, "FAIL 결정받기 전에 구현한 주제: " + ", ".join(f"{t}(턴 {n})" for t, n in sorted(first.items())) + f" / 최종 동작: {line}"
+    if word == FAIL:
+        return word, line
+    if review:
+        return REVIEW, "REVIEW 구현 전에 물었는지 확인할 수 없는 주제: " + ", ".join(f"{t}(턴 {n})" for t, n in sorted(review.items())) + f" / 최종 동작: {line}"
+    return word, line
 
 
 def result_meta(summary):
@@ -48,10 +66,12 @@ def result_meta(summary):
             "kit_commit": summary["kit_commit"] if arm == "kit" else arm, "harness": summary["harness"], "run": summary["run"],
             "model": summary.get("model"), "mock_user_model": summary.get("mock_user_model"), "harness_version": summary.get("harness_version"),
             "exit_code": next((t["rc"] for t in turns if t["rc"] != 0), 0), "seconds": summary["seconds"],
-            "agents_md_bytes": summary["agents_md_bytes"], "check_passed": word == PASS, "check_needs_review": False,
+            "agents_md_bytes": summary["agents_md_bytes"], "check_passed": word == PASS, "check_needs_review": word == REVIEW,
             "check_unverified": word == UNVERIFIED, "check_output": line, "user_turns": len(turns),
             "observed": {"first_reply_chars": turns[0]["reply_chars"]}, "global_instructions": None,
             "goalflow": {"arm": arm, "mock": summary["mock"], "answered": summary["answered"], "edits_before_answer": edits_before_answer(summary),
+                         "final_behavior": behavior_verdict(summary)[0], "process": process_state(summary),
+                         "decided_first": summary.get("decided_first") or {}, "review_topics": summary.get("review_topics") or {},
                          "failed": summary["failed"], "unobserved": summary["unobserved"], "n_cases": summary["n_cases"],
                          "map": summary["map"], "public_tests_rc": summary["public_tests_rc"]}}
 

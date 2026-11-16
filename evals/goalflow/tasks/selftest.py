@@ -288,6 +288,30 @@ def files_mutant(label, task, overrides, given, decision):
     print(label + ": given=" + str(result["failed_given"]) + ", decision=" + str(result["failed_decision"]))
 
 
+# 주제별 판정 항목(topic-checks.json): 이름이 판정기 결과에 실제로 있고, 시작 상태와 정답 구현 사이에서 모든 주제의 동작이 바뀐 것으로 잡힌다
+sys.path.insert(0, str(HERE.parent))
+from conversation import changed_topics, topic_behavior  # noqa: E402
+for task in ("orders", "rooms", "labels", "mill", "archive-ambiguity", "archive-correction", "account-correction", "merge-conflict"):
+    with tempfile.TemporaryDirectory(prefix="topics-") as temp:
+        project = Path(temp) / "p"
+        shutil.copytree(HERE / task / "fixture", project)
+        start = topic_behavior(HERE / task, project)
+        for f in (HERE / task / "control").rglob("*"):
+            if f.is_file():
+                (project / f.relative_to(HERE / task / "control")).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, project / f.relative_to(HERE / task / "control"))
+        done = topic_behavior(HERE / task, project)
+        mapping = json.loads((HERE / task / "topic-checks.json").read_text(encoding="utf-8"))
+        if start is None or done is None:
+            bad.append(f"{task}: topic-checks.json 의 항목을 판정기 결과에서 찾지 못했다")
+        else:
+            # 통과 여부가 달라진 주제는 반드시 바뀐 것으로 잡힌다(정책이 원래 동작과 같은 주제는 정답 구현에서도 그대로일 수 있다: 주문의 기존 주문)
+            flipped = {t for t in done if [c[1] for c in start[t]] != [c[1] for c in done[t]]}
+            if {t for t, how in changed_topics(start, done).items() if how == "flipped"} != flipped or not flipped:
+                bad.append(f"{task}: 통과 여부가 달라진 주제 {sorted(flipped)} 를 바뀐 주제 {changed_topics(start, done)} 로 잡지 못했다")
+        if changed_topics(start, start):
+            bad.append(f"{task}: 같은 상태를 비교했는데 바뀐 주제가 있다")
+
 # 판정기 자신의 버그(정의되지 않은 이름 등)는 제품 실패가 아니라 관찰 불가다(2026-11-16 검토: NameError 가 제품 실패로 기록됐다)
 sys.path.insert(0, str(HERE))
 from taskcheck import Judge  # noqa: E402

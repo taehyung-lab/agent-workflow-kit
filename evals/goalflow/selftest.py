@@ -134,6 +134,12 @@ def meta_checks():
  # 답 전 턴에 바꾸고 커밋한 뒤 다음 정해진 턴에 되돌려도 답 전 편집이다(턴마다의 변경을 합쳐 본다)
  rev=summary("none",static_turns=2,turns=[dict(summary("none")["turns"][0],product_changes=["accounts.py"]),dict(summary("none")["turns"][1],product_changes=[]),summary("none")["turns"][2]])
  assert verdict(result_meta(rev))=="FAIL" and "accounts.py" in result_meta(rev)["check_output"],result_meta(rev)
+ # 결정받기 전에 구현한 주제가 있으면 최종 동작이 맞아도 실패, 확인할 수 없는 주제가 있으면 검토 필요. 최종 동작과 절차는 meta 에 따로 남는다
+ first=result_meta(summary("none",decided_first={"3":2}))
+ assert verdict(first)=="FAIL" and "결정받기 전" in first["check_output"] and first["goalflow"]["final_behavior"]=="PASS" and first["goalflow"]["process"]=="violation",first
+ rev=result_meta(summary("none",review_topics={"2":2}))
+ assert verdict(rev)=="REVIEW" and rev["goalflow"]["final_behavior"]=="PASS" and rev["goalflow"]["process"]=="review",rev
+ assert result_meta(summary("kit"))["goalflow"]["process"]=="ok"
  # 답을 받은 뒤의 편집만 있으면 그대로 외부 판정을 따른다(위 ok 와 같다)
  # 판정 항목이 없는데 오류도 적히지 않은 결과를 통과로 세지 않는다
  assert verdict(result_meta(summary("none",automated_valid=True,observation_complete=True,n_cases=0)))=="UNVERIFIED"
@@ -154,22 +160,34 @@ def conversation_checks():
  from conversation import MockUser,product_changes,product_print
  answer="이렇게 해 주세요.\n\n1. 정책 일\n2. 정책 이\n3. 정책 삼\n"
  fake=lambda text,topics:[n for n,w in ((1,"주제일"),(2,"주제이"),(3,"주제삼")) if w in text]
- # 답을 받은 뒤 턴에 스스로 구현한 주제(그 턴에 제품이 바뀜)에는 정책을 알려 주지 않는다
- m=MockUser(["요청"],answer,"t",fake)
- assert m.prompt(1)=="요청"; m.observe("주제일 을 어떻게 할까요?",False)
- p2=m.prompt(2); assert "1. 정책 일" in p2 and "2. 정책 이" not in p2,p2
- m.observe("주제삼 은 제가 정해 구현했습니다",True)
- p3=m.prompt(3); assert "정책 삼" not in p3 and p3.endswith("보고해 주세요."),p3
- # 같은 글이라도 그 턴에 제품이 안 바뀌었으면(구현 전) 답한다
- m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("주제일",False); m.prompt(2); m.observe("주제삼 은 이렇게 두고 진행하겠습니다",False)
- assert "3. 정책 삼" in m.prompt(3)
+ # 주제별 판정(2026-11-16 붙여 넣은 의견의 표). observe(글, 그 턴에 제품이 바뀌었나, 그 턴에 동작이 바뀐 주제 | None=확인 불가)
+ # ① 검토자가 재현한 정상 사례: 답받은 주제 1·2 를 구현하면서 아직 구현하지 않은 주제 3 을 물음 → 3 에 답하고 위반·검토 필요 없음
+ m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("주제일 주제이 를 어떻게 할까요?",False,{}); m.prompt(2)
+ m.observe("1·2 를 구현했습니다. 주제삼 은 어떻게 할까요?",True,{1:"flipped",2:"flipped"})
+ p3=m.prompt(3); assert "3. 정책 삼" in p3 and m.decided_first=={} and m.review=={},(p3,m.decided_first,m.review)
+ # ①′ 같은 순서인데 주제 3 의 관찰 내용만 바뀜(공통 코드의 부작용일 수 있다: 계정 과제에서 비활성화를 구현하면 되살리기 항목의 실패 사유가 바뀐다) → 답하고 검토 필요
+ m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("주제일 주제이 를 어떻게 할까요?",False,{}); m.prompt(2)
+ m.observe("1·2 를 구현했습니다. 주제삼 은 어떻게 할까요?",True,{1:"flipped",2:"flipped",3:"detail"})
+ assert "3. 정책 삼" in m.prompt(3) and m.review=={3:2} and m.decided_first=={},(m.review,m.decided_first)
+ # ② 이미 구현한 결과를 질문처럼 보고(오인 사례): 그 턴에 주제 3 의 동작이 바뀜 → 정책은 답하되 '결정받기 전 구현'으로 남긴다
+ m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("주제일 은?",False,{}); m.prompt(2)
+ m.observe("주제삼 은 이렇게 구현했습니다. 괜찮을까요?",True,{1:"flipped",3:"flipped"})
+ p3=m.prompt(3); assert "3. 정책 삼" in p3 and m.decided_first=={3:2},(p3,m.decided_first)
+ # ③ 그 턴에 제품이 바뀌었는데 주제별 동작을 확인할 수 없으면(None) 검토 필요로 남긴다
+ m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("주제일 은?",False,{}); m.prompt(2)
+ m.observe("구현했고 주제삼 은 어떻게 할까요?",True,None); m.prompt(3)
+ assert m.review=={3:2} and m.decided_first=={},(m.review,m.decided_first)
+ # ④ 묻지 않은 주제의 동작이 답 전에 바뀌면(말없이 정했거나 다른 구현의 부작용) 검토 필요. 마무리 턴의 변경은 사용자가 "추천안대로 정해 완료"를 맡긴 것이라 세지 않는다
+ m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("주제일 은?",False,{}); m.prompt(2)
+ m.observe("1 을 구현했습니다",True,{1:"flipped",2:"detail"}); m.prompt(3); m.observe("마무리했습니다",True,{3:"flipped"})
+ assert m.review=={2:2} and m.decided_first=={},(m.review,m.decided_first)
+ # ⑤ 같은 글이라도 그 턴에 제품이 안 바뀌었으면(구현 전) 답하고 위반이 아니다
+ m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("주제일",False,{}); m.prompt(2); m.observe("주제삼 은 이렇게 두고 진행하겠습니다",False,{})
+ assert "3. 정책 삼" in m.prompt(3) and m.decided_first=={} and m.review=={}
  # 정정 글이 있으면 답하기 전까지의 글을 함께 분류한다: 정정 턴 답이 앞 질문을 가리키기만 해도 놓치지 않는다
  m=MockUser(["요청","사실은 이런 뜻"],answer,"t",fake)
- m.prompt(1); m.observe("주제이 는 어떻게 할까요?",False); m.prompt(2); m.observe("위 질문에 답해 주세요.",False)
+ m.prompt(1); m.observe("주제이 는 어떻게 할까요?",False,{}); m.prompt(2); m.observe("위 질문에 답해 주세요.",False,{})
  assert m.answer_turn==3 and "2. 정책 이" in m.prompt(3)
- # 답 전 턴에 제품이 바뀌었으면 그 턴 글은 분류하지 않는다(그 실행은 답 전 구현으로 실패다)
- m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("주제일 은 이렇게 구현했습니다",True)
- assert m.prompt(2).startswith("질문이 없으면")
  # 제품 변경은 시작 커밋과의 차이: 커밋해도 잡힌다
  with tempfile.TemporaryDirectory(prefix="conv-") as d:
   G=["git","-c","user.name=t","-c","user.email=t@invalid","-c","commit.gpgsign=false"]

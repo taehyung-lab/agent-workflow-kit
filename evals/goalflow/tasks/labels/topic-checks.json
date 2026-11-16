@@ -1,0 +1,14 @@
+{
+ "1": [
+  "past-printed-name-preserved-on-read",
+  "past-printed-name-preserved-on-seal"
+ ],
+ "2": [
+  "loan-specimen-add-refused",
+  "existing-loan-draft-needs-removal"
+ ],
+ "3": [
+  "case-distinct-specimen-lookup",
+  "case-distinct-add-and-remove"
+ ]
+}
