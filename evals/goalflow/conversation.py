@@ -14,26 +14,32 @@
     같은 턴 안에서 고쳤다가 되돌리거나, 그 파일이 든 폴더를 바꿔 끼웠다 되돌리거나, 지웠다가 git checkout 해도 잡힌다.
     도구와 관계없고, 읽기·검색·시험 실행·실패한 편집 호출은 사건을 내지 않는다. 감시를 켜지 못하면 그 턴은 관찰 불가(증거 부족)다.
   - 턴 안에서 생겼다 사라진 새 파일·폴더(시험 도구의 임시 캐시 폴더, 초안)는 제품이 된 적이 없어 보지 않는다. 무엇을 구현했는지는 최종 동작이 본다.
-  - 제품이 아닌 것: 작업 지도·키트·하네스 설정, 캐시, 시작 커밋에 없던 자료 파일(.json·.csv: 재현으로 앱을 실행하면 생기는 상태).
-    시작 커밋에 있던 자료(운영 자료 data.json 등)는 제품이다.
-  2026-11-16 지운 것: 대화 기록의 편집 호출 판별, 턴 앞뒤 변경 시각 비교, 프로젝트 안 모든 사건을 분류하던 규칙(git 무시 확인·폴더 옮기기 구분).
+  - 제품이 아닌 것: 작업 지도·키트·하네스 설정, 파이썬 캐시, 과제가 state.txt 에 적은 앱 상태 파일(재현으로 앱을 실행하면 생기는 자료).
+    그 밖의 새 파일은 확장자와 관계없이 제품이다. 시작 커밋에 있던 운영 자료(data.json 등)도 제품이다.
+  2026-11-16 지운 것: 확장자로 앱 상태를 짐작하던 규칙(.json·.csv·.db 등), 대화 기록의 편집 호출 판별, 턴 앞뒤 변경 시각 비교, 프로젝트 안 모든 사건을 분류하던 규칙(git 무시 확인·폴더 옮기기 구분).
   모든 사건을 분류하려다 시험 도구 캐시·빈 폴더마다 예외가 늘었다(재검토 3‴~3⁵). 제품 파일에 닿은 사건만 보면 예외가 필요 없다.
 """
-import json, re, subprocess
+import fnmatch, json, re, subprocess
 from pathlib import Path
 
-# 제품이 아닌 것: 작업 지도·키트·하네스 설정, 실행이 만든 캐시. 자료 파일(STORE)은 시작 커밋에 없을 때만 제품이 아니다(new_state).
+# 제품이 아닌 것: 작업 지도·키트·하네스 설정, 파이썬 캐시, 그리고 과제가 state.txt 에 적은 앱 상태 파일(앱이 실행 중에 저장하는 자리).
+# 어느 파일이 앱 상태인지는 과제가 안다: 확장자로 짐작하면 에이전트가 손으로 쓴 새 정책 파일(.json)도 상태로 보게 된다(2026-11-16 재검토 3⁷).
 SKIP = ("work/", ".claude/", ".agents/", ".codex/", "AGENTS.md", "CLAUDE.md")
-DATA = (".pyc", ".db", ".sqlite", ".sqlite3", ".db-journal", ".db-wal", ".db-shm")
-STORE = (".json", ".csv")
+
+
+def read_state(task_dir):
+    """과제 폴더의 state.txt(없으면 빈 목록): 앱 상태 파일의 경로·이름 패턴."""
+    f = Path(task_dir, "state.txt")
+    lines = f.read_text(encoding="utf-8").splitlines() if f.is_file() else []
+    return [l.strip() for l in lines if l.strip() and not l.lstrip().startswith("#")]
 G = ["git", "-c", "core.fsmonitor=false"]
 
 
-def _product(path, tracked=None):
-    """제품 파일인가. tracked(시작 커밋의 파일 집합)를 주면 거기 없던 자료 파일(재현이 만든 앱 상태)은 제품이 아니다."""
-    if path.startswith(SKIP) or "__pycache__" in path or path.endswith(DATA):
+def _product(path, state=()):
+    """제품 파일인가: 작업 지도·하네스 설정·파이썬 캐시·과제가 정한 앱 상태 파일(state)이 아니면 제품이다."""
+    if path.startswith(SKIP) or "__pycache__" in path or path.endswith(".pyc"):
         return False
-    return not (tracked is not None and path.endswith(STORE) and path not in tracked)
+    return not any(fnmatch.fnmatch(path, pat) or fnmatch.fnmatch(path.rsplit("/", 1)[-1], pat) for pat in state)
 
 
 def base_files(proj, base):
@@ -45,20 +51,19 @@ def _git(proj, *args):
     return subprocess.run([*G, *args], cwd=proj, capture_output=True).stdout
 
 
-def product_changes(proj, base):
+def product_changes(proj, base, state=()):
     """시작 커밋 base 와 지금 작업 폴더가 다른 제품 파일(커밋했든 안 했든, 새 파일 포함)."""
     changed = _git(proj, "diff", "--name-only", "-z", base).decode("utf-8", "replace").split("\0")
     new = _git(proj, "ls-files", "--others", "--exclude-standard", "-z").decode("utf-8", "replace").split("\0")
-    tracked = base_files(proj, base)
-    return sorted({f for f in changed + new if f and _product(f, tracked)})
+    return sorted({f for f in changed + new if f and _product(f, state)})
 
 
-def turn_writes(found, proj, base):
+def turn_writes(found, proj, base, state=()):
     """턴 동안 사건이 난 경로({경로: 폴더인가}, turnwatch.Watch.stop) 가운데 시작 커밋의 제품 파일에 닿은 것:
     그 파일 자체의 사건이거나, 그 파일을 품은 폴더의 사건(폴더 옮기기·지우기는 안의 파일마다 사건이 나지 않을 수 있다).
     시작 커밋에 없던 경로는 여기서 보지 않는다: 턴 끝까지 남은 새 파일은 product_changes 가 잡고, 턴 안에서 생겼다 사라진 것
     (시험 도구의 임시 폴더, 초안 파일)은 제품이 된 적이 없다."""
-    tracked = {f for f in base_files(proj, base) if _product(f)}
+    tracked = {f for f in base_files(proj, base) if _product(f, state)}
     return sorted(p for p, is_dir in found.items() if p in tracked or (is_dir and any(f.startswith(p + "/") for f in tracked)))
 
 
@@ -74,9 +79,9 @@ def log_readable(log):
         return False
 
 
-def product_diff(proj, base):
+def product_diff(proj, base, state=()):
     """증거로 남기는 그 시점의 제품 변경: 시작 커밋 대비 diff 와 새 파일 내용."""
-    files = product_changes(proj, base)
+    files = product_changes(proj, base, state)
     tracked = set(_git(proj, "ls-files", "-z").decode("utf-8", "replace").split("\0"))
     text = _git(proj, "diff", "--no-color", base, "--", *[f for f in files if f in tracked]).decode("utf-8", "replace") if files else ""
     for f in files:

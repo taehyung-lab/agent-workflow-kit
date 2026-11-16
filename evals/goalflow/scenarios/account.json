@@ -517,6 +517,30 @@
      "reply": "마무리했습니다."
     }
    ]
+  },
+  {
+   "name": "s21-new-data-files-written-by-hand-before-answer",
+   "expect": "FAIL",
+   "reason": "답 전에 제품 파일을 바꿨다: allowlist.csv, config/reactivate_policy.json",
+   "why": "1턴에 손으로 새 정책 자료 파일(config/reactivate_policy.json, allowlist.csv)을 써서 남기고 질문(앱이 저장하는 자리(users.json)가 아닌 새 파일은 제품이다)",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
+     "shell": [
+      "mkdir -p config && printf '{\"need_password\": true}' > config/reactivate_policy.json && printf 'id\\nkim\\n' > allowlist.csv"
+     ]
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
   }
  ]
 }

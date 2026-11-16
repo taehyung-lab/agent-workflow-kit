@@ -1,0 +1,8 @@
+# 앱이 실행 중에 저장하는 파일(제품이 아닌 상태). 한 줄에 하나, 프로젝트 기준 경로 또는 이름 패턴(fnmatch).
+# app.py --db 로 고르는 sqlite 자료와 그 보조 파일
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3

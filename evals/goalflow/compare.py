@@ -33,7 +33,7 @@ import pins  # noqa: E402
 from transcript import read, commands, replies  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from asked import surfaced  # noqa: E402
-from conversation import MockUser, log_readable, product_changes as changes_since, product_diff, turn_writes  # noqa: E402
+from conversation import MockUser, log_readable, product_changes as changes_since, product_diff, read_state, turn_writes  # noqa: E402
 from turnwatch import Watch  # noqa: E402
 from table import result_meta  # noqa: E402
 
@@ -116,9 +116,12 @@ def launch(n, prompt):
     return rc, log, int(time.time() - t0)
 
 
+STATE = read_state(TASK)  # 과제가 정한 앱 상태 파일(제품 아님)
+
+
 def product_changes():
-    """시작 커밋과 다른 제품 파일(커밋했든 안 했든). 작업 지도·키트·스킬·캐시·실행 중 생긴 데이터 파일은 빼고 센다."""
-    return changes_since(proj, base)
+    """시작 커밋과 다른 제품 파일(커밋했든 안 했든). 작업 지도·키트·스킬·캐시·과제가 정한 앱 상태 파일은 빼고 센다."""
+    return changes_since(proj, base, STATE)
 
 
 mock_error = None
@@ -135,7 +138,7 @@ for n in range(1, mock.turns + 1):
         watch, watch_error = None, str(e)
     rc, log, secs = launch(n, prompt)
     try:
-        touched = turn_writes(watch.stop(), proj, base) if watch else None  # 턴 안에서 쓰거나 만들거나 지운 제품 파일(되돌려도 남는다)
+        touched = turn_writes(watch.stop(), proj, base, STATE) if watch else None  # 턴 안에서 쓰거나 만들거나 지운 제품 파일(되돌려도 남는다)
     except OSError as e:
         touched, watch_error = None, str(e)
     try:
@@ -149,7 +152,7 @@ for n in range(1, mock.turns + 1):
     # 모의 사용자는 이 턴에 에이전트가 쓴 글 전부를 읽는다. 마지막 글만 읽으면, 질문을 앞 글에 쓰고 마지막에 "위 질문에 답해 달라"고만 한 경우
     # 분류기가 내용 없는 글을 보고 물은 것으로 세어 묻지 않은 답까지 준다(2026-11-13 표본 라벨 과제의 스킬 구성 3회가 그랬다).
     mock.observe("\n\n".join(replies(str(log))) or final)
-    (out / f"{name}.t{n}.diff").write_text(product_diff(proj, base), encoding="utf-8")  # 증거: 그 턴이 끝났을 때의 제품 변경
+    (out / f"{name}.t{n}.diff").write_text(product_diff(proj, base, STATE), encoding="utf-8")  # 증거: 그 턴이 끝났을 때의 제품 변경
     rows.append({"turn": n, "rc": rc, "answered_now": sorted(mock.answered - before), "product_touched": touched, "watch_error": watch_error, "log_readable": log_readable(str(log)), "seconds": secs, "product_changes": product_changes(), "reply_chars": len(final),
                  "question_marks": final.count("?") + final.count("？"), "reply": final[:6000],
                  "record_runs": sum(bool(re.search(r"verify\.py\s+record\b", c["command"])) for c in cmds),

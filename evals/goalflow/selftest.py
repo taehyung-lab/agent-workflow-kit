@@ -163,7 +163,7 @@ def meta_checks():
 def conversation_checks():
  """대화 진행(conversation.py) 시험: 모델 대신 낱말로 주제를 고르는 가짜 분류기를 쓴다(인용문은 그 낱말)."""
  sys.path.insert(0,str(ROOT))
- from conversation import MockUser,product_changes,product_diff,ANSWERED,CLOSE,NOTHING
+ from conversation import MockUser,product_changes,product_diff,read_state,ANSWERED,CLOSE,NOTHING
  answer="이렇게 해 주세요.\n\n1. 정책 일\n2. 정책 이\n3. 정책 삼\n"
  fake=lambda text,topics:{n:w for n,w in ((1,"주제일"),(2,"주제이"),(3,"주제삼")) if w in text}
  # 답 턴에 그때까지 드러낸 주제만 답하고 나머지는 맡긴다. 인용문을 증거로 남긴다
@@ -196,6 +196,11 @@ def conversation_checks():
   assert product_changes(d,base)==["app.py"],product_changes(d,base)
   Path(d,"new.py").write_text("NEWFILE\n"); assert product_changes(d,base)==["app.py","new.py"]
   ev=product_diff(d,base); assert "+v2" in ev and "NEWFILE" in ev and "지도" not in ev,ev
+  # 앱 상태 파일은 과제가 state.txt 로 정한다: 거기 적힌 것만 빼고, 확장자로 짐작하지 않는다
+  Path(d,"users.json").write_text("{}"); Path(d,"policy.json").write_text("{}"); Path(d,"x.db").write_text("")
+  assert product_changes(d,base,["users.json"])==["app.py","new.py","policy.json","x.db"],product_changes(d,base,["users.json"])
+  assert product_changes(d,base,["users.json","*.db"])==["app.py","new.py","policy.json"]
+  assert read_state(ROOT/"tasks/account-correction")==["users.json"] and "*.db" in read_state(ROOT) and read_state(ROOT/"tasks/rooms")==[]
 
 if __name__=="__main__":
  rows=run();print(json.dumps(rows,ensure_ascii=False,indent=2));meta_checks();conversation_checks();print(f"{len(rows)} oracle controls passed, meta checks passed, conversation checks passed")
