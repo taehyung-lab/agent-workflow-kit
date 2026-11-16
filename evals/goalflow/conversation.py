@@ -4,10 +4,12 @@
 모의 사용자는 에이전트 글이 질문·제안으로 드러낸 주제(asked.py: 원문 인용이 필수)에 정책을 답한다. 그것만으로 "구현 전에 물었다"고
 인정하지 않는다: 그 주제가 이미 구현됐는지는 주제별 판정 항목(<과제>/topic-checks.json)의 턴 앞뒤 결과로 따로 확인한다(2026-11-16 결정).
   - 그 턴에 제품이 안 바뀌었다 → 구현 전 질문.
-  - 그 턴에 그 주제의 판정 항목 통과 여부가 바뀌었다 → 결정받기 전 구현(decided_first). 나중에 정책을 받아 고쳐도 지우지 않는다.
-  - 그 턴에 그 주제의 관찰 내용만 바뀌었거나(다른 주제 구현의 부작용일 수 있다) 주제별 동작을 확인할 수 없다 → 검토 필요(review).
-  - 그 주제의 판정 항목 결과가 그대로다 → 구현 전 질문.
-  - 묻지 않은 주제의 동작이 답 전에 바뀌었다(말없이 정했거나 다른 구현의 부작용) → 검토 필요. 마무리 턴의 변경은 사용자가 "추천안대로 정해 완료"를 맡긴 것이라 세지 않는다.
+  - 그 턴에 그 주제의 판정 항목 통과 여부가 바뀌었다 → 그 주제의 동작이 생겼다: 결정받기 전 구현(decided_first). 나중에 정책을 받아 고쳐도 지우지 않는다.
+  - 통과 여부가 그대로다 → 구현 전 질문. 관찰 문구만 바뀐 것은 근거로 쓰지 않는다: 다른 주제를 구현하면 공통 코드 때문에 함께 바뀌어
+    정상과 위반을 가르지 못했다(2026-11-16 재검토 2″: 비활성화를 구현하면 되살리기 항목의 실패 사유가 바뀐다). 그 주제를 "아직 안 만든 것"과
+    "없음으로 정한 것"은 코드 상태가 같고, 묻고 답을 받아 구현하면 정상이며 묻지 않고 끝내면 최종 동작이 실패로 잡힌다.
+  - 주제별 동작을 확인할 수 없다(판정기가 결과를 못 냄, 대응 파일 없음) → 검토 필요(review).
+  - 묻지 않은 주제의 판정 항목 통과 여부가 답 전에 바뀌었다(말없이 정했거나 다른 구현의 부작용) → 검토 필요. 마무리 턴의 변경은 사용자가 "추천안대로 정해 완료"를 맡긴 것이라 세지 않는다.
 턴 전체의 파일 변경으로 주제를 한꺼번에 버리지 않는다: 답받은 주제를 구현하면서 새 주제를 묻는 것은 정상이다.
 답하기 전까지 쌓인 글(정해진 글 턴들의 답 전부)을 함께 분류한다: 정정 턴의 답이 "위 질문에 답해 주세요"만 가리켜도 앞 턴의 질문을 놓치지 않는다.
 제품 변경은 시작 커밋(base)과의 차이로 센다: 에이전트가 커밋해도 잡힌다.
@@ -114,10 +116,10 @@ class MockUser:
                 change = None if not product_changed else "unknown" if topic_changed is None else topic_changed.get(t)
                 if change == "flipped":
                     self.decided_first.setdefault(t, turn)
-                elif change in ("detail", "unknown"):
+                elif change == "unknown":
                     self.review.setdefault(t, turn)
-            for t in (topic_changed or {}):
-                if t not in surfaced and t not in self.answered and t not in new and t in self.items:
+            for t, how in (topic_changed or {}).items():
+                if how == "flipped" and t not in surfaced and t not in self.answered and t not in new and t in self.items:
                     self.review.setdefault(t, turn)  # 묻지 않은 주제의 동작이 답 전에 바뀌었다
             new += surfaced
         self.pending = []

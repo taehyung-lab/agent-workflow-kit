@@ -381,6 +381,35 @@ argp = replaced(argp, "  python3 accounts.py reactivate <아이디>           �
 argp = replaced(argp, "        print(__doc__)", "        print(\"usage: accounts.py [-h] {signup,login,list,deactivate,reactivate}\", file=sys.stderr)")
 files_mutant("account-correction argparse 꼴 사용법", "account-correction", {"accounts.py": argp}, [], [])
 
+# 실제 계정 과제의 판정기 출력으로 본 주제별 변화(2026-11-16 재검토 2″): 공통 코드의 부작용과 그 주제의 구현을 구별한다
+#   시작 → 비활성화만 구현(되살리기 없음): 주제 1·2 는 통과 여부가 뒤집히고 주제 3 은 뒤집히지 않는다(관찰 문구만 바뀔 수 있다)
+#   비활성화만 → 되살리기까지 구현: 주제 3 이 뒤집힌다(이 턴에 묻는 글을 썼다면 결정받기 전 구현이다)
+from conversation import MockUser  # noqa: E402
+_acc = (HERE / "account-correction/control/accounts.py").read_text(encoding="utf-8")
+_partial = replaced(replaced(_acc, '    elif cmd == "reactivate":\n        return set_active(users, args[0], True)\n', ''),
+                    "  python3 accounts.py reactivate <아이디>           비활성 계정을 되살린다\n", "")
+with tempfile.TemporaryDirectory(prefix="topics-acc-") as temp:
+    project = Path(temp) / "p"; shutil.copytree(HERE / "account-correction/fixture", project)
+    start = topic_behavior(HERE / "account-correction", project)
+    (project / "accounts.py").write_text(_partial, encoding="utf-8"); partial = topic_behavior(HERE / "account-correction", project)
+    (project / "accounts.py").write_text(_acc, encoding="utf-8"); full = topic_behavior(HERE / "account-correction", project)
+step1, step2 = changed_topics(start, partial), changed_topics(partial, full)
+if {t for t, how in step1.items() if how == "flipped"} != {1, 2} or step2.get(3) != "flipped":
+    bad.append(f"계정 주제별 변화: 시작→비활성화만 {step1}, 비활성화만→전체 {step2}")
+answer = (HERE / "account-correction/answer.txt").read_text(encoding="utf-8")
+fake = lambda text, topics: [n for n, w in ((1, "Q1"), (2, "Q2"), (3, "Q3")) if w in text]
+# ① 정상: 1·2 를 묻고 답받아 구현하면서 3 을 물음 → 3 에 답하고 위반·검토 필요 없음
+m = MockUser(["요청"], answer, "t", fake); m.prompt(1); m.observe("Q1 Q2 어떻게 할까요?", False, {}); m.prompt(2)
+m.observe("1·2 구현했습니다. Q3 은 어떻게 할까요?", True, step1)
+if "reactivate" not in m.prompt(3) or m.decided_first or m.review:
+    bad.append(f"정상 사례가 정상으로 나오지 않음: decided_first={m.decided_first} review={m.review}")
+# ② 오인: 같은 턴에 되살리기까지 구현하고 질문처럼 보고 → 결정받기 전 구현
+m = MockUser(["요청"], answer, "t", fake); m.prompt(1); m.observe("Q1 Q2 어떻게 할까요?", False, {}); m.prompt(2)
+m.observe("1·2·되살리기를 구현했습니다. Q3 이대로 괜찮을까요?", True, changed_topics(start, full))
+m.prompt(3)
+if m.decided_first != {3: 2}:
+    bad.append(f"오인 사례가 결정받기 전 구현으로 나오지 않음: {m.decided_first}")
+
 # 백업: 묻지 않고 30일을 고르거나, 두 기간을 함께 적는다.
 rules = control_files("merge-conflict")["backup-rules.md"]
 files_mutant("merge-conflict 30일 선택", "merge-conflict",

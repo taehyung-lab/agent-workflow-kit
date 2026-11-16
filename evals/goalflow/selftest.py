@@ -165,10 +165,11 @@ def conversation_checks():
  m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("주제일 주제이 를 어떻게 할까요?",False,{}); m.prompt(2)
  m.observe("1·2 를 구현했습니다. 주제삼 은 어떻게 할까요?",True,{1:"flipped",2:"flipped"})
  p3=m.prompt(3); assert "3. 정책 삼" in p3 and m.decided_first=={} and m.review=={},(p3,m.decided_first,m.review)
- # ①′ 같은 순서인데 주제 3 의 관찰 내용만 바뀜(공통 코드의 부작용일 수 있다: 계정 과제에서 비활성화를 구현하면 되살리기 항목의 실패 사유가 바뀐다) → 답하고 검토 필요
+ # ①′ 같은 순서인데 주제 3 의 관찰 문구만 바뀜(공통 코드의 부작용: 계정 과제에서 비활성화를 구현하면 되살리기 항목의 실패 사유가 바뀐다) → 답하고 정상
+ #     (실제 판정기 출력으로 같은 순서를 보는 시험은 tasks/selftest.py 의 "실제 계정 과제의 판정기 출력")
  m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("주제일 주제이 를 어떻게 할까요?",False,{}); m.prompt(2)
  m.observe("1·2 를 구현했습니다. 주제삼 은 어떻게 할까요?",True,{1:"flipped",2:"flipped",3:"detail"})
- assert "3. 정책 삼" in m.prompt(3) and m.review=={3:2} and m.decided_first=={},(m.review,m.decided_first)
+ assert "3. 정책 삼" in m.prompt(3) and m.review=={} and m.decided_first=={},(m.review,m.decided_first)
  # ② 이미 구현한 결과를 질문처럼 보고(오인 사례): 그 턴에 주제 3 의 동작이 바뀜 → 정책은 답하되 '결정받기 전 구현'으로 남긴다
  m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("주제일 은?",False,{}); m.prompt(2)
  m.observe("주제삼 은 이렇게 구현했습니다. 괜찮을까요?",True,{1:"flipped",3:"flipped"})
@@ -179,7 +180,7 @@ def conversation_checks():
  assert m.review=={3:2} and m.decided_first=={},(m.review,m.decided_first)
  # ④ 묻지 않은 주제의 동작이 답 전에 바뀌면(말없이 정했거나 다른 구현의 부작용) 검토 필요. 마무리 턴의 변경은 사용자가 "추천안대로 정해 완료"를 맡긴 것이라 세지 않는다
  m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("주제일 은?",False,{}); m.prompt(2)
- m.observe("1 을 구현했습니다",True,{1:"flipped",2:"detail"}); m.prompt(3); m.observe("마무리했습니다",True,{3:"flipped"})
+ m.observe("1 을 구현했습니다",True,{1:"flipped",2:"flipped",3:"detail"}); m.prompt(3); m.observe("마무리했습니다",True,{3:"flipped"})
  assert m.review=={2:2} and m.decided_first=={},(m.review,m.decided_first)
  # ⑤ 같은 글이라도 그 턴에 제품이 안 바뀌었으면(구현 전) 답하고 위반이 아니다
  m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("주제일",False,{}); m.prompt(2); m.observe("주제삼 은 이렇게 두고 진행하겠습니다",False,{})
