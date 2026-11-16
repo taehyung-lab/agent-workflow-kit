@@ -28,7 +28,7 @@ claude = session.Claude("/nonexistent", entry=text)
 flags = claude._flags()
 check("Claude: entry 가 있으면 이 세션에서만 사용자 설정을 빼고(project,local) 그 글을 시스템 지침 끝에 넣는다",
       flags[flags.index("--setting-sources") + 1] == "project,local" and flags[flags.index("--append-system-prompt") + 1] == text)
-check("Claude: entry 가 없으면 전과 같은 옵션이다", session.Claude("/nonexistent")._flags() == session.Claude.FLAGS)
+check("Claude: entry 가 없으면 기본 옵션과 고정 모델뿐이다(사용자 설정을 막는 옵션 없음)", session.Claude("/nonexistent")._flags() == session.Claude.FLAGS + session._model_flags("claude"))
 
 home = session._codex_home(text)
 try:

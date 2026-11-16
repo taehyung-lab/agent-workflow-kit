@@ -472,6 +472,17 @@ exit 0
     check("검토자가 새 소스 파일을 바꾸면 여전히 unverified", got.get("state") == "unverified" and "추적 파일" in got.get("reason", ""))
     shutil.rmtree(cache); (proj / "extra.pyc").unlink(); (proj / "new_source.py").unlink()
 
+    # 지운 파일은 내용을 diff 에 싣지 않고 목록과 기준 사본 경로로 보인다(큰 삭제가 검토 입력 한도를 채우지 않게. 내용은 기준 사본에 그대로 있다)
+    (proj / "old-notes.txt").write_text("DELETED-CONTENT 1\n" * 50); sh(*G, "add", "-A", cwd=proj); sh(*G, "commit", "-qm", "old notes", cwd=proj)
+    (proj / "old-notes.txt").unlink(); (proj / "ui.txt").write_text("button=로그인하기 DEL-CASE\nbutton_en=Login\n")
+    rd = prep("--request", req_file("삭제 표시 시도"))
+    dprompt = Path(rd["prompt_file"]).read_text() if rd.get("state") == "ready" else ""
+    check("지운 파일: 검토 입력에는 지운 파일 경로와 기준 사본 위치만 있고 내용은 없다(고친 파일의 diff 는 그대로)",
+          "old-notes.txt" in dprompt and "DELETED-CONTENT" not in dprompt and "지운 파일" in dprompt and "DEL-CASE" in dprompt
+          and (Path(rd["kept"]) / "base/old-notes.txt").is_file())
+    sh(*G, "checkout", "-q", "--", "old-notes.txt", cwd=proj); (proj / "ui.txt").write_text("button=로그인\nbutton_en=Login\n")
+    sh(*G, "rm", "-q", "old-notes.txt", cwd=proj); sh(*G, "commit", "-qm", "drop notes", cwd=proj)
+
     # 여러 저장소 작업: 지도 `## 맥락` 의 대상 표(대상·경로·기준 커밋)가 검토 대상을 정한다. 지도를 둔 저장소(홈)는 표에 적었을 때만 대상이다.
     def lib(name, text):
         d = t / name; (d / "src").mkdir(parents=True); (d / "AGENTS.md").write_text(f"# {name}\n검사: grep\n"); (d / "src/index.txt").write_text(text)

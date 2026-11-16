@@ -62,6 +62,9 @@ bash "$here/run.sh" weight-disposable no-such-ref claude >/dev/null 2>&1; rc=$?
 [ $rc -eq 2 ] && ok "없는 키트 커밋은 실행 전에 거절(rc=2)" || ng "없는 커밋 처리(rc=$rc)"
 # 실행기 계약: 가짜 하네스(종료 코드 7, 파일 하나를 만듦)로 종료 코드를 그대로 돌려주는지와 끝난 프로젝트 파일·메타데이터를 남기는지 본다.
 fake=$(mktemp -d); results=$(mktemp -d)
+# 가짜 하네스는 버전을 "fake 0" 으로 답한다: 그 값을 고정값으로 둔 파일을 쓴다(실제 evals/pins.json 은 실제 CLI 버전).
+EVALS_PINS=$(mktemp); export EVALS_PINS  # 이 시험 내내 남는 파일(가짜 하네스 폴더는 중간에 지운다)
+printf '{"claude": {"cli": "fake 0", "model": "fake-model"}, "codex": {"cli": "fake 0", "model": "fake-model"}, "mock_user": "fake-model"}' > "$EVALS_PINS"
 printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho "$*" >> "$FAKE_LOG"\necho \x27{"session_id": "fake-sid"}\x27\necho made > made-by-fake.txt\nexit "${FAKE_RC:-7}"\n' > "$fake/claude"; chmod +x "$fake/claude"
 FAKE_LOG=$fake/log EVALS_RESULTS=$results PATH="$fake:$PATH" bash "$here/run.sh" weight-disposable "$REF" claude >/dev/null 2>&1; rc=$?
 [ $rc -eq 7 ] && ok "하네스 종료 코드 7을 그대로 반환" || ng "하네스 종료 코드 반환(rc=$rc)"
@@ -91,7 +94,7 @@ grep -q 'check=REVIEW REVIEW 외부 장애' "$cap/out2" && grep -q '"check_needs
   && ok "장애 전 제품 변경은 검토 필요로 남김" || ng "장애 전 변경 처리: $(cat "$cap/out2")"
 # 바꿨다가 되돌린 뒤 장애가 나도(최종 파일은 같아도) 편집 기록이 있으면 검토 필요로 남긴다
 printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho \x27{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Write", "input": {"file_path": "accounts.py"}}]}}\x27\necho \x27{"type": "error", "message": "Selected model is at capacity."}\x27\nexit 1\n' > "$cap/bin/claude"
-EVALS_RESULTS=$cap/r4 PATH="$cap/bin:$PATH" bash "$here/run.sh" account-after-correction "$REF" claude > "$cap/out4" 2>&1
+EVALS_RESULTS=$cap/r4 PATH="$cap/bin:$PATH" bash "$here/run.sh" account-specified "$REF" claude > "$cap/out4" 2>&1
 grep -q 'REVIEW 외부 장애.*편집 기록: accounts.py' "$cap/out4" && ok "되돌린 편집 뒤 장애도 검토 필요로 남김" || ng "되돌린 편집 뒤 장애: $(cat "$cap/out4")"
 # 일반 답 속 낱말(at capacity)은 외부 장애로 보지 않는다
 printf '#!/bin/sh\n[ "$1" = --version ] && { echo fake 0; exit 0; }\necho \x27{"type": "result", "result": "서버가 at capacity 일 때를 처리했습니다"}\x27\nexit 1\n' > "$cap/bin/claude"
@@ -99,8 +102,13 @@ EVALS_RESULTS=$cap/r3 PATH="$cap/bin:$PATH" bash "$here/run.sh" weight-disposabl
 grep -q 'check=FAIL FAIL 하네스가 종료 코드 1' "$cap/out3" && ok "답 속 낱말은 외부 장애로 세지 않음" || ng "답 속 낱말 처리: $(cat "$cap/out3")"
 rm -rf "${cap:?}"
 # 여러 턴: 두 번째 턴이 첫 턴의 세션 id 로 이어 가는지(가짜 하네스가 받은 인자로 확인)
-: > "$fake/log"; FAKE_RC=0 FAKE_LOG=$fake/log EVALS_RESULTS=$results PATH="$fake:$PATH" bash "$here/run.sh" archive-after-correction "$REF" claude >/dev/null 2>&1; rc=$?
+: > "$fake/log"; FAKE_RC=0 FAKE_LOG=$fake/log EVALS_RESULTS=$results PATH="$fake:$PATH" bash "$here/run.sh" answer-proceeds "$REF" claude >/dev/null 2>&1; rc=$?
 [ $rc -eq 0 ] && [ "$(grep -c '' "$fake/log")" -eq 2 ] && sed -n 2p "$fake/log" | grep -q -- '--resume fake-sid' && ok "여러 턴: 두 번째 턴이 같은 세션을 이어 감" || ng "여러 턴 이어 가기(rc=$rc, 호출 $(grep -c '' "$fake/log")회)"
+# 모델 고정: 턴마다 고정한 모델을 넘기고, CLI 버전이 고정값과 다르면 세션을 띄우지 않는다
+sed -n 1p "$fake/log" | grep -q -- '--model fake-model' && ok "모델 고정: 턴에 고정한 모델을 넘김" || ng "모델 고정: 첫 턴 인자 $(sed -n 1p "$fake/log")"
+printf '{"claude": {"cli": "other 9", "model": "fake-model"}, "codex": {"cli": "other 9", "model": "fake-model"}, "mock_user": "fake-model"}' > "$fake/pins-other.json"
+: > "$fake/log"; out=$(EVALS_PINS="$fake/pins-other.json" FAKE_RC=0 FAKE_LOG=$fake/log EVALS_RESULTS=$results/pinned PATH="$fake:$PATH" bash "$here/run.sh" weight-disposable "$REF" claude 2>&1); rc=$?
+[ $rc -ne 0 ] && [ ! -s "$fake/log" ] && printf '%s' "$out" | grep -q '고정값' && ok "모델 고정: CLI 버전이 다르면 세션을 띄우지 않음" || ng "모델 고정 거절(rc=$rc): $out"
 # 실제 플러그인 조합 옵션: EVALS_CLAUDE_SETTINGS 가 프로젝트 .claude/settings.json 에 합쳐지고(설치 커밋에 포함) meta 에 남는다
 : > "$fake/log"; FAKE_RC=0 FAKE_LOG=$fake/log EVALS_CLAUDE_SETTINGS="$here/profiles/real-plugins.json" EVALS_RESULTS=$results/plugins PATH="$fake:$PATH" bash "$here/run.sh" weight-disposable "$REF" claude >/dev/null 2>&1
 pm=$(ls "$results"/plugins/*.meta.json 2>/dev/null | head -1)
@@ -275,23 +283,24 @@ if total > 32000: bad.append(f"설치 문서 전체 {total}B > 32000B")
 print("\n".join(bad) or f"키트 영역 {len(region)}B, 검토자 지시문 {prompt}B, 설치 문서 전체 {total}B"); sys.exit(1 if bad else 0)
 PY
 # 비교 보고(report.py --compare): 통과 수와 함께 '무엇을 말할 수 있는가'를 낸다. 검토 필요는 실패로 세지 않고 사람 판독 대기로 센다
-python3 -I - "$here" <<'PY' && ok "비교 보고: 섞인 결과는 말할 수 없음·재발·비교 불가 표시, 검토 필요는 재발로 세지 않고 사람 판독 대기로 셈" || ng "비교 보고"
+python3 -I - "$here" <<'PY' && ok "비교 보고: 섞인 결과는 말할 수 없음·재발·비교 불가 표시(모델이 달라도),  검토 필요는 재발로 세지 않고 사람 판독 대기로 셈" || ng "비교 보고"
 import json, subprocess, sys, tempfile
 from pathlib import Path
 here = Path(sys.argv[1])
-def meta(d, case, commit, passed, review=False, gi="a"):
+def meta(d, case, commit, passed, review=False, gi="a", model="m"):
     m = {"case": case, "harness": "claude", "kit_commit": commit * 5, "input": "original", "check_passed": passed, "check_needs_review": review,
-         "check_unverified": False, "global_instructions": {"g": gi}, "harness_version": "1", "judge_version": "j",
+         "check_unverified": False, "global_instructions": {"g": gi}, "harness_version": "1", "judge_version": "j", "model": model,
          "observed": {"first_reply_chars": 100}, "completion": "not-verified"}
-    Path(d, f"{case}-{commit}-{passed}-{review}-{gi}.meta.json").write_text(json.dumps(m))
+    Path(d, f"{case}-{commit}-{passed}-{review}-{gi}-{model}.meta.json").write_text(json.dumps(m))
 with tempfile.TemporaryDirectory() as d:
     meta(d, "reg", "aaaaaaaa", True); meta(d, "reg", "bbbbbbbb", False)
     meta(d, "rec", "aaaaaaaa", False); meta(d, "rec", "bbbbbbbb", False)
     meta(d, "rev", "aaaaaaaa", False); meta(d, "rev", "bbbbbbbb", False, review=True)
     meta(d, "cmp", "aaaaaaaa", True); meta(d, "cmp", "bbbbbbbb", True, gi="b")
+    meta(d, "mdl", "aaaaaaaa", True); meta(d, "mdl", "bbbbbbbb", True, model="other")
     out = subprocess.run([sys.executable, "-I", str(here / "report.py"), "--compare", "aaaaaaa", "bbbbbbb", d], capture_output=True, text=True).stdout
     row = lambda c: next(l for l in out.splitlines() if l.startswith(c + " "))
-    assert "말할 수 없음" in row("reg") and "퇴보" not in row("reg") and "재발" in row("rec") and "재발" not in row("rev") and "사람 판독 대기" in row("rev") and "비교 불가: 전역 지침" in row("cmp"), out
+    assert "말할 수 없음" in row("reg") and "퇴보" not in row("reg") and "재발" in row("rec") and "재발" not in row("rev") and "사람 판독 대기" in row("rev") and "비교 불가: 전역 지침" in row("cmp") and "비교 불가: 모델" in row("mdl"), out
 PY
 python3 -I - "$here" <<'PY' && ok "완료 분류: 모두 관찰로 확인했을 때만 완료(직접 증거 없음·REVIEW·미정·미확인은 완료 아님), 실패는 대기보다 먼저, 필수 검토 미수행=review-missing" || ng "완료 분류"
 import sys; sys.path.insert(0, sys.argv[1]); from verdict import completion as c

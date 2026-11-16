@@ -29,7 +29,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 KIT = HERE.parent
 sys.path.insert(0, str(HERE))
-import observe, result, session, transcript, verdict
+import observe, pins, result, session, transcript, verdict
 from caseinfo import MissingJudgeFile, case_path, judge_version
 from judge import FAIL, REVIEW, UNVERIFIED
 
@@ -312,7 +312,7 @@ def run_once(case_name, case_dir, ref, commit, harness_name, i, out_root, state)
         agents_bytes = len((kit / "AGENTS.md").read_bytes())
     try:
         facts = {
-            "case": case_name, "kit_ref": ref, "kit_commit": commit, "harness": harness_name, "run": i, "harness_version": harness.version(),
+            "case": case_name, "kit_ref": ref, "kit_commit": commit, "harness": harness_name, "run": i, "harness_version": harness.version(), "model": pins.model(harness_name),
             "exit_code": rc, "seconds": seconds, "agents_md_bytes": agents_bytes, "check": word, "check_output": text,
             "input": input_kind, "user_turns": sent, "planned_turns": len(turns), "observed": observed,
             "verifier": v["state"], "verify_reason": v["reason"], "verify_rounds": v["rounds"], "verifier_exit_code": v["verifier_exit_code"],
@@ -392,6 +392,8 @@ def main(argv):
         fail("하네스는 claude 또는 codex")
     if not shutil.which(harness_name):
         fail(f"{harness_name} 명령이 없다")
+    if (mismatch := pins.check(harness_name)):  # 고정한 CLI 가 아니면 같은 조건의 비교가 아니다: 모델을 돌리기 전에 멈춘다
+        fail(mismatch)
     out_root = os.environ.get("EVALS_RESULTS") or f"{HERE}/results/{time.strftime('%Y%m%d')}"
     # 턴은 프로젝트 폴더로 옮겨 실행하므로 결과 폴더는 절대 경로로 바꿔 둔다(상대 경로면 턴 기록을 쓰지 못한다).
     os.makedirs(out_root, exist_ok=True)

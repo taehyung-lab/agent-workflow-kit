@@ -22,6 +22,12 @@ from pathlib import Path
 
 import transcript  # 기록 형식 읽기(세션 id). 이 모듈을 가져오는 쪽은 모두 evals/ 를 모듈 경로에 둔다
 
+
+def _model_flags(harness):
+    """세션을 띄울 때만 모델 고정값(pins.json)을 읽는다. 판정만 하는 모듈(verdict·result)은 고정값에 기대지 않는다."""
+    import pins
+    return pins.flags(harness)
+
 KIT = Path(__file__).resolve().parents[1]
 LIMIT = 1200  # 한 턴의 제한 시간(초)
 Turn = namedtuple("Turn", "exit_code log err session_id")
@@ -178,7 +184,7 @@ class Claude(Harness):
 
     def _flags(self):
         # entry 가 있으면 사용자 설정(~/.claude 의 CLAUDE.md·플러그인)을 이 세션에서만 읽지 않게 하고 그 글을 시스템 지침 끝에 넣는다.
-        return self.FLAGS + (["--setting-sources", "project,local", "--append-system-prompt", self.entry] if self.entry else [])
+        return self.FLAGS + _model_flags("claude") + (["--setting-sources", "project,local", "--append-system-prompt", self.entry] if self.entry else [])
 
     def start(self, prompt, out):
         return self._turn(["claude", "-p", prompt, *self._flags()], out, cwd=self.project)
@@ -190,7 +196,7 @@ class Claude(Harness):
 
     def review(self, directory, prompt, log):
         exe = shutil.which("claude")
-        return exe and _review([exe, "-p", prompt, "--output-format", "stream-json", "--verbose", "--allowedTools", "Read,Grep,Glob,Bash", "--max-turns", "30"],
+        return exe and _review([exe, "-p", prompt, "--output-format", "stream-json", "--verbose", "--allowedTools", "Read,Grep,Glob,Bash", "--max-turns", "30", *_model_flags("claude")],
                                directory, log)
 
 
@@ -213,7 +219,7 @@ class Codex(Harness):
 
     def __init__(self, project=None, entry=None):
         super().__init__(project, entry)
-        self.home, self.flags = None, []
+        self.home, self.flags = None, [*_model_flags("codex")]
         if project is None:
             return
         self.home = _codex_home(entry)

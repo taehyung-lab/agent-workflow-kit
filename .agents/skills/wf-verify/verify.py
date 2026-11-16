@@ -481,12 +481,25 @@ def materialize_rev(root, rev, dest):
 
 
 def diff(base, target, out):
-    """(검토자 입력용 diff, 잘렸나, 실행이 실패했나). 전체 diff 는 out 파일에 남긴다."""
+    """(검토자 입력용 diff, 잘렸나, 실행이 실패했나). 전체 diff 는 out 파일에 남긴다.
+    검토자 입력에서 지운 파일은 내용 대신 경로만 「지운 파일」 목록으로 보인다: 내용은 기준 사본(base)에 그대로 있고,
+    지운 내용을 통째로 실으면 큰 삭제가 입력 한도를 채워 고친·새 파일을 검토하지 못한다."""
     # 링크는 따라가지 않고 링크로 비교한다(.claude/skills 같은 링크가 같은 변경을 두 번 내거나, 대상 없는 링크가 잡음을 내지 않게)
     r = run(["diff", "-ruN", "--no-dereference", "-x", ".git", "-x", "work", str(base), str(target)])
-    text = r.stdout.decode("utf-8", "replace").replace(str(base), "a").replace(str(target), "b")
-    Path(out).write_text(text, encoding="utf-8")
+    raw = r.stdout.decode("utf-8", "replace")
+    Path(out).write_text(raw.replace(str(base), "a").replace(str(target), "b"), encoding="utf-8")
     failed = r.returncode not in (0, 1)  # diff: 0 같음, 1 다름, 2 오류
+    kept, removed = [], []
+    for chunk in re.split(r"(?m)^(?=diff -ruN )", raw):
+        # 머리줄: "diff -ruN <옵션들> <기준 파일> <대상 파일>". 대상 쪽 경로는 target 폴더 아래에서 시작한다
+        m = re.match(r"diff -ruN .* (" + re.escape(str(target)) + r"/[^\n]*)\n", chunk)
+        if m and not os.path.lexists(m.group(1)):
+            removed.append(os.path.relpath(m.group(1), str(target)))
+        else:
+            kept.append(chunk)
+    text = "".join(kept).replace(str(base), "a").replace(str(target), "b")
+    if removed:
+        text += f"\n지운 파일 {len(removed)}개(내용은 기준 사본 {base} 에 있다):\n" + "".join(f"- {f}\n" for f in removed)
     if len(text.encode()) > DIFF_LIMIT:
         return text.encode()[:DIFF_LIMIT].decode("utf-8", "ignore") + f"\n(diff 가 {DIFF_LIMIT} 바이트를 넘어 잘렸다)\n", True, failed
     return text, False, failed
