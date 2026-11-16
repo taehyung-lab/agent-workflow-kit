@@ -8,10 +8,13 @@
     물어야 할 것을 첫 답 전에 찾지 못했으면 그 주제는 추천안대로 정해져 최종 동작 판정(oracle)에서 드러난다.
   - 답 뒤 턴의 새 질문을 판정하려고 정책 검사 결과·실패 문구로 "이미 구현했나"를 추론하던 장치는 2026-11-16 지웠다:
     정책 검사는 "정책에 맞나"에 답할 뿐 "구현했나"에 답하지 못했고(독립 검토 네 번 반려), 위 기준에서는 그 판정이 필요 없다.
-제품 변경은 시작 커밋(base)과의 차이로 센다: 에이전트가 커밋해도 잡힌다.
+제품 변경은 두 증거로 센다: 턴이 끝났을 때 시작 커밋(base)과의 차이(커밋해도 잡힘)와, 그 턴의 대화 기록에 남은 제품 파일 편집 호출
+(같은 턴 안에서 고쳤다가 되돌려 끝 상태가 같아도 잡힘: 2026-11-16 재검토 3). 대화 기록을 온전히 읽을 수 없으면 증거 부족이다.
 """
-import re, subprocess
+import json, re, subprocess, sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # 제품이 아닌 것: 작업 지도·키트·하네스 설정, 실행이 만든 캐시·자료 파일
 SKIP = ("work/", ".claude/", ".agents/", ".codex/", "AGENTS.md", "CLAUDE.md")
@@ -32,6 +35,34 @@ def product_changes(proj, base):
     changed = _git(proj, "diff", "--name-only", "-z", base).decode("utf-8", "replace").split("\0")
     new = _git(proj, "ls-files", "--others", "--exclude-standard", "-z").decode("utf-8", "replace").split("\0")
     return sorted({f for f in changed + new if f and _product(f)})
+
+
+def product_edit_calls(log, proj):
+    """그 턴의 대화 기록(log)에 남은 편집 호출이 닿은 제품 파일. 기록을 읽을 수 없거나 JSON 이 아닌 줄이 있으면 None(증거 부족).
+    경로가 명시된 편집 기록만 쓴다: Claude 의 Write·Edit 류 도구 호출(file_path)과 Codex 의 파일 변경 사건(paths).
+    셸 명령은 쓰지 않는다: "파일 이름과 > 가 함께 있으면 편집"이라는 판별은 작업 지도를 셸로 쓰며 파일 이름을 적기만 해도 편집으로 잡아,
+    실제 변경이 없던 지난 실행 88개 중 27개를 편집으로 셌다(2026-11-16). 셸로 같은 턴 안에 고쳤다가 되돌린 것은 잡지 못한다(한계)."""
+    from transcript import calls
+    try:
+        with open(log, encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    json.loads(line)
+        root, found = Path(proj).resolve(), set()
+        for c in calls(log):
+            paths = [str(c["input"].get("file_path") or "")] if c["kind"] == "tool" and c["name"] in ("Write", "Edit", "MultiEdit", "NotebookEdit") \
+                else list(c["input"].get("paths") or []) if c["kind"] == "edit" else []
+            for target in filter(None, paths):
+                full = Path(target) if Path(target).is_absolute() else root / target
+                try:
+                    rel = full.resolve().relative_to(root).as_posix()
+                except ValueError:
+                    continue
+                if _product(rel):
+                    found.add(rel)
+        return sorted(found)
+    except (OSError, ValueError, UnicodeError):
+        return None
 
 
 def product_diff(proj, base):

@@ -32,8 +32,16 @@ if prompt is not None:  # 모의 사용자 분류(새 형식은 인용문, 옛 �
 nf = os.environ["SCEN_N"]; n = int(open(nf).read()) + 1 if os.path.exists(nf) else 1; open(nf, "w").write(str(n))
 turn = scen["turns"][n - 1] if n <= len(scen["turns"]) else {"reply": "마무리했습니다."}
 print(json.dumps({"type": "system", "subtype": "init", "session_id": "s1"}))
+if turn.get("garble_log"):  # 읽을 수 없는 기록 줄(대화 기록 손상)
+    print("{not json")
 if turn.get("write"):
+    if turn.get("revert_in_turn"):
+        keep = open("accounts.py", encoding="utf-8").read()
     shutil.copy(os.path.join(os.environ["SCEN_VARIANTS"], turn["write"] + ".py"), "accounts.py")
+    print(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": f"w{n}", "name": "Write", "input": {"file_path": os.path.abspath("accounts.py")}}]}}))
+    if turn.get("revert_in_turn"):  # 같은 턴 안에서 되돌린다(턴 끝 상태는 시작과 같다)
+        open("accounts.py", "w", encoding="utf-8").write(keep)
+        print(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": f"r{n}", "name": "Write", "input": {"file_path": os.path.abspath("accounts.py")}}]}}))
 if turn.get("commit"):
     g = ["git", "-c", "user.name=a", "-c", "user.email=a@invalid", "-c", "commit.gpgsign=false"]
     subprocess.run(g + ["add", "-A"], capture_output=True); subprocess.run(g + ["commit", "-qm", "agent"], capture_output=True)

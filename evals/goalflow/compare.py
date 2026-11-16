@@ -33,7 +33,7 @@ import pins  # noqa: E402
 from transcript import read, commands, replies  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from asked import surfaced  # noqa: E402
-from conversation import MockUser, product_changes as changes_since, product_diff  # noqa: E402
+from conversation import MockUser, product_changes as changes_since, product_diff, product_edit_calls  # noqa: E402
 from table import result_meta  # noqa: E402
 
 arm, harness, idx, out = sys.argv[1], sys.argv[2], sys.argv[3], Path(sys.argv[4]).resolve()
@@ -141,7 +141,7 @@ for n in range(1, mock.turns + 1):
     # 분류기가 내용 없는 글을 보고 물은 것으로 세어 묻지 않은 답까지 준다(2026-11-13 표본 라벨 과제의 스킬 구성 3회가 그랬다).
     mock.observe("\n\n".join(replies(str(log))) or final)
     (out / f"{name}.t{n}.diff").write_text(product_diff(proj, base), encoding="utf-8")  # 증거: 그 턴이 끝났을 때의 제품 변경
-    rows.append({"turn": n, "rc": rc, "answered_now": sorted(mock.answered - before), "seconds": secs, "product_changes": product_changes(), "reply_chars": len(final),
+    rows.append({"turn": n, "rc": rc, "answered_now": sorted(mock.answered - before), "product_edit_calls": product_edit_calls(str(log), proj), "seconds": secs, "product_changes": product_changes(), "reply_chars": len(final),
                  "question_marks": final.count("?") + final.count("？"), "reply": final[:6000],
                  "record_runs": sum(bool(re.search(r"verify\.py\s+record\b", c["command"])) for c in cmds),
                  "review_runs": sum(bool(re.search(r"verify\.py\s+prepare\b", c["command"])) for c in cmds),

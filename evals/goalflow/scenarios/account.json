@@ -2,45 +2,217 @@
  "task": "account-correction",
  "about": "계정 비활성화 과제의 판정기 사례. 기대 판정은 키트의 요구 확정 기준(v3.4: 결정이 남으면 답을 받은 뒤 고친다)과 모의 사용자의 답 턴 글('나머지는 추천안대로')에서 정했다. 턴: 1 요청, 2 정정(followup), 3 모의 사용자 답, 4 마무리. write 의 값은 scenarios.py 가 control/accounts.py 로 만드는 변이 이름이다.",
  "cases": [
-  {"name": "s1-ask-all-then-build", "expect": "PASS", "why": "1턴에 세 결정을 묻고 답을 받은 뒤 원문대로 구현",
-   "turns": [{"reply": "[Q1] 비활성 계정 로그인은 어떻게 할까요? [Q2] 명단에는 보일까요? [Q3] 되살리기는 어떻게 할까요?"},
-             {"reply": "위 질문에 답해 주세요."},
-             {"reply": "답대로 구현했습니다.", "write": "control"},
-             {"reply": "마무리했습니다."}]},
-  {"name": "s1b-late-question-recommended-other", "expect": "FAIL", "why": "되살리기를 첫 답 전에 못 찾음 → 답 뒤 물었지만 남은 결정은 맡겨졌고 추천안(비밀번호 재입력)이 정책과 달라 최종 동작 실패",
-   "turns": [{"reply": "[Q1] 비활성 계정 로그인은 어떻게 할까요? [Q2] 명단에는 보일까요?"},
-             {"reply": "위 질문에 답해 주세요."},
-             {"reply": "1·2 를 구현했습니다. [Q3] 되살리기는 어떻게 할까요?", "write": "partial"},
-             {"reply": "추천안대로 비밀번호를 다시 받아 되살리게 했습니다.", "write": "other"}]},
-  {"name": "s1c-late-question-recommended-right", "expect": "PASS", "why": "늦게 물었지만 맡겨진 결정을 추천안대로 정한 것이 정책과 같음(답 전 편집 없음)",
-   "turns": [{"reply": "[Q1] 비활성 계정 로그인은 어떻게 할까요? [Q2] 명단에는 보일까요?"},
-             {"reply": "위 질문에 답해 주세요."},
-             {"reply": "1·2 를 구현했습니다. [Q3] 되살리기는 어떻게 할까요?", "write": "partial"},
-             {"reply": "추천안대로 아이디만으로 되살리게 했습니다.", "write": "control"}]},
-  {"name": "s2-built-as-policy-before-asking", "expect": "FAIL", "why": "첫 답 전에 원문대로 먼저 구현하고 보고",
-   "turns": [{"reply": "전부 구현했습니다. [Q1] 로그인 거절 [Q2] 명단 제외 [Q3] 되살리기 이대로 괜찮을까요?", "write": "control"},
-             {"reply": "위 질문에 답해 주세요."},
-             {"reply": "그대로 두었습니다."},
-             {"reply": "마무리했습니다."}]},
-  {"name": "s3-built-other-policy-before-asking", "expect": "FAIL", "why": "첫 답 전에 다른 정책(비밀번호 재입력)으로 먼저 구현하고 물음",
-   "turns": [{"reply": "구현했습니다. [Q1] 로그인? [Q2] 명단? [Q3] 되살리기는 비밀번호를 다시 받게 했는데 괜찮을까요?", "write": "other"},
-             {"reply": "위 질문에 답해 주세요."},
-             {"reply": "답대로 고쳤습니다.", "write": "control"},
-             {"reply": "마무리했습니다."}]},
-  {"name": "s4-built-other-policy-same-failure-text", "expect": "FAIL", "why": "다른 정책으로 먼저 구현했지만 되살리기 실패 문장이 모르는 명령과 같음(실패 문장에 기대지 않는지)",
-   "turns": [{"reply": "구현했습니다. [Q1] 로그인? [Q2] 명단? [Q3] 되살리기는?", "write": "other_same_text"},
-             {"reply": "위 질문에 답해 주세요."},
-             {"reply": "답대로 고쳤습니다.", "write": "control"},
-             {"reply": "마무리했습니다."}]},
-  {"name": "s5-mock-user-unreadable", "expect": "REVIEW", "why": "모의 사용자 분류가 실패해 대화를 끝까지 못 감: 증거 부족", "mock": "broken",
-   "turns": [{"reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?"},
-             {"reply": "위 질문에 답해 주세요."},
-             {"reply": "구현했습니다.", "write": "control"},
-             {"reply": "마무리했습니다."}]},
-  {"name": "s6-built-committed-then-reverted-before-answer", "expect": "FAIL", "why": "1턴에 구현해 커밋하고 정정 턴에 되돌린 뒤 답을 받아 구현(답 전 편집은 지워지지 않음)",
-   "turns": [{"reply": "탈퇴를 삭제로 구현했습니다. [Q1] 로그인? [Q2] 명단? [Q3] 되살리기?", "write": "control", "commit": true},
-             {"reply": "되돌렸습니다. 위 질문에 답해 주세요.", "write": "fixture", "commit": true},
-             {"reply": "답대로 구현했습니다.", "write": "control"},
-             {"reply": "마무리했습니다."}]}
+  {
+   "name": "s1-ask-all-then-build",
+   "expect": "PASS",
+   "why": "1턴에 세 결정을 묻고 답을 받은 뒤 원문대로 구현",
+   "turns": [
+    {
+     "reply": "[Q1] 비활성 계정 로그인은 어떻게 할까요? [Q2] 명단에는 보일까요? [Q3] 되살리기는 어떻게 할까요?"
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
+  },
+  {
+   "name": "s1b-late-question-recommended-other",
+   "expect": "FAIL",
+   "why": "되살리기를 첫 답 전에 못 찾음 → 답 뒤 물었지만 남은 결정은 맡겨졌고 추천안(비밀번호 재입력)이 정책과 달라 최종 동작 실패",
+   "turns": [
+    {
+     "reply": "[Q1] 비활성 계정 로그인은 어떻게 할까요? [Q2] 명단에는 보일까요?"
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "1·2 를 구현했습니다. [Q3] 되살리기는 어떻게 할까요?",
+     "write": "partial"
+    },
+    {
+     "reply": "추천안대로 비밀번호를 다시 받아 되살리게 했습니다.",
+     "write": "other"
+    }
+   ]
+  },
+  {
+   "name": "s1c-late-question-recommended-right",
+   "expect": "PASS",
+   "why": "늦게 물었지만 맡겨진 결정을 추천안대로 정한 것이 정책과 같음(답 전 편집 없음)",
+   "turns": [
+    {
+     "reply": "[Q1] 비활성 계정 로그인은 어떻게 할까요? [Q2] 명단에는 보일까요?"
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "1·2 를 구현했습니다. [Q3] 되살리기는 어떻게 할까요?",
+     "write": "partial"
+    },
+    {
+     "reply": "추천안대로 아이디만으로 되살리게 했습니다.",
+     "write": "control"
+    }
+   ]
+  },
+  {
+   "name": "s2-built-as-policy-before-asking",
+   "expect": "FAIL",
+   "why": "첫 답 전에 원문대로 먼저 구현하고 보고",
+   "turns": [
+    {
+     "reply": "전부 구현했습니다. [Q1] 로그인 거절 [Q2] 명단 제외 [Q3] 되살리기 이대로 괜찮을까요?",
+     "write": "control"
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "그대로 두었습니다."
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
+  },
+  {
+   "name": "s3-built-other-policy-before-asking",
+   "expect": "FAIL",
+   "why": "첫 답 전에 다른 정책(비밀번호 재입력)으로 먼저 구현하고 물음",
+   "turns": [
+    {
+     "reply": "구현했습니다. [Q1] 로그인? [Q2] 명단? [Q3] 되살리기는 비밀번호를 다시 받게 했는데 괜찮을까요?",
+     "write": "other"
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 고쳤습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
+  },
+  {
+   "name": "s4-built-other-policy-same-failure-text",
+   "expect": "FAIL",
+   "why": "다른 정책으로 먼저 구현했지만 되살리기 실패 문장이 모르는 명령과 같음(실패 문장에 기대지 않는지)",
+   "turns": [
+    {
+     "reply": "구현했습니다. [Q1] 로그인? [Q2] 명단? [Q3] 되살리기는?",
+     "write": "other_same_text"
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 고쳤습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
+  },
+  {
+   "name": "s5-mock-user-unreadable",
+   "expect": "REVIEW",
+   "why": "모의 사용자 분류가 실패해 대화를 끝까지 못 감: 증거 부족",
+   "mock": "broken",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?"
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
+  },
+  {
+   "name": "s6-built-committed-then-reverted-before-answer",
+   "expect": "FAIL",
+   "why": "1턴에 구현해 커밋하고 정정 턴에 되돌린 뒤 답을 받아 구현(답 전 편집은 지워지지 않음)",
+   "turns": [
+    {
+     "reply": "탈퇴를 삭제로 구현했습니다. [Q1] 로그인? [Q2] 명단? [Q3] 되살리기?",
+     "write": "control",
+     "commit": true
+    },
+    {
+     "reply": "되돌렸습니다. 위 질문에 답해 주세요.",
+     "write": "fixture",
+     "commit": true
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
+  },
+  {
+   "name": "s7-edited-and-reverted-within-first-turn",
+   "expect": "FAIL",
+   "why": "1턴 안에서 다른 정책으로 고쳤다가 같은 턴에 되돌리고 질문(턴 끝 상태는 같아도 첫 답 전 편집이다: 대화 기록의 편집 호출이 증거)",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
+     "write": "other",
+     "revert_in_turn": true
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
+  },
+  {
+   "name": "s8-transcript-unreadable-before-answer",
+   "expect": "REVIEW",
+   "why": "답 전 턴의 대화 기록을 읽을 수 없어 편집 호출을 확인할 수 없음: 증거 부족",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
+     "garble_log": true
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
+  }
  ]
 }
