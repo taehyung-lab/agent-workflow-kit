@@ -496,7 +496,8 @@ def diff(base, target, out):
         if m and not os.path.lexists(m.group(1)):
             removed.append(os.path.relpath(m.group(1), str(target)))
             # diff 가 머리줄 없이 내는 줄(바이너리 변경, 폴더↔파일 바뀜, 읽기 오류)이 이 덩어리 끝에 붙어 있으면 지운 파일과 함께 버리지 않는다
-            orphans = [l for l in chunk.splitlines(keepends=True)[1:] if not l.startswith(("--- ", "+++ ", "@@", "-", "+", " ", "\\"))]
+            # 남길 줄은 그 모양으로 고른다(줄은 "\n" 으로만 나눈다: 지운 파일 안의 \r·폼피드로 끊긴 글이 남는 줄로 섞이지 않게)
+            orphans = [l + "\n" for l in chunk.split("\n")[1:] if l.startswith(("Binary files ", "File ", "Only in ", "diff: ", "Common subdirectories"))]
             kept.extend(orphans)
         else:
             kept.append(chunk)

@@ -498,7 +498,9 @@ exit 0
     dd = Path(tempfile.mkdtemp(dir=t)); (dd / "b").mkdir(); (dd / "g").mkdir()
     (dd / "b/aa-gone.txt").write_text("gone\n"); (dd / "b/ab.bin").write_bytes(b"\x00\x01old"); (dd / "g/ab.bin").write_bytes(b"\x00\x02new")
     (dd / "b/ac-gone.txt").write_text("gone\n"); (dd / "b/ad-swap").mkdir(); (dd / "b/ad-swap/in.txt").write_text("x\n"); (dd / "g/ad-swap").write_text("now a file\n")
+    (dd / "b/ae-cr.txt").write_bytes(b"old1\rold2\rSECRET-CR\r"); (dd / "b/af-ff.txt").write_bytes(b"x\x0cSECRET-FF\n")
     dtext = _v.diff(dd / "b", dd / "g", dd / "full.txt")[0]
+    check("지운 파일 안의 \\r·폼피드로 끊긴 글도 검토 입력에 새어 나오지 않는다", "SECRET-CR" not in dtext and "SECRET-FF" not in dtext and "ae-cr.txt" in dtext)
     check("지운 파일 뒤의 머리줄 없는 diff 줄(바이너리 변경·폴더가 파일로 바뀜)이 검토 입력에 남는다",
           "ab.bin" in dtext and "ad-swap" in dtext and "aa-gone.txt" in dtext and "gone\n" not in dtext.replace("aa-gone", "").replace("ac-gone", ""))
 

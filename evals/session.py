@@ -219,7 +219,7 @@ class Codex(Harness):
 
     def __init__(self, project=None, entry=None):
         super().__init__(project, entry)
-        self.home, self.flags = None, [*_model_flags("codex")]
+        self.home, self.flags = None, []  # 사용자 턴에만 주는 옵션(네트워크·훅 신뢰). 고정 모델은 턴마다 따로 넣는다
         if project is None:
             return
         self.home = _codex_home(entry)
@@ -243,13 +243,13 @@ class Codex(Harness):
             self.project_trusted = True
 
     def start(self, prompt, out):
-        return self._turn(["codex", "exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", *self.flags, "-C", str(self.project), prompt],
+        return self._turn(["codex", "exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", *_model_flags("codex"), *self.flags, "-C", str(self.project), prompt],
                           out, env={"CODEX_HOME": self.home}, stdin=subprocess.DEVNULL)
 
     def resume(self, prompt, out, from_runner=False):
         """from_runner: 사용자 턴이 아닌 실행기의 반환 턴(네트워크·훅 신뢰 옵션은 주지 않는다)."""
         return self._turn(["codex", "exec", "resume", "--json", "--skip-git-repo-check", "-c", 'sandbox_mode="workspace-write"',
-                           *([] if from_runner else self.flags), self.session_id, prompt], out, cwd=self.project, stdin=subprocess.DEVNULL,
+                           *_model_flags("codex"), *([] if from_runner else self.flags), self.session_id, prompt], out, cwd=self.project, stdin=subprocess.DEVNULL,
                           env={"CODEX_HOME": self.home})
 
     def review(self, directory, prompt, log):
