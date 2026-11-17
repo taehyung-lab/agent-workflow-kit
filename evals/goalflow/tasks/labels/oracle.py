@@ -185,10 +185,16 @@ def case_lookup():
     a = j.ok("specimen", "M1")
     b = j.ok("specimen", "m1")
     assert (a["code"], a["name"], b["code"], b["name"]) == ("M1", "참나무", "m1", "단풍나무")
+    unchanged("specimen", "a1")
+    unchanged("rename", "a1", "다른 이름")
 
 
 def case_edit():
     n = new()
+    unchanged("add", n, "a1", 1)
+    j.ok("add", n, "A1", 1)
+    unchanged("remove", n, "a1", 1)
+    j.ok("remove", n, "A1", 1)
     j.ok("add", n, "M1", 2)
     s = j.ok("add", n, "m1", 3)
     assert items(s) == {"M1": ("참나무", 2), "m1": ("단풍나무", 3)} and s["used"] == 5

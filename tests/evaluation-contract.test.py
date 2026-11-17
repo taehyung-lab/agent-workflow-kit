@@ -25,6 +25,23 @@ import caseinfo
 
 
 class EvaluationContract(unittest.TestCase):
+    def test_labels_oracle_rejects_fallback_after_exact_code_policy(self):
+        task = ROOT / 'evals/goalflow/tasks/labels'
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / 'p'
+            shutil.copytree(task / 'fixture', project)
+            for source in (task / 'control').glob('*.py'):
+                shutil.copy2(source, project / source.name)
+            catalog = project / 'catalog.py'
+            text = catalog.read_text().replace('    raise ValueError("없는 표본")',
+                '    for specimen in data["specimens"]:\n        if specimen["code"].casefold() == code.casefold():\n            return specimen\n    raise ValueError("없는 표본")')
+            catalog.write_text(text)
+            result = subprocess.run([sys.executable, '-I', str(task / 'oracle.py'), str(project)],
+                                    capture_output=True, text=True)
+            data = json.loads(result.stdout)
+            self.assertEqual(sorted(data['failed_decision']),
+                             ['case-distinct-add-and-remove', 'case-distinct-specimen-lookup'])
+
     def test_fixed_policy_is_delivered_even_when_not_discovered(self):
         user = MockUser(['라벨을 만들어 주세요'], '1. 이름 보존\n2. 대여 금지',
                         'topics', lambda text, topics: {1: '이름을 보존할까요?'})
@@ -50,6 +67,25 @@ class EvaluationContract(unittest.TestCase):
         self.assertEqual(result['goalflow']['process'], 'ok')
         self.assertEqual(result['goalflow']['discovery'], 'incomplete')
         self.assertIn('발견', result['check_output'])
+
+    def test_existing_contract_is_not_a_required_user_question(self):
+        data = summary('kit', conversation_contract='fixed-policy-v1',
+                       policy_topics=[1, 2, 3], discovered=[1, 2], answered=[1, 2, 3],
+                       required_discovery_topics=[1, 2], discovery_exclusions={'3': '기존 공개 동작을 보존할 근거가 있고 새 정책은 후속 답이다'})
+        result = result_meta(data)
+        self.assertTrue(result['check_passed'], result)
+        data['answered'] = [1, 2]
+        self.assertFalse(result_meta(data)['check_passed'])
+        data['answered'] = [1, 2, 3]
+        data['discovered'] = [1]
+        self.assertEqual(result_meta(data)['goalflow']['missing_topics'], [2])
+
+    def test_discovery_exclusion_needs_explicit_complete_basis(self):
+        for exclusions in ({}, {'3': ''}, {'2': '이미 정해짐'}, {'3': 1}, None):
+            data = summary('kit', conversation_contract='fixed-policy-v1',
+                           policy_topics=[1, 2, 3], discovered=[1, 2], answered=[1, 2, 3],
+                           required_discovery_topics=[1, 2], discovery_exclusions=exclusions)
+            self.assertEqual(result_meta(data)['goalflow']['discovery'], 'unverified')
 
     def test_discovery_is_not_required_in_the_explicit_implementation_control(self):
         data = summary('kit', mock='all', conversation_contract='fixed-policy-v1',

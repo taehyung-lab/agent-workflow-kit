@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from asked import surfaced  # noqa: E402
 from conversation import CONVERSATION_CONTRACT, MockUser, log_readable, product_changes as changes_since, product_diff, read_state, turn_writes, product_snapshot, decision_contract  # noqa: E402
 from turnwatch import Watch  # noqa: E402
-from table import result_meta  # noqa: E402
+from table import result_meta, discovery_scope  # noqa: E402
 
 arm, harness, idx, out = sys.argv[1], sys.argv[2], sys.argv[3], Path(sys.argv[4]).resolve()
 # 고정한 CLI 가 아니면 같은 조건의 비교가 아니다. 모의 사용자(asked.py)는 하네스와 상관없이 claude CLI 로 돈다.
@@ -89,6 +89,11 @@ STATIC = [FIRST] + ([(TASK / "followup.txt").read_text(encoding="utf-8").strip()
 classifier = lambda reply, topics: surfaced(reply, topics, record_dir=out / f"{name}.classifier")
 mock = MockUser(STATIC, answer, topics, classifier, MOCK)
 DECISION_TURNS = decision_contract(TASK, len(STATIC))
+discovery_file = TASK / 'discovery.json'
+DISCOVERY = json.loads(discovery_file.read_text()) if discovery_file.exists() else {}
+if discovery_file.exists() and set(DISCOVERY) != {'required_discovery_topics', 'discovery_exclusions'}:
+    raise ValueError('발견 범위와 제외 근거를 함께 기록해야 한다')
+discovery_scope(sorted(mock.items), DISCOVERY.get('required_discovery_topics', sorted(mock.items)), DISCOVERY.get('discovery_exclusions', {}))
 
 # 두 대화 방식은 세션 실행·재개·격리·원시 기록 보존을 함께 사용한다.
 implementation = HARNESSES[harness](proj, profile="comparison")
@@ -174,7 +179,7 @@ try:
                "mock": MOCK, "answered": sorted(mock.answered), "skills_fingerprint": skills_fingerprint,
                **goalflow_fingerprints(TASK), "global_instructions": implementation.instruction_context(),
                "prompt_configuration": {"prefix_override": os.environ.get("CMP_PREFIX")}, "effective_prefix": PREFIX,
-               "conversation_contract": CONVERSATION_CONTRACT, "policy_topics": sorted(mock.items), "discovered": sorted(mock.discovered),
+               "conversation_contract": CONVERSATION_CONTRACT, "policy_topics": sorted(mock.items), **DISCOVERY, "discovered": sorted(mock.discovered),
                "surfaced_quotes": {str(t): q for t, q in mock.quotes.items()}, "mock_error": mock_error, "map": any((proj / "work").glob("*/work.md")), "final_changes": product_changes(), "init": init,
                "oracle_exit": oracle.returncode, "automated_valid": verdict.get("automated_valid"), "observation_complete": verdict.get("observation_complete"),
                "failed": [c.get("name") for c in cases if c.get("passed") is False], "failed_decision": verdict.get("failed_decision"), "unobserved": [c.get("name") for c in cases if c.get("passed") is None],

@@ -68,17 +68,32 @@ def process_state(summary):
     return "review" if summary.get("mock_error") or unreadable_before_answer(summary) or conversation_unfinished(summary) else "ok"
 
 
+def discovery_scope(policy_topics, required, exclusions):
+    if not isinstance(required, list) or any(type(n) is not int for n in required) or len(set(required)) != len(required):
+        raise ValueError('발견 필수 주제 형식이 잘못됐다')
+    if not set(required) <= set(policy_topics) or not isinstance(exclusions, dict):
+        raise ValueError('발견 범위가 전달 정책과 다르다')
+    omitted = {str(n) for n in set(policy_topics) - set(required)}
+    if set(exclusions) != omitted or any(not isinstance(reason, str) or not reason.strip() for reason in exclusions.values()):
+        raise ValueError('발견을 요구하지 않는 각 정책의 기존 근거가 필요하다')
+    return required
+
+
 def discovery_state(summary):
     """고정 정책을 듣기 전 발견한 선택. 구기록에서 없는 증거를 만들어 내지 않는다."""
     if 'conversation_contract' not in summary:
         return 'unmeasured', []
     if summary['conversation_contract'] != 'fixed-policy-v1':
         return 'unverified', []
-    required, found, delivered = (summary.get(k) for k in ('policy_topics', 'discovered', 'answered'))
+    policy, found, delivered = (summary.get(k) for k in ('policy_topics', 'discovered', 'answered'))
     valid = lambda values: isinstance(values, list) and all(type(v) is int for v in values) and len(set(values)) == len(values)
-    if not all(valid(values) for values in (required, found, delivered)) or not required:
+    if not all(valid(values) for values in (policy, found, delivered)) or not policy:
         return 'unverified', []
-    if set(delivered) != set(required) or not set(found) <= set(required):
+    if set(delivered) != set(policy) or not set(found) <= set(policy):
+        return 'unverified', []
+    try:
+        required = discovery_scope(policy, summary.get('required_discovery_topics', policy), summary.get('discovery_exclusions', {}))
+    except ValueError:
         return 'unverified', []
     if summary.get('mock') == 'all':
         return 'not-measured', []
@@ -128,6 +143,8 @@ def result_meta(summary):
             **{key: summary.get(key) for key in ('global_instructions', 'judge_version', 'task_fingerprint', 'conversation_contract', 'prompt_configuration', 'skills_fingerprint')},
             "goalflow": {"arm": arm, "mock": summary["mock"], "answered": summary["answered"], "edits_before_answer": edits_before_answer(summary),
                          "final_behavior": behavior_verdict(summary)[0], "process": process_state(summary),
+                         "required_discovery_topics": summary.get("required_discovery_topics", summary.get("policy_topics")),
+                         "discovery_exclusions": summary.get("discovery_exclusions", {}),
                          "discovery": discovery_state(summary)[0], "missing_topics": discovery_state(summary)[1],
                          "surfaced_quotes": summary.get("surfaced_quotes") or {},
                          "failed": summary["failed"], "unobserved": summary["unobserved"], "n_cases": summary["n_cases"],

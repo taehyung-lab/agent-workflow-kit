@@ -53,7 +53,7 @@ def goalflow_fingerprints(task):
     task = Path(task)
     goal = EVALS / 'goalflow'
     inputs = sorted(f for f in (task / 'fixture').rglob('*') if f.is_file() and '__pycache__' not in f.parts)
-    inputs += [task / name for name in ('request.txt', 'followup.txt', 'answer.txt', 'topics.txt', 'state.txt', 'turns.json') if (task / name).is_file()]
+    inputs += [task / name for name in ('request.txt', 'followup.txt', 'answer.txt', 'topics.txt', 'state.txt', 'turns.json', 'discovery.json') if (task / name).is_file()]
     # 과제 간 판정 위임(archive-correction → archive-ambiguity)도 같은 규칙 묶음으로 고정한다.
     rules = [task / 'oracle.py', goal / 'tasks/taskcheck.py', *sorted((goal / 'tasks').glob('*/oracle.py'))]
     rules += [goal / name for name in ('compare.py', 'conversation.py', 'table.py', 'asked.py', 'turnwatch.py')]
