@@ -19,6 +19,8 @@ from conversation import MockUser
 from report import compare
 from selftest import summary
 from table import result_meta
+import asked
+from types import SimpleNamespace
 import caseinfo
 
 
@@ -135,6 +137,22 @@ class EvaluationContract(unittest.TestCase):
         text = self.compare_output(common={'goalflow': {'arm': 'skills', 'mock': 'all'}})
         self.assertIn('비교 불가', text)
         self.assertNotIn('차이: 개선', text)
+
+    def test_malformed_classifier_output_is_reviewable_failure(self):
+        output = '{"quotes":{"1":"policy?"}}\n{"quotes":{"1":null}}'
+        with patch.object(asked.subprocess, 'run', return_value=SimpleNamespace(returncode=0,stdout=output,stderr='')):
+            with self.assertRaises(RuntimeError):
+                asked.surfaced('policy?', '1. policy')
+
+    def test_classifier_timeout_preserves_partial_raw_output(self):
+        error = subprocess.TimeoutExpired(['claude'], 300, output=b'partial reply', stderr=b'partial error')
+        with tempfile.TemporaryDirectory() as directory, patch.object(asked.subprocess, 'run', side_effect=error):
+            with self.assertRaises(RuntimeError):
+                asked.surfaced('policy?', '1. policy', record_dir=directory)
+            record = next(Path(directory).iterdir())
+            self.assertEqual((record / 'stdout.txt').read_bytes(), b'partial reply')
+            self.assertEqual((record / 'stderr.txt').read_bytes(), b'partial error')
+            self.assertEqual(json.loads((record / 'execution.json').read_text())['status'], 'timeout')
 
     def test_matching_conditions_can_describe_the_observed_difference(self):
         self.assertIn('차이: 개선', self.compare_output())

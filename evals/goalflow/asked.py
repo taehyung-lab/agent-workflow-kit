@@ -2,7 +2,7 @@
 
 드러냈다는 것은 그 주제에 대해 아직 구현하지 않은 동작을 말한 것이다: 결정을 물었거나, 추천을 붙여 승인을 구했거나,
 "이렇게 두고 진행하겠다"고 선언했거나, 미정으로 남겼다. 실제 사용자라면 그 글을 보고 자기 정책과 다르면 고쳐 준다.
-이미 구현했다고만 보고한 주제와 언급하지 않은 주제는 드러낸 것이 아니다(답 전 발견으로 세지 않는다(정책 전달은 conversation.py가 전체를 맡는다)).
+이미 구현했다고만 보고한 주제와 언급하지 않은 주제는 답 전 발견으로 세지 않는다. 정책 전체의 전달은 conversation.py가 맡는다.
 모델은 주제마다 그 문장을 글에서 그대로 옮기고, 옮긴 문장이 실제 글에 있을 때만 센다(해석이 흔들려도 근거 없는 선택은 버린다). 모델은 evals/pins.json 의 mock_user 로 고정한다. 저장된 답으로 분류를 확인하는 표본은 asked-samples/ 에 있다(asked_samples.py).
 """
 import json, re, subprocess, sys, tempfile
@@ -31,20 +31,42 @@ def _plain(text):
     return re.sub(r"[\s*`_>\-•]+", "", text)
 
 
-def surfaced(reply, topics):
-    """드러낸 주제 → 그 주제를 드러낸 인용문(증거). 모델이 옮긴 문장이 실제 글에 있을 때만 센다(모델의 해석이 아니라 글에 있는 근거로 고른다)."""
+def surfaced(reply, topics, record_dir=None):
+    """주제별 실제 인용을 반환한다. 실행·형식 오류는 대화가 REVIEW로 보존할 수 있게 알린다."""
     reply = reply[:12000]
     numbers = {int(n) for n in re.findall(r"^(\d+)\.", topics, re.M)}
-    d = tempfile.mkdtemp()
-    r = subprocess.run(["claude", "-p", PROMPT.format(topics=topics, reply=reply), "--model", pins.mock_user_model(), "--safe-mode", "--max-turns", "1"],
-                       cwd=d, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
+    prompt = PROMPT.format(topics=topics, reply=reply)
+    evidence = None
+    if record_dir is not None:
+        Path(record_dir).mkdir(parents=True, exist_ok=True)
+        evidence = Path(tempfile.mkdtemp(prefix='call-', dir=record_dir))
+        (evidence / 'prompt.txt').write_text(prompt, encoding='utf-8')
+    try:
+        with tempfile.TemporaryDirectory() as directory:
+            r = subprocess.run(["claude", "-p", prompt, "--model", pins.mock_user_model(), "--safe-mode", "--max-turns", "1"],
+                               cwd=directory, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        if evidence:
+            (evidence / 'error.txt').write_text(str(e), encoding='utf-8')
+            for name in ('stdout', 'stderr'):
+                raw = getattr(e, name, None) or b''
+                (evidence / (name + '.txt')).write_bytes(raw.encode('utf-8') if isinstance(raw, str) else raw)
+            (evidence / 'execution.json').write_text(json.dumps({'model': pins.mock_user_model(), 'exit_code': None,
+                'status': 'timeout' if isinstance(e, subprocess.TimeoutExpired) else 'execution-error'}))
+        raise RuntimeError('모의 사용자 실행 실패: ' + str(e)) from e
+    if evidence:
+        (evidence / 'stdout.txt').write_text(r.stdout, encoding='utf-8')
+        (evidence / 'stderr.txt').write_text(r.stderr, encoding='utf-8')
+        (evidence / 'execution.json').write_text(json.dumps({'model': pins.mock_user_model(), 'exit_code': r.returncode}))
     m = re.search(r'\{\s*"quotes"\s*:\s*\{.*\}\s*\}', r.stdout, re.S)
-    if not m:
+    if r.returncode or not m:
         raise RuntimeError("모의 사용자 판단 실패: " + (r.stdout + r.stderr)[-300:])
-    quotes = json.loads(m.group(0))["quotes"]
+    try:
+        quotes = json.loads(m.group(0))["quotes"]
+    except (ValueError, KeyError, TypeError) as e:
+        raise RuntimeError('모의 사용자 답 형식 오류: ' + str(e)) from e
     body = _plain(reply)
     return {int(k): q for k, q in sorted(quotes.items()) if k.isdigit() and int(k) in numbers and isinstance(q, str) and len(_plain(q)) >= 4 and _plain(q) in body}
-
 
 def asked(reply, topics):
     """드러낸 주제 번호 목록(surfaced 의 주제만)."""

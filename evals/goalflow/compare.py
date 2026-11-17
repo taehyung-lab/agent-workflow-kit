@@ -86,7 +86,8 @@ PREFIX = os.environ.get("CMP_PREFIX", "grilling 스킬로 요구를 확인한 �
 FIRST = (PREFIX + "\n\n" if PREFIX else "") + request
 # 정해진 사용자 글(요청, 있으면 followup.txt). 그 뒤 턴은 모의 사용자의 답, 마지막은 마무리 지시다.
 STATIC = [FIRST] + ([(TASK / "followup.txt").read_text(encoding="utf-8").strip()] if (TASK / "followup.txt").is_file() else [])
-mock = MockUser(STATIC, answer, topics, surfaced, MOCK)
+classifier = lambda reply, topics: surfaced(reply, topics, record_dir=out / f"{name}.classifier")
+mock = MockUser(STATIC, answer, topics, classifier, MOCK)
 DECISION_TURNS = decision_contract(TASK, len(STATIC))
 
 # 두 대화 방식은 세션 실행·재개·격리·원시 기록 보존을 함께 사용한다.
