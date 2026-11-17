@@ -144,6 +144,26 @@ class EvaluationContract(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 asked.surfaced('policy?', '1. policy')
 
+    def test_paraphrased_quote_is_unverified_not_a_missing_choice(self):
+        reply = "기존 시트도 저장된 이름을 표시하도록 할까요?"
+        output = json.dumps({"quotes": {"1": "기존 인쇄 시트도 저장된 이름을 표시하도록 할까요?"}}, ensure_ascii=False)
+        with tempfile.TemporaryDirectory() as directory, patch.object(asked.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout=output, stderr='')):
+            with self.assertRaises(RuntimeError):
+                asked.surfaced(reply, '1. 기존 이름', record_dir=directory)
+            record = next(Path(directory).iterdir())
+            self.assertEqual((record / 'stdout.txt').read_text(), output)
+
+    def test_missing_topic_is_not_an_explicit_null(self):
+        for quotes in ({"1": None}, {"1": None, "2": False}, []):
+            with self.subTest(quotes=quotes), patch.object(asked.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout=json.dumps({"quotes": quotes}), stderr='')):
+                with self.assertRaises(RuntimeError):
+                    asked.surfaced('policy?', '1. first\n2. second')
+
+    def test_exact_quote_and_explicit_null_keep_their_distinct_meaning(self):
+        output = json.dumps({"quotes": {"1": "정확한 코드로 고칠까요?", "2": None}}, ensure_ascii=False)
+        with patch.object(asked.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout=output, stderr='')):
+            self.assertEqual(asked.surfaced("**정확한 코드로 고칠까요?**", "1. 코드\n2. 이름"), {1: "정확한 코드로 고칠까요?"})
+
     def test_classifier_timeout_preserves_partial_raw_output(self):
         error = subprocess.TimeoutExpired(['claude'], 300, output=b'partial reply', stderr=b'partial error')
         with tempfile.TemporaryDirectory() as directory, patch.object(asked.subprocess, 'run', side_effect=error):
