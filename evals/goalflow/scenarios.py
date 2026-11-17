@@ -27,9 +27,10 @@ prompt = next((a for a in args if "에이전트의 글:" in a or "에이전트�
 if prompt is not None:  # 모의 사용자 분류(새 형식은 인용문, 옛 형식은 번호)
     if scen.get("mock") == "broken":
         print("형식이 틀린 답"); sys.exit(0)
-    reply = prompt.split("<<<", 1)[1]
+    reply = prompt.split("<<<", 1)[1].split(">>>", 1)[0].strip()
     found = {m.group(1): s.strip() for s in re.split(r"(?<=[?.])\s+", reply) for m in [re.search(r"\[Q(\d)\]", s)] if m}
-    print(json.dumps({"quotes": {k: v for k, v in found.items()}} if "quotes" in prompt else {"asked": sorted(int(k) for k in found)}, ensure_ascii=False))
+    numbers = re.findall(r"^(\d+)\.", prompt.split("<<<", 1)[0], re.M)
+    print(json.dumps({"quotes": {k: found.get(k) for k in numbers}} if "quotes" in prompt else {"asked": sorted(int(k) for k in found)}, ensure_ascii=False))
     sys.exit(0)
 nf = os.environ["SCEN_N"]; n = int(open(nf).read()) + 1 if os.path.exists(nf) else 1; open(nf, "w").write(str(n))
 turn = scen["turns"][n - 1] if n <= len(scen["turns"]) else {"reply": "마무리했습니다."}
