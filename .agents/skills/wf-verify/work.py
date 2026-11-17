@@ -48,8 +48,38 @@ def load(work):
 
 
 def current(events):
-    plans = [e['plan'] for e in events if 'plan' in e]
-    return plans[-1] if plans else None
+    plan = None
+    for event in events:
+        if 'plan' in event:
+            plan = json.loads(json.dumps(event['plan']))
+        if event.get('findings') and plan:
+            plan['requirements'].extend(json.loads(json.dumps(event['findings'])))
+    return plan
+
+
+def pending_choices(events):
+    """미정이 생긴 당시의 출처를 보존한다. 계획 교체는 사용자 답이 아니다."""
+    pending, known = {}, set()
+    for event in events:
+        known.update(source['sha256'] for source in event.get('sources', []))
+        for requirement in event.get('plan', {}).get('requirements', []) + event.get('findings', []):
+            key = requirement['id']
+            if requirement['state'] == '미정':
+                pending.setdefault(key, set(known))
+            else:
+                pending.pop(key, None)
+    return pending
+
+
+def preserve_choices(events, plan, source_hashes):
+    requirements = {r['id']: r for r in plan['requirements']}
+    for key, original_sources in pending_choices(events).items():
+        if key not in requirements:
+            raise ValueError(f'{key}: 미정인 선택을 다음 계획에서 지울 수 없다')
+        requirement = requirements[key]
+        if requirement['state'] != '미정':
+            if not any(source_hashes[n - 1] not in original_sources for n in requirement['source']):
+                raise ValueError(f'{key}: 미정 해소에는 새 사용자 답의 출처가 필요하다')
 
 
 def sources(events):
@@ -118,14 +148,26 @@ def render(work, events):
 
 
 def record(work, args, events):
-    if not args.request and not args.plan:
-        raise ValueError('추가할 원문 또는 계획이 필요하다')
+    if not args.request and not args.plan and not args.findings:
+        raise ValueError('추가할 원문·계획·독자 발견이 필요하다')
     previous = sources(events)
     incoming = [Path(path).read_bytes() for path in args.request]
     if any(not raw.strip() for raw in incoming):
         raise ValueError('빈 원문은 기록하지 않는다')
     plan = validate(json.loads(Path(args.plan).read_text()), len(previous) + len(incoming)) if args.plan else current(events)
-    # 계획을 바꿔도 이전 계획은 남는다. 원문 번호는 해석의 근거이지 승인 자동 판독이 아니다.
+    if args.plan:
+        preserve_choices(events, plan, [s['sha256'] for s in previous] + [digest(raw) for raw in incoming])
+    findings = json.loads(Path(args.findings).read_text()) if args.findings else []
+    if not isinstance(findings, list):
+        raise ValueError('독자 발견은 요구 배열이어야 한다')
+    if findings:
+        if not plan:
+            raise ValueError('독자 발견을 더할 현재 계획이 필요하다')
+        validate({'targets': plan['targets'], 'requirements': findings, 'checks': []}, len(previous) + len(incoming))
+        existing = {r['id'] for r in plan['requirements']}
+        if any(r['state'] != '미정' or r['id'] in existing for r in findings):
+            raise ValueError('독자 발견은 중복 없는 새 미정 요구여야 한다')
+    # 미정 해소 출처는 기록한다. 답의 의미는 독립 검토에서도 대조한다.
     event = {'kind': 'record', 'time': time.time(), 'sources': []}
     for raw in incoming:
         index = len(previous) + len(event['sources']) + 1
@@ -136,6 +178,8 @@ def record(work, args, events):
         event['sources'].append({'file': name, 'sha256': digest(raw)})
     if args.plan:
         event['plan'] = plan
+    if findings:
+        event['findings'] = findings
     append(work, event); events.append(event); render(work, events)
     return {'state': 'recorded', 'sources': len(sources(events)), 'map': str(work / 'work.md')}, 0
 
@@ -256,6 +300,7 @@ def main():
     parser.add_argument('work', type=Path)
     parser.add_argument('--request', action='append', default=[])
     parser.add_argument('--plan')
+    parser.add_argument('--findings', help='독자가 반환한 새 미정 요구 JSON 배열')
     parser.add_argument('--answer')
     args = parser.parse_args()
     work = args.work.resolve(); work.mkdir(parents=True, exist_ok=True)

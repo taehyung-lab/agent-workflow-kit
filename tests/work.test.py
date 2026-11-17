@@ -86,4 +86,29 @@ class WorkTest(unittest.TestCase):
   (self.work/'work.md').write_text('읽기용 지도 레이아웃 변경')
   answer=self.root/'answer.txt';answer.write_text(json.dumps({'verdict':'OK','conditions':[{'id':'R1','result':'충족','evidence':'원문 대조'}]}))
   rc,r=self.runwork('review','--answer',str(answer));self.assertEqual(r['completion'],'verified',r)
+ def test_reader_question_survives_plan_replacement(self):
+  self.record()
+  findings=self.root/'reader.json';findings.write_text(json.dumps([{'id':'Q1','expect':'기존 인쇄명 유지 또는 갱신','source':[1],'state':'미정'}]))
+  rc,r=self.runwork('record','--findings',str(findings));self.assertEqual(rc,0,r)
+  self.plan.write_text(json.dumps(self.data))
+  rc,r=self.runwork('record','--plan',str(self.plan));self.assertNotEqual(rc,0,r)
+  rc,r=self.runwork('check');self.assertEqual(r['completion'],'waiting-user')
+ def test_pending_choice_cannot_close_with_same_source(self):
+  self.data['requirements'][0]['state']='미정';self.record()
+  self.data['requirements'][0]['state']='확정';self.plan.write_text(json.dumps(self.data))
+  rc,r=self.runwork('record','--plan',str(self.plan));self.assertNotEqual(rc,0,r)
+  # 같은 원문을 다시 붙여 번호만 늘려도 답이 생긴 것은 아니다.
+  rc,r=self.runwork('record','--request',str(self.req),'--plan',str(self.plan));self.assertNotEqual(rc,0,r)
+ def test_reply_resolves_pending_without_second_approval(self):
+  self.data['requirements'][0]['state']='미정';self.record()
+  self.req.write_text('기존 인쇄 이름을 유지해 주세요.')
+  self.data['requirements'][0].update(state='확정',source=[2],expect='기존 인쇄 이름 유지')
+  self.data['review_required']=False
+  rc,r=self.record();self.assertEqual(rc,0,r)
+  rc,r=self.runwork('check');self.assertEqual(r['completion'],'verified',r)
+ def test_findings_expire_old_check_and_review(self):
+  self.record();self.runwork('check')
+  findings=self.root/'reader.json';findings.write_text(json.dumps([{'id':'Q1','expect':'기존 인쇄명 처리','source':[1],'state':'미정'}]))
+  rc,r=self.runwork('record','--findings',str(findings));self.assertEqual(rc,0,r)
+  rc,r=self.runwork('review');self.assertEqual(r['completion'],'unverified',r)
 if __name__=='__main__':unittest.main()

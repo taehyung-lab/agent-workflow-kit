@@ -4,13 +4,14 @@
 
 ```text
 python3 .agents/skills/wf-verify/work.py record W --request request.txt --plan plan.json
+python3 .agents/skills/wf-verify/work.py record W --findings reader.json
 python3 .agents/skills/wf-verify/work.py record W --request answer.txt --plan revised-plan.json
 python3 .agents/skills/wf-verify/work.py check W
 python3 .agents/skills/wf-verify/work.py review W
 python3 .agents/skills/wf-verify/work.py review W --answer review-answer.txt
 ```
 
-`record`는 원문만 추가하거나 계획만 교체할 수도 있다. source는 이 작업에 추가한 원문 번호(1부터), base는 작업 시작 시 실제 커밋이다. state는 확정·미정·미확인이다. 이전 결정을 바꾸는 계획은 새 답의 번호를 가리킨다. 검사 명령은 프로젝트가 정한 명령과 요구에서 고르며 도구가 추측하지 않는다.
+`record`는 원문만 추가하거나 계획만 교체할 수도 있다. source는 이 작업에 추가한 원문 번호(1부터), base는 작업 시작 시 실제 커밋이다. state는 확정·미정·미확인이다. 독자가 반환한 미정 요구 배열은 --findings로 추가한다. 새 질문 ID는 현재 요구와 겹치지 않아야 한다. 빈 배열이면 추가할 것이 없다. 기록된 미정 요구는 다음 계획에서 삭제할 수 없고, 확정하려면 그 선택이 생긴 뒤 받은 새 사용자 원문을 출처로 가리켜야 한다. 같은 원문을 다시 넣어 번호만 늘리는 것으로 해소할 수 없다. 답의 실제 의미는 원문 대조와 독립 검토가 확인한다. 범위를 철회한 답도 해당 요구의 기대 결과에 범위 제외로 남긴다. 검사 명령은 프로젝트가 정한 명령과 요구에서 고르며 도구가 추측하지 않는다.
 
 ```json
 {
