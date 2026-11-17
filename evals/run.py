@@ -217,6 +217,12 @@ def current_judge_version(case_dir, where=""):
 def run_once(case_name, case_dir, ref, commit, harness_name, i, out_root, state):
     """한 번 실행해 결과 파일을 남긴다. 돌려줌: 하네스 종료 코드."""
     lang = os.environ.get("EVALS_LANG", "")
+    name = f"{case_name}{'-' + lang if lang else ''}-{commit[:7]}-{harness_name}-{i}"
+    out = f"{out_root}/{name}"
+    try:
+        session.reserve_run(out)
+    except FileExistsError as e:
+        fail(str(e))
     settings_file = os.environ.get("EVALS_CLAUDE_SETTINGS", "")
     work = Path(tempfile.mkdtemp())
     project, kit = work / "project", work / "kit"
@@ -236,8 +242,6 @@ def run_once(case_name, case_dir, ref, commit, harness_name, i, out_root, state)
         fail({"checkout": f"키트 checkout 실패: {commit}", "prepare": "사례 준비 실패", "install": f"키트 설치 실패: {commit}",
               "settings": f"EVALS_CLAUDE_SETTINGS 를 합치지 못했다: {settings_file}", "after-install": f"설치 뒤 준비 실패: {after}"}[e.step])
 
-    name = f"{case_name}{'-' + lang if lang else ''}-{commit[:7]}-{harness_name}-{i}"
-    out = f"{out_root}/{name}"
     # 사례의 턴: prompt.txt 가 첫 턴, prompt2.txt·prompt3.txt … 가 같은 세션을 이어 가는 다음 턴이다.
     # 턴마다 원시 기록을 .tN.jsonl 로 남기고, 판정용 .jsonl 은 모든 턴을 순서대로 이은 것이다(마지막 답 = 마지막 턴의 답).
     turns = [case_dir / "prompt.txt"] + [case_dir / f"prompt{n}.txt" for n in range(2, 10) if (case_dir / f"prompt{n}.txt").is_file()]
@@ -349,7 +353,8 @@ def compare(case_name, ref, harness_name, times):
     base, target = (resolve(r) for r in (ref[:ref.index("..")], ref[ref.rindex("..") + 2:]))
     out = os.environ.get("EVALS_RESULTS") or f"{HERE}/results/{time.strftime('%Y%m%d')}"
     rc = 0
-    for i in range(1, times + 1):
+    offset = int(os.environ.get("EVALS_RUN_OFFSET") or 0)
+    for i in range(1 + offset, times + offset + 1):
         for side in (base, target):
             rc = subprocess.run([sys.executable, "-I", __file__, case_name, side, harness_name, "1"],
                                 env={**os.environ, "EVALS_RESULTS": out, "EVALS_RUN_OFFSET": str(i - 1)}).returncode or rc

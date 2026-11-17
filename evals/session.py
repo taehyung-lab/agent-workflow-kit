@@ -117,6 +117,16 @@ def build_project(project, kit, prepare=None, settings=None, after_install=None,
             raise ProjectError("after-install", str(e))
 
 
+def reserve_run(prefix):
+    """이미 시작했거나 끝난 회차의 원시 증거를 덮어쓰지 않는다."""
+    prefix = Path(prefix)
+    prefix.parent.mkdir(parents=True, exist_ok=True)
+    if any(prefix.parent.glob(prefix.name + '.*')):
+        raise FileExistsError(f'기존 평가 기록이 있다: {prefix}. 새 회차 번호나 결과 폴더를 사용한다')
+    with Path(str(prefix) + '.started').open('x') as marker:
+        marker.write('원시 기록 보존: 이 회차 번호는 다시 쓰지 않는다\n')
+
+
 def _run(cmd, out, limit, cwd=None, env=None, stdin=None):
     """한 턴을 제한 시간 안에서 실행하고 기록을 <out>.jsonl·<out>.err 에 쓴다. 신호로 끝나면 셸처럼 128+신호 번호를 종료 코드로 한다."""
     with open(f"{out}.jsonl", "wb") as o, open(f"{out}.err", "wb") as e:
@@ -209,12 +219,12 @@ class Claude(Harness):
         return self.FLAGS + _model_flags("claude") + (["--setting-sources", "project,local", "--append-system-prompt", self.entry] if self.entry else [])
 
     def start(self, prompt, out):
-        return self._turn(["claude", "-p", prompt, *self._flags()], out, cwd=self.project)
+        return self._turn(["claude", "-p", prompt, *self._flags()], out, cwd=self.project, stdin=subprocess.DEVNULL if self.profile == 'comparison' else None)
 
     def resume(self, prompt, out, from_runner=False):
         """from_runner: 사용자 턴이 아닌 실행기의 반환 턴(제한 시간이 짧다)."""
         return self._turn(["claude", "-p", prompt, "--resume", self.session_id, *self._flags()], out, limit=900 if from_runner else LIMIT,
-                          cwd=self.project)
+                          cwd=self.project, stdin=subprocess.DEVNULL if self.profile == 'comparison' else None)
 
     def review(self, directory, prompt, log):
         exe = shutil.which("claude")

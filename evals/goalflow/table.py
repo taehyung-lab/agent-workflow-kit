@@ -70,8 +70,10 @@ def process_state(summary):
 
 def discovery_state(summary):
     """고정 정책을 듣기 전 발견한 선택. 구기록에서 없는 증거를 만들어 내지 않는다."""
-    if summary.get('conversation_contract') != 'fixed-policy-v1':
+    if 'conversation_contract' not in summary:
         return 'unmeasured', []
+    if summary['conversation_contract'] != 'fixed-policy-v1':
+        return 'unverified', []
     required, found, delivered = (summary.get(k) for k in ('policy_topics', 'discovered', 'answered'))
     valid = lambda values: isinstance(values, list) and all(type(v) is int for v in values) and len(set(values)) == len(values)
     if not all(valid(values) for values in (required, found, delivered)) or not required:
@@ -123,7 +125,7 @@ def result_meta(summary):
             "agents_md_bytes": summary["agents_md_bytes"], "check_passed": word == PASS, "check_needs_review": word == REVIEW,
             "check_unverified": word == UNVERIFIED, "check_output": line, "user_turns": len(turns),
             "observed": {"first_reply_chars": turns[0]["reply_chars"] if turns else None},
-            **{key: summary.get(key) for key in ('global_instructions', 'judge_version', 'task_fingerprint', 'conversation_contract')},
+            **{key: summary.get(key) for key in ('global_instructions', 'judge_version', 'task_fingerprint', 'conversation_contract', 'prompt_configuration', 'skills_fingerprint')},
             "goalflow": {"arm": arm, "mock": summary["mock"], "answered": summary["answered"], "edits_before_answer": edits_before_answer(summary),
                          "final_behavior": behavior_verdict(summary)[0], "process": process_state(summary),
                          "discovery": discovery_state(summary)[0], "missing_topics": discovery_state(summary)[1],

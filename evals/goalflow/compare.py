@@ -18,7 +18,7 @@
   CMP_PREFIX  첫 요청 앞에 붙일 한 줄(기본: skills 구성만 "grilling 스킬로 요구를 확인한 다음 tdd 스킬로 구현해 주세요.")
   MOCK        asked(기본): 답 전 발견한 선택을 분류해 따로 채점하고 answer.txt 전체를 전달한다. all: 발견을 채점하지 않고 같은 정책으로 구현만 확인한다
 """
-import json, os, re, shutil, subprocess, sys, tempfile, time
+import hashlib, json, os, re, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
 
 KIT = Path(__file__).resolve().parents[2]
@@ -28,7 +28,7 @@ TASK = GOAL if TASK_NAME == "goalflow" else GOAL / "tasks" / TASK_NAME
 assert (TASK / "oracle.py").is_file(), f"과제 폴더가 없다: {TASK}"
 MP = Path(os.environ.get("CMP_SKILLS") or "/nonexistent")
 sys.path.insert(0, str(KIT / "evals"))
-from session import kit_checkout, HARNESSES  # noqa: E402
+from session import kit_checkout, HARNESSES, reserve_run  # noqa: E402
 import pins  # noqa: E402
 from caseinfo import goalflow_fingerprints
 from transcript import read, commands, replies  # noqa: E402
@@ -44,6 +44,10 @@ for mismatch in filter(None, (pins.check(harness), pins.check("claude"))):
     sys.exit(mismatch)
 name = f"{arm}-{harness}-{idx}"
 out.mkdir(parents=True, exist_ok=True)
+try:
+    reserve_run(out / name)
+except FileExistsError as e:
+    sys.exit(str(e))
 work = Path(tempfile.mkdtemp(prefix="cmp-"))
 proj = work / "p"
 G = ["git", "-c", "user.name=cmp", "-c", "user.email=cmp@invalid", "-c", "commit.gpgsign=false"]
@@ -52,6 +56,7 @@ sh = lambda *c, cwd=None: subprocess.run(c, cwd=cwd, capture_output=True, text=T
 # ---- 프로젝트 ----
 shutil.copytree(TASK / "fixture", proj, ignore=shutil.ignore_patterns("__pycache__"))
 sh(*G, "init", "-q", cwd=proj); sh(*G, "add", "-A", cwd=proj); sh(*G, "commit", "-qm", "fixture", cwd=proj)
+skills_fingerprint = None
 kit_ref = kit_commit = None  # 키트 구성만 값이 있다
 if arm == "kit":
     kit_ref = os.environ.get("CMP_REF", "HEAD")
@@ -61,9 +66,13 @@ if arm == "kit":
     assert r.returncode == 0, r.stderr
 elif arm == "skills":
     assert (MP / "productivity/grilling").is_dir() and (MP / "engineering/tdd").is_dir(), "CMP_SKILLS 에 스킬 저장소의 skills 폴더를 준다"
+    installed = hashlib.sha256()
     for src in (MP / "productivity/grilling", MP / "engineering/tdd"):
+        for file in sorted(p for p in src.rglob("*") if p.is_file()):
+            installed.update(str(file.relative_to(MP)).encode() + b"\0" + file.read_bytes())
         for root in (".claude/skills", ".agents/skills"):
             shutil.copytree(src, proj / root / src.name)
+    skills_fingerprint = installed.hexdigest()
 sh(*G, "add", "-A", cwd=proj); sh(*G, "commit", "-qm", "arm: " + arm, "--allow-empty", cwd=proj)
 base = sh(*G, "rev-parse", "HEAD", cwd=proj).stdout.strip()
 agents_md_bytes = (proj / "AGENTS.md").stat().st_size if (proj / "AGENTS.md").is_file() else 0  # 세션 전, 구성 설치 직후의 상시 지침 크기
@@ -161,8 +170,9 @@ try:
                 init = {"skills": [s for s in ev.get("skills", []) if s in ("grilling", "tdd")], "plugins": len(ev.get("plugins", [])), "n_skills": len(ev.get("skills", []))}
                 break
     summary = {"name": name, "task": TASK_NAME, "model": pins.model(harness), "mock_user_model": pins.mock_user_model() if MOCK == "asked" else None, "harness_version": pins.cli_version(harness), "static_turns": len(STATIC), "decision_turns": DECISION_TURNS, "arm": arm, "harness": harness, "run": int(idx) if idx.isdigit() else idx, "kit_ref": kit_ref, "kit_commit": kit_commit, "agents_md_bytes": agents_md_bytes, "base": base, "seconds": int(time.time() - started), "turns": rows,
-               "mock": MOCK, "answered": sorted(mock.answered),
+               "mock": MOCK, "answered": sorted(mock.answered), "skills_fingerprint": skills_fingerprint,
                **goalflow_fingerprints(TASK), "global_instructions": implementation.instruction_context(),
+               "prompt_configuration": {"prefix_override": os.environ.get("CMP_PREFIX")}, "effective_prefix": PREFIX,
                "conversation_contract": CONVERSATION_CONTRACT, "policy_topics": sorted(mock.items), "discovered": sorted(mock.discovered),
                "surfaced_quotes": {str(t): q for t, q in mock.quotes.items()}, "mock_error": mock_error, "map": any((proj / "work").glob("*/work.md")), "final_changes": product_changes(), "init": init,
                "oracle_exit": oracle.returncode, "automated_valid": verdict.get("automated_valid"), "observation_complete": verdict.get("observation_complete"),

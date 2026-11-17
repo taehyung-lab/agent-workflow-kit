@@ -489,5 +489,6 @@ python3 -I "$here/../tests/decision-turns.test.py" && ok "결정 대기 턴 판�
 python3 -I "$here/../tests/work.test.py" && ok "대표 작업 기록 공개 명령" || ng "대표 작업 기록 공개 명령"
 python3 -I "$here/../tests/evaluation-contract.test.py" && ok "평가 정책·비교 계약" || ng "평가 정책·비교 계약"
 python3 -I "$here/../tests/session-contract.test.py" && ok "공통 세션 시작·재개" || ng "공통 세션 시작·재개"
+python3 -I "$here/../tests/turnwatch.test.py" && ok "파일 사건 종료 배치 보존" || ng "파일 사건 종료 배치 보존"
 printf '%d passed, %d failed%s\n' "$pass" "$failed" "${unrun:+, 1 미실행(표준 쓰기 경계 시험)}"
 [ "$failed" -eq 0 ]

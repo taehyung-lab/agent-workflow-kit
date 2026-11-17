@@ -5,7 +5,7 @@
 사건은 순서대로 오지만 늦게 온다. 그래서 시작과 끝에 .git 안의 표식 파일을 쓰고 그 사건이 올 때까지 기다린다:
 시작 표식이 오면 감시가 켜진 것이고, 끝 표식이 오면 그보다 먼저 일어난 사건은 모두 받은 것이다. 표식이 제한 시간 안에 오지 않거나 감시를 쓸 수 없으면(macOS 가 아님, GOALFLOW_NO_WATCH=1) OSError(관찰 불가).
 """
-import ctypes, ctypes.util, os, threading, time
+import ctypes, ctypes.util, os, threading, time, uuid
 
 _CB = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_char_p),
                        ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_uint64))
@@ -46,7 +46,6 @@ class Watch:
         if os.environ.get("GOALFLOW_NO_WATCH") == "1" or _LIBS is None:  # 감시를 끈 실행, CoreServices 가 없는 운영체제
             raise OSError("파일 사건 감시를 쓸 수 없다(macOS FSEvents 아님)")
         self.root, self.timeout, self.out, self.lock = os.path.realpath(root), timeout, [], threading.Lock()
-        self.mark = os.path.join(self.root, ".git", "fsevents-mark")
 
         def cb(stream, info, n, paths, flags, ids):
             with self.lock:
@@ -62,6 +61,8 @@ class Watch:
             self.out.clear()
 
     def _barrier(self):
+        # 시작 표식의 늦은 사건을 종료 표식으로 오인하지 않도록 매번 다른 경로를 쓴다.
+        self.mark = os.path.join(self.root, '.git', 'fsevents-mark-' + uuid.uuid4().hex)
         token = f"{time.time_ns()}"
         with open(self.mark, "w") as f:
             f.write(token)
@@ -71,8 +72,8 @@ class Watch:
             with self.lock:
                 seen = [p for p, _ in self.out]
                 if self.mark in seen:
-                    cut = len(seen) - seen[::-1].index(self.mark)  # 표식까지의 사건
-                    self.out = self.out[:cut]
+                    # 같은 배치에서 표식 뒤에 실린 제품 사건도 이미 관찰한 증거다.
+                    os.unlink(self.mark)
                     return
             time.sleep(0.05)
         self._close(); raise OSError("파일 사건이 제한 시간 안에 오지 않았다")

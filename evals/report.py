@@ -90,7 +90,7 @@ def compare(base, target, roots):
                       ("전역 지침", "global_instructions"), ("판정기", "judge_version")]
             if any(m.get("mock_user_model") or m.get("goalflow", {}).get("mock") == "asked" for m in b + t):
                 fields += [("모의 사용자 모델", "mock_user_model")]
-            for key, label in (("conversation_contract", "대화 계약"), ("task_fingerprint", "과제")):
+            for key, label in (("conversation_contract", "대화 계약"), ("task_fingerprint", "과제"), ("prompt_configuration", "요청 앞문장 설정")):
                 # 모드가 다르면 요구 발견을 포함한 점수와 구현만의 점수를 비교할 수 없다.
                 if any(key in m for m in b + t):
                     fields.append((label, key))
@@ -101,10 +101,15 @@ def compare(base, target, roots):
                     differences.append("발견 측정 방식")
             for label, key in fields:
                 values = [{json.dumps(m.get(key), sort_keys=True) for m in group} for group in (b, t)]
-                if any(m.get(key) is None for m in b + t):
+                if any(m.get(key) is None or (isinstance(m.get(key), str) and not m[key].strip()) for m in b + t):
                     differences.append(label + " 근거 없음")
                 elif values[0] != values[1] or len(values[0]) != 1:
                     differences.append(label)
+            # 스킬은 비교의 처리 조건이다. 키트와 같을 필요는 없지만 한쪽 표본 안에서 섞이면 안 된다.
+            for group in (b, t):
+                skills = [m.get('skills_fingerprint') for m in group if m.get('goalflow', {}).get('arm') == 'skills']
+                if skills and (any(not value for value in skills) or len(set(skills)) != 1):
+                    differences.append('스킬 구성 근거 없음 또는 혼합')
             settled = lambda ms: [m for m in judged(ms) if not m.get("check_needs_review")]
             pending = sum(bool(m.get("check_needs_review")) for m in judged(b) + judged(t))
             if differences:

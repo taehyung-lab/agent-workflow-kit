@@ -3,10 +3,14 @@ import contextlib
 import io
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'evals'))
@@ -15,6 +19,7 @@ from conversation import MockUser
 from report import compare
 from selftest import summary
 from table import result_meta
+import caseinfo
 
 
 class EvaluationContract(unittest.TestCase):
@@ -61,6 +66,12 @@ class EvaluationContract(unittest.TestCase):
                 self.assertFalse(result['check_passed'])
                 self.assertTrue(result['check_needs_review'])
 
+    def test_unknown_conversation_contract_is_not_a_historical_pass(self):
+        for contract in ('fixed-policy-v2', None, ''):
+            result = result_meta(summary('kit', conversation_contract=contract))
+            self.assertFalse(result['check_passed'])
+            self.assertTrue(result['check_needs_review'])
+
     def test_old_records_keep_their_original_contract(self):
         data = summary('kit')
         result = result_meta(data)
@@ -69,7 +80,7 @@ class EvaluationContract(unittest.TestCase):
         self.assertIsNone(result['task_fingerprint'])
         self.assertIsNone(result['judge_version'])
 
-    def compare_output(self, **overrides):
+    def compare_output(self, common=None, **overrides):
         with tempfile.TemporaryDirectory() as directory:
             for side, passed in [('aaaaaaa', False), ('bbbbbbb', True)]:
                 for run in range(3):
@@ -77,6 +88,7 @@ class EvaluationContract(unittest.TestCase):
                                check_passed=passed, model='model', harness_version='cli',
                                mock_user_model=None, global_instructions={}, judge_version='judge',
                                observed={})
+                    row.update(common or {})
                     if side == 'bbbbbbb':
                         row.update(overrides)
                     Path(directory, f'{side}-{run}.meta.json').write_text(json.dumps(row))
@@ -92,6 +104,35 @@ class EvaluationContract(unittest.TestCase):
 
     def test_missing_comparison_evidence_is_not_equality(self):
         text = self.compare_output(judge_version=None)
+        self.assertIn('비교 불가', text)
+        self.assertNotIn('차이: 개선', text)
+
+    def test_blank_metadata_is_not_comparison_evidence(self):
+        text = self.compare_output(common={'model': ''})
+        self.assertIn('비교 불가', text)
+        self.assertNotIn('차이: 개선', text)
+
+    def test_different_explicit_prompt_overrides_cannot_claim_improvement(self):
+        text = self.compare_output(common={'prompt_configuration': {'prefix_override': 'first'}},
+                                   prompt_configuration={'prefix_override': 'second'})
+        self.assertIn('비교 불가', text)
+        self.assertNotIn('차이: 개선', text)
+
+    def test_delegated_oracle_changes_invalidate_comparison(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evals = Path(directory) / 'evals'
+            shutil.copytree(ROOT / 'evals', evals, ignore=shutil.ignore_patterns('samples', 'results', '__pycache__'))
+            with patch.object(caseinfo, 'EVALS', evals):
+                task = evals / 'goalflow/tasks/archive-correction'
+                before = caseinfo.goalflow_fingerprints(task)
+                delegated = evals / 'goalflow/tasks/archive-ambiguity/oracle.py'
+                delegated.write_text(delegated.read_text() + '\n# changed judge\n')
+                after = caseinfo.goalflow_fingerprints(task)
+            self.assertNotEqual(before['judge_version'], after['judge_version'])
+            self.assertEqual(before['task_fingerprint'], after['task_fingerprint'])
+
+    def test_skill_baseline_needs_its_installed_content_identity(self):
+        text = self.compare_output(common={'goalflow': {'arm': 'skills', 'mock': 'all'}})
         self.assertIn('비교 불가', text)
         self.assertNotIn('차이: 개선', text)
 
