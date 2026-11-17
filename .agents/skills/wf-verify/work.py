@@ -71,14 +71,49 @@ def pending_choices(events):
     return pending
 
 
-def preserve_choices(events, plan, source_hashes):
+def resolution_context(plan):
+    lines = ['# 미정으로 남긴 선택의 근거 정정', '',
+             '사용자 답이 필요한 선택인지, 기존 원문·계약이 이미 결과를 정하는지 제안 계획과 대조한다.',
+             '새 정책을 고르는 승인이 아니다. 기존 근거가 결과를 정할 때만 충족이며 근거 문장을 인용한다.',
+             '이번 검토 대상은 요구 해소 계획이며 아직 구현되지 않은 기능의 완료 판정이 아니다.', '']
+    lines += [f"{r['id']} {r['expect']}" for r in plan['requirements'] if r['state'] == '미정']
+    lines += ['', '현재 요구 원본:', json.dumps(plan, ensure_ascii=False, sort_keys=True)]
+    return '\n'.join(lines) + '\n'
+
+
+def reviewed_choices(work, plan, events, kept):
+    if not kept:
+        return set()
+    keep = Path(kept).resolve()
+    pending = json.loads((keep / 'pending.json').read_text())
+    result, code = call_verify(['finish', '--round', str(keep), '--check', 'PASS'])
+    if code != 0 or result.get('completion') != 'verified':
+        raise ValueError('미정 정정의 독립 검토가 현재 근거로 통과하지 않았다')
+    files = pending['inputs']['files']
+    if not any(f['role'] == 'output' and validate(json.loads(Path(f['path']).read_text()),
+                   max(n for r in plan['requirements'] for n in r['source'])) == plan
+               for f in files if f['role'] == 'output'):
+        raise ValueError('독립 검토가 이번 계획을 대조하지 않았다')
+    requests = {f['sha256'] for f in files if f['role'] == 'request'}
+    if not {s['sha256'] for s in sources(events)} <= requests:
+        raise ValueError('독립 검토에 현재 사용자 원문이 모두 없다')
+    # 검토 입력 자체에 미정 목록을 포함해야 다른 작업의 통과를 재사용하지 못한다.
+    context = work / 'resolution-context.md'
+    if not any(Path(f['path']).resolve() == context.resolve() and f['sha256'] == digest(resolution_context(current(events)).encode())
+               for f in files):
+        raise ValueError('독립 검토가 현재 미정 상태를 대조하지 않았다')
+    return {c['id'] for c in result['conditions'] if c['result'] == '충족'}
+
+
+def preserve_choices(events, plan, source_items, reviewed=()):
     requirements = {r['id']: r for r in plan['requirements']}
     for key, original_sources in pending_choices(events).items():
         if key not in requirements:
             raise ValueError(f'{key}: 미정인 선택을 다음 계획에서 지울 수 없다')
         requirement = requirements[key]
         if requirement['state'] != '미정':
-            if not any(source_hashes[n - 1] not in original_sources for n in requirement['source']):
+            if key not in reviewed and not any(source_items[n - 1]['sha256'] not in original_sources or
+                       key in source_items[n - 1].get('reply_to', []) for n in requirement['source']):
                 raise ValueError(f'{key}: 미정 해소에는 새 사용자 답의 출처가 필요하다')
 
 
@@ -144,6 +179,7 @@ def render(work, events):
         commands = ', '.join(c['id'] for c in plan['checks'] if req['id'] in c['requirements']) or '미확인'
         refs = ', '.join(f'sources/{n:04}.txt' for n in req['source'])
         lines.append(f"| {req['id']} | {cell(req['expect'])} | {refs} | | {commands} | {req['state']} |")
+    (work / 'resolution-context.md').write_text(resolution_context(plan))
     (work / 'work.md').write_text('\n'.join(lines) + '\n')
 
 
@@ -155,8 +191,13 @@ def record(work, args, events):
     if any(not raw.strip() for raw in incoming):
         raise ValueError('빈 원문은 기록하지 않는다')
     plan = validate(json.loads(Path(args.plan).read_text()), len(previous) + len(incoming)) if args.plan else current(events)
+    if args.reply_to and (not incoming or not set(args.reply_to) <= set(pending_choices(events))):
+        raise ValueError('--reply-to는 새 사용자 원문과 현재 미정 질문 ID가 필요하다')
     if args.plan:
-        preserve_choices(events, plan, [s['sha256'] for s in previous] + [digest(raw) for raw in incoming])
+        reviewed = reviewed_choices(work, plan, events, args.resolution_review)
+        preserve_choices(events, plan, previous + [{'sha256': digest(raw), 'reply_to': args.reply_to} for raw in incoming], reviewed)
+    elif args.resolution_review:
+        raise ValueError('독립 검토로 미정을 정정할 계획이 필요하다')
     findings = json.loads(Path(args.findings).read_text()) if args.findings else []
     if not isinstance(findings, list):
         raise ValueError('독자 발견은 요구 배열이어야 한다')
@@ -175,7 +216,7 @@ def record(work, args, events):
         (work / 'sources').mkdir(exist_ok=True)
         with (work / name).open('xb') as stream:
             stream.write(raw)
-        event['sources'].append({'file': name, 'sha256': digest(raw)})
+        event['sources'].append({'file': name, 'sha256': digest(raw), 'reply_to': args.reply_to})
     if args.plan:
         event['plan'] = plan
     if findings:
@@ -300,6 +341,8 @@ def main():
     parser.add_argument('work', type=Path)
     parser.add_argument('--request', action='append', default=[])
     parser.add_argument('--plan')
+    parser.add_argument('--reply-to', action='append', default=[], help='새 사용자 답이 해소하는 미정 질문 ID')
+    parser.add_argument('--resolution-review', help='새 답 없이 잘못 표시한 미정을 정정할 독립 검토 회차 경로')
     parser.add_argument('--findings', help='독자가 반환한 새 미정 요구 JSON 배열')
     parser.add_argument('--answer')
     args = parser.parse_args()

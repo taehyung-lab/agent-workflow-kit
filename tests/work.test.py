@@ -111,4 +111,38 @@ class WorkTest(unittest.TestCase):
   findings=self.root/'reader.json';findings.write_text(json.dumps([{'id':'Q1','expect':'기존 인쇄명 처리','source':[1],'state':'미정'}]))
   rc,r=self.runwork('record','--findings',str(findings));self.assertEqual(rc,0,r)
   rc,r=self.runwork('review');self.assertEqual(r['completion'],'unverified',r)
+ def test_identical_user_replies_to_different_questions_are_distinct(self):
+  self.data['requirements'][0]['state']='미정';self.record()
+  self.req.write_text('추천대로 해주세요')
+  self.data['requirements'][0].update(state='확정',source=[2]);self.record()
+  findings=self.root/'reader.json';findings.write_text(json.dumps([{'id':'Q1','expect':'다음 선택','source':[1],'state':'미정'}]))
+  self.runwork('record','--findings',str(findings))
+  self.data['requirements'].append({'id':'Q1','expect':'추천한 다음 결과','source':[3],'state':'확정'})
+  self.plan.write_text(json.dumps(self.data))
+  rc,r=self.runwork('record','--request',str(self.req),'--reply-to','Q1','--plan',str(self.plan))
+  self.assertEqual(rc,0,r)
+ def test_reused_review_for_other_plan_cannot_resolve_question(self):
+  self.data['requirements'][0]['state']='미정';self.record()
+  self.data['requirements'][0]['state']='확정';self.plan.write_text(json.dumps(self.data))
+  rc,r=self.runwork('record','--plan',str(self.plan),'--resolution-review',str(self.root/'missing'))
+  self.assertNotEqual(rc,0,r)
+ def test_independent_contract_review_resolves_without_reasking_user(self):
+  self.req.write_text('전환해도 최초 발급에서 300초 기한을 유지한다.')
+  self.data['requirements'][0].update(state='미정',expect='전환 후 기한 유지 여부')
+  self.record()
+  self.data['requirements'][0].update(state='확정',expect='전환해도 최초 300초 기한 유지')
+  self.plan.write_text(json.dumps(self.data))
+  command=['python3',str(TOOL.with_name('verify.py')),'prepare',
+    '--request',str(self.work/'sources/0001.txt'),'--output',str(self.plan),
+    '--conditions',str(self.work/'resolution-context.md')]
+  prepared=subprocess.run(command,cwd=self.repo,text=True,capture_output=True)
+  self.assertEqual(prepared.returncode,0,prepared.stderr+prepared.stdout)
+  kept=json.loads(prepared.stdout)['kept']
+  answer=json.dumps({'verdict':'OK','conditions':[{'id':'R1','result':'충족','evidence':'원문이 최초 발급에서 300초 유지라고 명시'}]})
+  finish=subprocess.run(['python3',str(TOOL.with_name('verify.py')),'finish','--round',kept,'--check','PASS'],
+    cwd=self.repo,input=answer,text=True,capture_output=True)
+  self.assertEqual(finish.returncode,0,finish.stdout+finish.stderr)
+  rc,r=self.runwork('record','--plan',str(self.plan),'--resolution-review',kept)
+  self.assertEqual(rc,0,r)
+  rc,r=self.runwork('check');self.assertEqual(r['check'],'PASS',r)
 if __name__=='__main__':unittest.main()

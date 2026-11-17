@@ -11,7 +11,7 @@ python3 .agents/skills/wf-verify/work.py review W
 python3 .agents/skills/wf-verify/work.py review W --answer review-answer.txt
 ```
 
-`record`는 원문만 추가하거나 계획만 교체할 수도 있다. source는 이 작업에 추가한 원문 번호(1부터), base는 작업 시작 시 실제 커밋이다. state는 확정·미정·미확인이다. 독자가 반환한 미정 요구 배열은 --findings로 추가한다. 새 질문 ID는 현재 요구와 겹치지 않아야 한다. 빈 배열이면 추가할 것이 없다. 기록된 미정 요구는 다음 계획에서 삭제할 수 없고, 확정하려면 그 선택이 생긴 뒤 받은 새 사용자 원문을 출처로 가리켜야 한다. 같은 원문을 다시 넣어 번호만 늘리는 것으로 해소할 수 없다. 답의 실제 의미는 원문 대조와 독립 검토가 확인한다. 범위를 철회한 답도 해당 요구의 기대 결과에 범위 제외로 남긴다. 검사 명령은 프로젝트가 정한 명령과 요구에서 고르며 도구가 추측하지 않는다.
+`record`는 원문만 추가하거나 계획만 교체할 수도 있다. source는 이 작업에 추가한 원문 번호(1부터), base는 작업 시작 시 실제 커밋이다. state는 확정·미정·미확인이다. 독자가 반환한 미정 요구 배열은 --findings로 추가한다. 새 질문 ID는 현재 요구와 겹치지 않아야 한다. 빈 배열이면 추가할 것이 없다. 기록된 미정 요구는 다음 계획에서 삭제할 수 없고, 확정하려면 그 선택이 생긴 뒤 받은 새 사용자 원문을 출처로 가리켜야 한다. 같은 원문을 다시 넣어 번호만 늘리는 것으로 해소할 수 없다. 실제 새 답이 이전 답과 같은 문장이라면 --reply-to Q1처럼 그 답이 해소하는 현재 질문을 지정한다. 답의 실제 의미는 원문 대조와 독립 검토가 확인한다. 범위를 철회한 답도 해당 요구의 기대 결과에 범위 제외로 남긴다. 검사 명령은 프로젝트가 정한 명령과 요구에서 고르며 도구가 추측하지 않는다.
 
 ```json
 {
@@ -30,3 +30,15 @@ python3 .agents/skills/wf-verify/work.py review W --answer review-answer.txt
 여러 대상의 내부 구현·검사는 해당 저장소의 고정 기준을 따른다. 전체 검토는 요청을 잇는 요구를 확인한다. 이 도구는 파일 소유자의 조작을 막는 보안 장치가 아니며 원문 누락·숨은 미정·검사의 타당성은 독립 검토가 확인한다.
 
 기존 지도의 검토에는 verify.py record/prepare/finish가 남아 있다. 새 대표 기록의 완료에는 수동 --check PASS를 쓰지 않고 이 도구의 실제 실행 증거를 사용한다.
+
+## 이미 정해진 계약을 뒤늦게 찾은 경우
+
+잘못 미정으로 분류한 결과는 사용자에게 다시 묻는 대신 기존 독립 검토로 정정한다. 현재 미정은 도구가 만든 resolution-context.md에 있다. 제안 계획에는 해당 계약이 정한 기대값을 적는다.
+
+```text
+python3 .agents/skills/wf-verify/verify.py prepare --request W/sources/0001.txt --output revised-plan.json --conditions W/resolution-context.md
+python3 .agents/skills/wf-verify/verify.py finish --round KEPT --check PASS < independent-answer.txt
+python3 .agents/skills/wf-verify/work.py record W --plan revised-plan.json --resolution-review KEPT
+```
+
+현재 원문을 모두 --request로 전달하고, prepare가 만든 prompt_file을 부모 맥락 없는 독립 검토자에게 그대로 넘긴다. 검토자는 제안 계획의 결과가 이미 원문·계약으로 정해졌는지 해당 문장을 인용해 판단한다. 미정이 남으면 사용자에게 묻는다. 도구는 통과한 회차가 현재 원문·현재 미정·같은 제안 계획을 실제로 대조했는지 확인하고, 바뀐 근거의 옛 통과는 사용하지 않는다.
