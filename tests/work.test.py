@@ -59,6 +59,21 @@ class WorkTest(unittest.TestCase):
   self.data['checks'][0]['argv']=['python3','-c','print("UNIQUE_" + "EXECUTION_PROOF")'];self.record();(self.repo/'app.txt').write_text('after');self.runwork('check')
   rc,r=self.runwork('review');self.assertEqual(rc,0,r)
   self.assertIn('UNIQUE_EXECUTION_PROOF',Path(r['prompt_file']).read_text())
+ def test_large_review_keeps_complete_diff_and_expires_if_attachment_changes(self):
+  self.record()
+  (self.repo/'app.txt').write_text('실제 변경\n' * 10000 + 'LAST_CHANGE_MARKER\n')
+  self.runwork('check')
+  rc,r=self.runwork('review');self.assertEqual(rc,0,r)
+  pending=json.loads((Path(r['kept'])/'pending.json').read_text())
+  attachments=[f for f in pending['inputs']['files'] if f['role']=='diff']
+  self.assertEqual(len(attachments),1)
+  attachment=Path(attachments[0]['path'])
+  self.assertIn('LAST_CHANGE_MARKER',attachment.read_text())
+  self.assertIn(str(attachment),Path(r['prompt_file']).read_text())
+  answer=self.root/'answer.txt';answer.write_text(json.dumps({'verdict':'OK','conditions':[{'id':'R1','result':'충족','evidence':'전체 변경 파일의 마지막 변경까지 대조'}]}))
+  rc,r=self.runwork('review','--answer',str(answer));self.assertEqual(r['completion'],'verified',r)
+  attachment.write_text('검토한 변경의 일부를 제거')
+  rc,r=self.runwork('review','--answer',str(answer));self.assertEqual(r['completion'],'unverified',r)
  def test_optional_review(self):
   self.data['review_required']=False;self.record();rc,r=self.runwork('check');self.assertEqual(r['completion'],'verified')
  def test_home_two_targets_keep_pins_and_expire_together(self):

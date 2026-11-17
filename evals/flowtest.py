@@ -283,8 +283,21 @@ exit 0
     check("빈 산출물은 입력 부족으로 unverified", rempty.get("state") == "unverified" and "비었다" in rempty.get("reason", ""))
     # 근거 불완전
     (proj / "big.txt").write_text("x" * 70000 + "\n")
-    rc, out, prompt = verify(mp, [OK], extra=("--request", req_file("큰 diff")))
-    check("diff 가 잘리면 근거 불완전으로 unverified(검토자를 띄우지 않음)", out.get("state") == "unverified" and "diff" in out.get("reason", "") and prompt == "")
+    big_request = req_file("큰 diff")
+    rc, out, prompt = verify(mp, [OK], extra=("--request", big_request))
+    big_pending = json.loads((Path(out["kept"]) / "pending.json").read_text()) if out.get("state") == "ok" else {}
+    attached = [f for f in big_pending.get("inputs", {}).get("files", []) if f["role"] == "diff"]
+    check("큰 변경은 전체 파일을 전달하고 검토 근거에 고정한다",
+          out.get("state") == "ok" and len(attached) == 1 and attached[0]["path"] in prompt
+          and "x" * 70000 in Path(attached[0]["path"]).read_text())
+    _, second, _ = verify(mp, [OK], extra=("--request", big_request))
+    _, reused, reused_prompt = verify(mp, [OK], extra=("--request", big_request))
+    check("큰 변경 검토도 근거가 같으면 한도 뒤 통과를 재사용한다",
+          second.get("state") == "ok" and reused.get("state") == "ok" and reused_prompt == "")
+    second_pending = json.loads((Path(second["kept"]) / "pending.json").read_text())
+    Path(next(f["path"] for f in second_pending["inputs"]["files"] if f["role"] == "diff")).write_text("손상")
+    _, stale_large, _ = verify(mp, [OK], extra=("--request", big_request))
+    check("전체 변경 근거가 손상되면 한도 뒤 과거 통과를 재사용하지 않는다", stale_large.get("state") != "ok")
     (proj / "big.txt").unlink()
     hooks = t / "fail-hooks"; hooks.mkdir(); (hooks / "pre-commit").write_text("#!/bin/sh\nexit 1\n"); (hooks / "pre-commit").chmod(0o755)
     rc, out, prompt = verify(mp, [OK], GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="core.hooksPath", GIT_CONFIG_VALUE_0=str(hooks), extra=("--request", req_file("고정 실패")))

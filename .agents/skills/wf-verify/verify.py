@@ -26,7 +26,7 @@ prepare 가 읽은 원문·조건·산출물 파일, 지도의 `## 기준`·`## 
   incomplete(4)  재검토 한도에 닿았는데 마지막 판정도 RETURN 이다. 미완료로 보고한다. 한도(--rounds, 기본 2)는 그 시도의 첫 회차에
                  정해지고, 닿은 뒤에는 새 검토자를 띄우지 않는다. 요청 원문·기준 커밋이 다른 새 시도만 1회차부터 센다.
   unverified(5)  판정하지 못했다(지도·기준 없음, 빈 답·형식 오류·조건 누락·검토자가 대상 파일을 바꿈·요청 원문 없음,
-                 근거 불완전: 기준 커밋을 읽지 못함·diff 실패·잘림, 검토하는 동안 제품 파일이나 prepare 가 읽은 근거가 바뀜, 근거 기록이 없는 옛 회차).
+                 근거 불완전: 기준 커밋을 읽지 못함·diff 실패·근거 파일 손상, 검토하는 동안 제품 파일이나 prepare 가 읽은 근거가 바뀜, 근거 기록이 없는 옛 회차).
                  미확인은 완료가 아니다. 성공처럼 넘어가지 않고 사유와 재개 조건을 보고한다.
 finish의 전체 완료(completion)는 위 판정에 더해 직접 검사(--check)·작업 지도 요구 기록의 미정(사용자 답 대기 → waiting-user)·
 미확인 행까지 모두 확인됐을 때만 verified 다(밖에서 읽을 완료 여부는 이것 하나이고 종료 코드가 따른다). 애매하면 완료가 아니다. 요구 기록 표의 형식 문제(상태 값, 확정인데 출처 없음,
@@ -40,7 +40,7 @@ RESULTS = {"충족", "미충족", "미확인"}
 ID = r"[A-Z]{1,3}\d{1,3}"
 EXIT = {"ok": 0, "recorded": 0, "returned": 3, "incomplete": 4, "unverified": 5}  # state 로 정해지는 코드. record 는 이 값 그대로 끝나고, prepare 의 조기 종료·finish 는 exit_code 가 completion 까지 본다
 NOT_DONE = 6  # 검토 판정(ok)은 났지만 완료가 아니다: waiting-user·needs-review·check-failed·unverified(finish 와 prepare 의 조기 종료만 낸다)
-DIFF_LIMIT = 60000  # 검토자 입력에 넣는 diff 최대 바이트(넘으면 잘렸다고 적는다)
+DIFF_LIMIT = 60000  # 이보다 큰 변경은 잘라 넣지 않고 전체 근거 파일로 전달한다
 HARNESS_PATHS = (".claude", ".codex")  # 하네스 설정(저장소 맨 위). 제품이 아니라 비교하지 않는다
 KIT_VERSION_FILE = ".agents/agent-workflow-kit.version"  # 있으면 키트가 설치된 저장소다
 KIT_REGION = ("<!-- agent-workflow-kit:begin -->", "<!-- agent-workflow-kit:end -->")  # AGENTS.md 의 키트 표시 영역
@@ -495,7 +495,7 @@ def materialize_rev(root, rev, dest):
 
 
 def diff(base, target, out):
-    """(검토자 입력용 diff, 잘렸나, 실행이 실패했나). 전체 diff(지운 파일 내용 포함)는 out 파일에 남긴다.
+    """(완전한 검토자 입력용 diff, 실행이 실패했나). 전체 diff(지운 파일 내용 포함)는 out 파일에 남긴다.
     검토자 입력에서 지운 파일은 내용 대신 경로만 「지운 파일」 목록으로 보인다: 내용은 기준 사본(base)에 그대로 있고,
     지운 내용을 통째로 실으면 큰 삭제가 입력 한도를 채워 고친·새 파일을 검토하지 못한다.
     diff 출력을 사후에 골라내지 않는다: --unidirectional-new-file 은 새 파일만 내용으로 보이고 지운 파일·폴더는 "Only in" 한 줄로 낸다.
@@ -517,9 +517,7 @@ def diff(base, target, out):
     text = "\n".join(kept).replace(str(base), "a").replace(str(target), "b")
     if removed:
         text += f"\n지운 파일·폴더 {len(removed)}개(내용은 기준 사본 {base} 에 있다):\n" + "\n".join(removed) + "\n"
-    if len(text.encode()) > DIFF_LIMIT:
-        return text.encode()[:DIFF_LIMIT].decode("utf-8", "ignore") + f"\n(diff 가 {DIFF_LIMIT} 바이트를 넘어 잘렸다)\n", True, failed
-    return text, False, failed
+    return text, failed
 
 
 def prompt_text(requests, conditions, required, criteria, note, target, change, vdir, base_rev, envelope="", observed="", output=None, targets=None):
@@ -771,7 +769,11 @@ def prepare(args, record_path=None):
     if len(ran) >= rounds_max:
         # 한도 뒤 재사용도 같은 근거에만 유효하다. 구기록은 입력이 없으므로 재사용하지 않는다.
         last = ran[-1]
-        if last.get("state") == "ok" and last.get("product") == start_print and last.get("inputs") == inputs.snapshot:
+        previous_inputs = last.get("inputs")
+        source_inputs = ({**previous_inputs, "files": [f for f in previous_inputs["files"] if f["role"] != "diff"]}
+                         if isinstance(previous_inputs, dict) and isinstance(previous_inputs.get("files"), list) else None)
+        if (last.get("state") == "ok" and last.get("product") == start_print and source_inputs == inputs.snapshot
+                and ReviewInputs.current(previous_inputs)):
             result.update(state="ok", reason="", target=last.get("target"), reused_round=last.get("round"),
                           open_decisions=last.get("open_decisions", []), unconfirmed=last.get("unconfirmed", []))
         else:
@@ -790,7 +792,7 @@ def prepare(args, record_path=None):
     # 하나라도 실패하면 전체가 미확인이다: 일부 대상만으로 판정을 맡기지 않는다.
     units = [(t["name"], t["root"], t["sha"], vdir / t["name"], keep / "base" / t["name"], keep / f"diff-{t['name']}.txt") for t in targets] if multi \
         else [(None, root, base_sha, vdir, keep / "base", keep / "diff.txt")]
-    target, changes, cut, failed = {} if multi else None, [], False, False
+    target, changes, failed = {} if multi else None, [], False
     for name, troot, tsha, tv, tb, tout in units:
         label = f"대상 {name}: " if multi else ""
         try:
@@ -812,20 +814,24 @@ def prepare(args, record_path=None):
         else:
             tb.mkdir(parents=True, exist_ok=True)
         align_kit_files(tv, tb)
-        text, tcut, tfailed = diff(tb, tv, tout)
-        cut, failed = cut or tcut, failed or tfailed
+        text, tfailed = diff(tb, tv, tout)
+        failed = failed or tfailed
         changes.append(f"### 대상 {name} ({troot})\n{text}" if multi and text.strip() else text)
     change = "\n".join(c for c in changes if c.strip())
-    if len(change.encode()) > DIFF_LIMIT:
-        change, cut = change.encode()[:DIFF_LIMIT].decode("utf-8", "ignore") + f"\n(diff 가 {DIFF_LIMIT} 바이트를 넘어 잘렸다)\n", True
-    # 근거가 불완전하면(diff 실패·잘림) 판정을 맡기지 않고 미확인이다. 전체 diff 는 남긴 폴더에 있다.
+    external = len(change.encode()) > DIFF_LIMIT
+    if external:
+        attachments = []
+        for name, _, _, _, _, path in units:
+            full_change = inputs.read(path, "diff")
+            attachments.append(f"- {name or '대상'}: {path} ({len(full_change.encode())}바이트)")
+        change = ("전체 변경을 아래 읽기 전용 근거 파일로 전달한다. 생략하거나 자른 변경은 없다. "
+                  "대상 사본과 함께 각 파일을 끝까지 읽고, 긴 파일은 구간을 나눠 모든 변경을 대조한다. "
+                  "근거 파일을 읽지 못하면 관련 조건은 미확인이다.\n" + "\n".join(attachments))
     if failed:
         problems.append("diff 실행이 실패했다")
-    if cut:
-        problems.append(f"변경(diff)이 {DIFF_LIMIT} 바이트를 넘어 검토자 입력에 다 넣지 못했다(전체는 {keep} 의 diff 파일)")
     if not failed and not change.strip() and output is None:
         problems.append("검토할 것이 없다(입력 부족): 기준 커밋부터 바뀐 파일이 없고 산출물(--output)도 없다. 분석·설계만 한 작업은 답·보고서를 --output 으로 넘긴다")
-    result.update(target=target, diff_truncated=cut)
+    result.update(target=target, diff_truncated=False, diff_external=external)
     # 요구 기록 표: 미정(사용자 답 필요)·미확인(조사 필요) 행이 남으면 완료가 아니다. 형식 문제는 검토자를 띄우지 않고 돌려보낸다.
     if record_requirements is None:
         pending, unknown, record_problems, _ = open_rows(criteria)
