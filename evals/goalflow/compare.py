@@ -28,10 +28,11 @@ TASK = GOAL if TASK_NAME == "goalflow" else GOAL / "tasks" / TASK_NAME
 assert (TASK / "oracle.py").is_file(), f"과제 폴더가 없다: {TASK}"
 MP = Path(os.environ.get("CMP_SKILLS") or "/nonexistent")
 sys.path.insert(0, str(KIT / "evals"))
-from session import kit_checkout, HARNESSES, reserve_run  # noqa: E402
+from session import kit_checkout, HARNESSES, reserve_run, runtime_stop  # noqa: E402
 import pins  # noqa: E402
 from caseinfo import goalflow_fingerprints
 from transcript import read, commands, replies  # noqa: E402
+from observe import agent_evidence
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from asked import surfaced  # noqa: E402
 from conversation import CONVERSATION_CONTRACT, MockUser, log_readable, product_changes as changes_since, product_diff, read_state, turn_writes, product_snapshot, decision_contract  # noqa: E402
@@ -149,7 +150,7 @@ try:
         (out / f"{name}.t{n}.diff").write_text(product_diff(proj, base, STATE), encoding="utf-8")  # 증거: 그 턴이 끝났을 때의 제품 변경
         end_product = product_snapshot(proj, STATE)
         changed_this_turn = sorted(f for f in start_product.keys() | end_product.keys() if start_product.get(f) != end_product.get(f))
-        rows.append({"turn_changes": changed_this_turn, "turn": n, "rc": rc, "answered_now": sorted(mock.answered - before), "product_touched": touched, "watch_error": watch_error, "log_readable": log_readable(str(log)), "seconds": secs, "product_changes": product_changes(), "reply_chars": len(final),
+        rows.append({"runtime_stop": runtime_stop(log, rc), "turn_changes": changed_this_turn, "turn": n, "rc": rc, "answered_now": sorted(mock.answered - before), "product_touched": touched, "watch_error": watch_error, "log_readable": log_readable(str(log)), "seconds": secs, "product_changes": product_changes(), "reply_chars": len(final),
                      "question_marks": final.count("?") + final.count("？"), "reply": final[:6000],
                      "record_runs": sum(bool(re.search(r"(?:verify|work)\.py\s+record\b", c["command"])) for c in cmds),
                      "review_runs": sum(bool(re.search(r"(?:verify\.py\s+prepare|work\.py\s+review)\b", c["command"])) for c in cmds),
@@ -184,13 +185,26 @@ try:
                "oracle_exit": oracle.returncode, "automated_valid": verdict.get("automated_valid"), "observation_complete": verdict.get("observation_complete"),
                "failed": [c.get("name") for c in cases if c.get("passed") is False], "failed_decision": verdict.get("failed_decision"), "unobserved": [c.get("name") for c in cases if c.get("passed") is None],
                "n_cases": len(cases), "oracle_error": verdict.get("error"), "public_tests_rc": smoke.returncode}
-    (out / f"{name}.json").write_text(json.dumps(summary, ensure_ascii=False, indent=1), encoding="utf-8")
     (out / f"{name}.oracle.json").write_text(oracle.stdout or oracle.stderr, encoding="utf-8")
-    (out / f"{name}.meta.json").write_text(json.dumps(result_meta(summary), ensure_ascii=False, indent=1), encoding="utf-8")
-    print(name, "valid=", summary["automated_valid"], "failed=", len(summary["failed"]), "/", summary["n_cases"], "seconds=", summary["seconds"])
 finally:
     try:
         shutil.copytree(proj, out / f"{name}.files", ignore=shutil.ignore_patterns(".git", "__pycache__"), dirs_exist_ok=True)
     finally:
-        implementation.close(out / f"{name}.rollout.jsonl")
-        shutil.rmtree(work, ignore_errors=True)
+        try:
+            # close preserves Codex's source before removing its temporary home.
+            # It must run exactly once; a second close can truncate that source.
+            implementation.close(out / f"{name}.rollout.jsonl")
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+# Source preservation precedes every observation and final result. Settings and
+# product facts above were captured while the session and project still existed.
+for row in summary['turns']:
+    number = row['turn']
+    stage = 'requirements' if number <= len(STATIC) else 'implementation' if number == len(STATIC) + 1 else 'completion'
+    row['agent_evidence'] = agent_evidence(out / f'{name}.t{number}.jsonl', harness, number,
+                                          stage=stage, rollout=out / f'{name}.rollout.jsonl')
+(out / f"{name}.json").write_text(json.dumps(summary, ensure_ascii=False, indent=1), encoding="utf-8")
+(out / f"{name}.meta.json").write_text(json.dumps(result_meta(summary), ensure_ascii=False, indent=1), encoding="utf-8")
+print(name, "valid=", summary["automated_valid"], "failed=", len(summary["failed"]), "/", summary["n_cases"], "seconds=", summary["seconds"],
+      "runtime_stops=", [{"turn":row["turn"], "reason":row["runtime_stop"]["reason"]} for row in summary["turns"] if row.get("runtime_stop")])

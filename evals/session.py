@@ -9,6 +9,10 @@
   build_project(project, kit, prepare, settings, after_install, author, messages)
                             git init → prepare(출발 상태) → 커밋 → install.sh → 설정 합치기 → 커밋 → after_install
   case_fixture(setup)       평가 사례의 출발 상태(README 한 줄과 사례의 setup.sh)를 만드는 prepare
+EVALS_BUDGET_FILE을 명시하면 reserve_run이 최상위 횟수, 모든 세션/검토 CLI와
+분류 CLI가 합산 경과시간을 같은 로컬 원장으로 예약한다. 원장 생성은 budget.py가 맡는다.
+CLI 자식은 소유한 프로세스 그룹 안에서 정리한다. 원격 취소/금액 한도, 그룹을 벗어난
+프로세스, 운영체제의 종료 처리 지연까지 보장하는 장치는 아니다.
 세션(HARNESSES[이름](프로젝트)):
   start(prompt, out)        새 세션의 첫 턴                      ┐ 기록은 <out>.jsonl·<out>.err 에 쓰고
   resume(prompt, out)       같은 세션(session_id)을 이어 가는 턴 ┘ Turn(exit_code, log, err, session_id) 를 돌려준다
@@ -16,11 +20,12 @@
   version()                 하네스 버전 한 줄
   close(rollout)            임시 홈 정리. Codex 는 그 전에 세션 원본 기록을 rollout 에 남긴다
 """
-import hashlib, fnmatch, json, os, re, shutil, subprocess, sys, tempfile
+import hashlib, fnmatch, json, os, re, shutil, signal, subprocess, sys, tempfile, time
 from collections import namedtuple
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import budget
 import transcript  # 기록 형식 읽기(세션 id). 이 모듈을 가져오는 쪽은 모두 evals/ 를 모듈 경로에 둔다
 
 
@@ -125,25 +130,136 @@ def reserve_run(prefix):
         raise FileExistsError(f'기존 평가 기록이 있다: {prefix}. 새 회차 번호나 결과 폴더를 사용한다')
     with Path(str(prefix) + '.started').open('x') as marker:
         marker.write('원시 기록 보존: 이 회차 번호는 다시 쓰지 않는다\n')
+        try:
+            budget.reserve_run(prefix)
+        except budget.BudgetError as error:
+            marker.write(str(error)+'\n')
+            raise
+
+
+def stop_path(log):
+    name=str(log)
+    return Path((name[:-6] if name.endswith('.jsonl') else name)+'.stop.json')
+
+
+def runtime_stop(log, exit_code=None):
+    """CLI가 아닌 실행기가 별도 기록한 통제 중단만 읽는다. 모델 글은 읽지 않는다."""
+    try:
+        value=json.loads(stop_path(log).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    if (not isinstance(value,dict) or value.get('source')!='evaluation-runner' or value.get('version')!=1
+        or (value.get('reason'),value.get('exit_code')) not in (('budget',125),('timeout',124))
+        or (exit_code is not None and value['exit_code']!=exit_code)):
+        return None
+    return value
+
+
+def _write_stop(path,reason,exit_code,detail):
+    if path:
+        Path(path).write_text(json.dumps({'source':'evaluation-runner','version':1,'reason':reason,
+                                         'exit_code':exit_code,'detail':detail},ensure_ascii=False),encoding='utf-8')
+
+
+# Popen이 반환한 뒤 원장에 그룹을 등록하기 전에는 실제 CLI를 실행하지 않는다.
+# 자식은 같은 PID/그룹에서 exec하며, 부모가 사라져 파이프가 닫히면 실행을 거절한다.
+_BUDGET_START_GATE = """import os, sys
+fd = int(sys.argv[1])
+allowed = os.read(fd, 1)
+os.close(fd)
+if allowed != b'1':
+    sys.exit(125)
+os.execvpe(sys.argv[2], sys.argv[2:], os.environ)
+"""
+
+
+def _execute(cmd, stdout, stderr, limit, cwd=None, env=None, stdin=None, stop=None):
+    """로컬 CLI 하나를 소유한다. 시간은 공유 예약 후 시작하고 소유한 그룹을 정리한다."""
+    if stop: Path(stop).unlink(missing_ok=True)
+    environment=dict(os.environ if env is None else env)
+    lease=None
+    try:
+        lease=budget.reserve_time(float(limit),environment)
+    except budget.BudgetError as error:
+        stderr.write((str(error)+'\n').encode());stderr.flush()
+        _write_stop(stop,'budget',125,str(error))
+        return 125
+    effective=lease['seconds'] if lease else float(limit)
+    nested=bool(lease and lease['nested'])
+    if lease: environment['EVALS_BUDGET_CALL_ID']=lease['id']
+    started=time.monotonic()
+    process=None
+    gate_read=gate_write=None
+    reason='completed';rc=125
+    try:
+        launch=cmd
+        descriptors={}
+        if lease and not nested:
+            gate_read,gate_write=os.pipe()
+            launch=[sys.executable,'-I','-c',_BUDGET_START_GATE,str(gate_read),*cmd]
+            descriptors={'pass_fds':(gate_read,)}
+        process=subprocess.Popen(launch,cwd=cwd,stdin=stdin,stdout=stdout,stderr=stderr,
+                                 env=environment,start_new_session=not nested,**descriptors)
+        if gate_read is not None:
+            os.close(gate_read);gate_read=None
+        try:
+            budget.attach(lease,process.pid)
+            if time.monotonic()-started>=effective:
+                raise subprocess.TimeoutExpired(cmd,effective)
+            if gate_write is not None:
+                os.write(gate_write,b'1')
+                os.close(gate_write);gate_write=None
+            rc=process.wait(timeout=max(0,effective-(time.monotonic()-started)))
+            rc=rc if rc>=0 else 128-rc
+        except subprocess.TimeoutExpired:
+            reason='timeout';rc=124
+            _write_stop(stop,'timeout',124,f'local CLI time limit {effective:.6f}s')
+            stderr.write(f'timeout: local CLI time limit {effective:.6f}s; cleaning owned process group\n'.encode());stderr.flush()
+    except BaseException as error:
+        reason='interrupted: '+str(error)
+        stderr.write((reason+'\n').encode());stderr.flush()
+        raise
+    finally:
+        for descriptor in (gate_read,gate_write):
+            if descriptor is not None: os.close(descriptor)
+        if process:
+            try:
+                if nested:
+                    if process.poll() is None: process.kill()
+                else:
+                    os.killpg(process.pid,signal.SIGKILL)
+            except ProcessLookupError: pass
+            process.wait()
+        try:
+            budget.finish(lease,time.monotonic()-started,reason,rc)
+        except budget.BudgetError as error:
+            stderr.write((str(error)+'\n').encode());stderr.flush()
+            rc=125
+            _write_stop(stop,'budget',125,str(error))
+    return rc
 
 
 def _run(cmd, out, limit, cwd=None, env=None, stdin=None):
-    """한 턴을 제한 시간 안에서 실행하고 기록을 <out>.jsonl·<out>.err 에 쓴다. 신호로 끝나면 셸처럼 128+신호 번호를 종료 코드로 한다."""
-    with open(f"{out}.jsonl", "wb") as o, open(f"{out}.err", "wb") as e:
-        rc = subprocess.run(["perl", "-e", "alarm shift; exec @ARGV", str(limit), *cmd], cwd=cwd, stdin=stdin, stdout=o, stderr=e,
-                            env=env).returncode
-    return rc if rc >= 0 else 128 - rc
+    """한 턴의 원시 stdout/stderr를 남긴다. 시간 초과 124, 공유 예산 미확인/소진 125."""
+    with open(f"{out}.jsonl", "wb") as output, open(f"{out}.err", "wb") as error:
+        return _execute(cmd,output,error,limit,cwd=cwd,env=env,stdin=stdin,stop=stop_path(f"{out}.jsonl"))
 
 
 def _review(cmd, directory, log, env=None):
-    """검토자 세션: 구현자 세션의 표지(세션 id·발신 구분)를 물려주지 않는다. 제한 시간(AWK_VERIFY_TIMEOUT, 기본 900초)을 넘기면 124."""
-    keep = {k: v for k, v in os.environ.items() if k not in ("AWK_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")}
-    with open(log, "wb") as out, open(str(log) + ".err", "ab") as err:
-        try:
-            return subprocess.run(cmd, cwd=directory, stdout=out, stderr=err, stdin=subprocess.DEVNULL, env={**keep, **(env or {})},
-                                  timeout=int(os.environ.get("AWK_VERIFY_TIMEOUT", "900"))).returncode
-        except subprocess.TimeoutExpired:
-            return 124
+    """별도 검토도 같은 공유 시간을 사용하며 구현자 세션 표지는 물려주지 않는다."""
+    keep={k:v for k,v in os.environ.items() if k not in ('AWK_SESSION_ID','CLAUDE_CODE_SESSION_ID','CODEX_THREAD_ID')}
+    with open(log,'wb') as output, open(str(log)+'.err','ab') as error:
+        return _execute(cmd,output,error,float(os.environ.get('AWK_VERIFY_TIMEOUT','900')),
+                        cwd=directory,env={**keep,**(env or {})},stdin=subprocess.DEVNULL,stop=stop_path(log))
+
+
+def classify(cmd, directory, limit=300):
+    """모의 사용자 분류의 stdout/stderr도 같은 시간 예약과 프로세스 정리를 거친다."""
+    with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as error:
+        rc=_execute(cmd,output,error,limit,cwd=directory,stdin=subprocess.DEVNULL)
+        output.seek(0);error.seek(0)
+        return subprocess.CompletedProcess(cmd,rc,output.read().decode('utf-8',errors='replace'),
+                                           error.read().decode('utf-8',errors='replace'))
 
 
 CENTRAL_KIT = "~/.agents/kits/agent-workflow-kit"  # entry.md 의 <중앙 키트> 자리에 넣는 경로(사례의 판정 검사가 이 경로를 본다)

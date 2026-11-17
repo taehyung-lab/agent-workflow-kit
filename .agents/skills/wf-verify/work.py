@@ -4,10 +4,8 @@
 직렬화한다. 해시는 손상 탐지용이며 파일 소유자에 대한 보안 장치가 아니다.
 """
 import argparse
-import contextlib
 import fcntl
 import hashlib
-import io
 import json
 import os
 from pathlib import Path
@@ -129,20 +127,12 @@ def git(root, *args):
 def validate(plan, count):
     if type(plan.get('review_required', True)) is not bool:
         raise ValueError('review_required는 참·거짓이어야 한다')
-    names = set()
-    paths = set()
-    for target in plan['targets']:
-        name = target['name']
-        if not re.fullmatch(r'[a-zA-Z0-9_-]+', name) or name in names:
-            raise ValueError('대상 이름은 중복 없는 영숫자·밑줄·하이픈이어야 한다')
-        root = Path(target['path']).expanduser().resolve()
-        if str(root) != git(root, 'rev-parse', '--show-toplevel') or str(root) in paths:
-            raise ValueError('대상은 서로 다른 Git 작업 폴더 최상위여야 한다')
-        target['path'] = str(root)
-        target['base'] = git(root, 'rev-parse', '--verify', target['base'] + '^{commit}')
-        names.add(name); paths.add(str(root))
-    if not names:
-        raise ValueError('작업 대상이 없다')
+    targets, problems = verify.review_targets([(t['name'], t['path'], t['base']) for t in plan['targets']], Path.cwd())
+    if problems:
+        raise ValueError(' / '.join(problems))
+    for target, validated in zip(plan['targets'], targets):
+        target.update(path=str(validated['root']), base=validated['sha'])
+    names = {t['name'] for t in targets}
     ids = set()
     for req in plan['requirements']:
         if not re.fullmatch(r'[A-Z]{1,3}[0-9]{1,3}', req['id']) or req['id'] in ids:
@@ -307,16 +297,11 @@ def checked(events, plan):
 
 
 def call_verify(argv, answer=None, record_path=None):
-    output = io.StringIO()
-    with contextlib.redirect_stdout(output):
-        old = sys.stdin
-        try:
-            if answer is not None:
-                sys.stdin = io.StringIO(answer)
-            code = verify.prepare(argv[1:], record_path=record_path) if record_path else verify.cli(argv)
-        finally:
-            sys.stdin = old
-    return json.loads(output.getvalue().splitlines()[-1]), code
+    outcome = (verify.prepare_review(argv[1:], record_path=record_path) if argv[0] == 'prepare'
+               else verify.finish_review(argv[1:], answer or ''))
+    for message in outcome.messages:
+        print(message, file=sys.stderr)
+    return outcome.result, outcome.code
 
 
 def review(work, args, events):

@@ -26,6 +26,44 @@ class WorkTest(unittest.TestCase):
  def test_record_and_check(self):
   rc,r=self.record();self.assertEqual(rc,0);self.assertEqual((self.work/'sources/0001.txt').read_bytes(),self.req.read_bytes())
   rc,r=self.runwork('check');self.assertEqual(r['check'],'PASS');self.assertEqual(r['completion'],'review-missing');self.assertNotEqual(rc,0)
+ def test_review_does_not_depend_on_cli_output_format(self):
+  self.record();self.runwork('check')
+  # A CLI may add a human-facing notice after its JSON. Internal review must
+  # consume the structured result, not capture and parse that CLI output.
+  runner='''import sys
+sys.path.insert(0, sys.argv[1])
+import work
+prepare = work.verify.prepare
+cli = work.verify.cli
+def decorated(function):
+ def call(*args, **kwargs):
+  code = function(*args, **kwargs)
+  print("CLI presentation changed")
+  return code
+ return call
+work.verify.prepare = decorated(prepare)
+work.verify.cli = decorated(cli)
+sys.argv = ["work.py", "review", *sys.argv[2:]]
+sys.exit(work.main())
+'''
+  def review(*args):
+   run=subprocess.run(['python3','-c',runner,str(TOOL.parent),*args,str(self.work)],cwd=self.repo,text=True,capture_output=True)
+   return run.returncode,json.loads(run.stdout)
+  rc,prepared=review();self.assertEqual(rc,0,prepared)
+  pending=json.loads((Path(prepared['kept'])/'pending.json').read_text());self.required=pending['required']
+  answer=self.root/'answer.txt';answer.write_text(self.review_answer('structured review result'))
+  rc,result=review('--answer',str(answer));self.assertEqual(rc,0,result)
+  self.assertEqual(result['completion'],'verified')
+ def test_target_name_agrees_with_direct_map_review(self):
+  self.data['targets'][0]['name']='payment.api';self.data['checks'][0]['target']='payment.api'
+  mapfile=self.repo/'map.md'
+  mapfile.write_text('## 맥락\n\n| 대상 | 경로 | 기준 커밋 |\n| --- | --- | --- |\n'
+                     f'| payment.api | {self.repo} | HEAD |\n\n## 기준\n요청 원문: keep behavior\n')
+  direct=subprocess.run(['python3',str(TOOL.with_name('verify.py')),'prepare','--map',str(mapfile),'--output',str(self.req)],cwd=self.repo,text=True,capture_output=True)
+  self.assertEqual(direct.returncode,0,direct.stderr+direct.stdout)
+  rc,recorded=self.record();self.assertEqual(rc,0,recorded)
+  self.runwork('check');rc,prepared=self.runwork('review');self.assertEqual(rc,0,prepared)
+  self.assertTrue((Path(prepared['target_dir'])/'payment.api').is_dir())
  def test_failure(self):
   self.data['checks'][0]['argv']=['python3','-c','raise SystemExit(1)'];self.record()
   rc,r=self.runwork('check');self.assertEqual(r['completion'],'check-failed')

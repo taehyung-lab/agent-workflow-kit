@@ -2,6 +2,23 @@
 
 키트 문장을 고쳤다고 에이전트가 달라지는 것은 아니다. 이 폴더는 **고치기 전 커밋과 고친 뒤 커밋을 같은 요청으로 새 세션에 돌려서** 실제 행동이 달라졌는지 잰다. 프로젝트에는 설치되지 않는다. 키트 저장소에만 있다.
 
+## 실행 범위와 한도
+
+현재 교정의 성공 조건과 실제 검사, 수정 후 재검증까지 포함한 횟수·시간·중단 조건을 먼저 정한다. 전체 기능 로드맵은 현재 평가의 미확정 요구와 구별한다. 다음 저비용 검사는 전체 자체 검사와 같은 문서 한도를 사용한다.
+
+```text
+python3 -I evals/document_budget.py
+```
+
+사용자가 승인한 범위를 원문으로 보존한 뒤 로컬 원장을 만든다. 아래 수치는 예시이며 실행할 작업의 승인 범위로 바꾼다. 같은 원장을 이후 교정·재검증에도 사용한다.
+
+```text
+python3 -I evals/budget.py work/task/model-budget.json --approval-source work/task/approval.txt --max-runs 4 --max-seconds 3600
+EVALS_BUDGET_FILE=work/task/model-budget.json bash evals/run.sh ctx-auth-scenario HEAD codex 1
+```
+
+원장은 최상위 평가 시작 횟수와 실제 CLI의 합산 경과시간을 보존한다. 재개는 새 평가 횟수로 세지 않고 시간은 계속 쓴다. 비교·검토·분류가 같은 남은 시간을 공유하며, 상위 CLI 안에서 돈 자식 시간은 중복 합산하지 않는다. 미정산 예약은 재시작해도 사용량에서 빼지 않는다. 한도 안의 원인 교체·재검증은 이어 가고, 한도 확대나 새 사용자 결과에서 다시 결정받는다. `EVALS_BUDGET_FILE`을 지정하지 않은 기존 경로는 바뀌지 않는다. 원장은 승인을 추측하거나 파일 소유자의 조작을 막는 보안 장치가 아니며, 외부 서비스 취소·토큰·금액 상한도 보장하지 않는다.
+
 ## 한 번 실행하면 일어나는 일
 
 ```text
@@ -27,7 +44,8 @@ bash evals/run.sh clear-change,explain-only,contract-export HEAD codex 1   # 사
 | `session.py` | 키트 커밋을 설치한 새 프로젝트 만들기와 하네스 세션(첫 턴·이어 가기·검토자 세션). Claude·Codex 의 차이(명령줄, Codex 임시 홈·훅/프로젝트 신뢰·네트워크 옵션, 제한 시간, 세션 id)는 이 파일의 두 어댑터에만 있다. `session.py review`·`goalflow/setup.py`·`goalflow/compare.py`·`flowtest.py`·`sandboxtest.py` 도 이것을 쓴다 |
 | `result.py` | 한 번의 실행에서 관찰한 사실을 받아 `meta.json` 을 만들고, 판정 검사의 종료 코드·첫 낱말로 PASS·FAIL·REVIEW·UNVERIFIED 를 정한다(`run.py` 와 `rejudge.py` 가 같은 함수를 쓴다) |
 | `chaintest.py` | 단계 표·파일·링크·규칙 번호·제목이 실제로 존재하는지 확인한다. 실행 조건의 의미 일치는 이 검사로 증명하지 않는다. 작업 경로는 아래 행동 사례, 검토 인계는 `tests/work.test.py`와 `flowtest.py`가 확인한다 |
-| `transcript.py` · `observe.py` | 두 하네스의 기록 형식은 `transcript.py` 만 읽고, `observe.py` 는 그 호출 목록에서 무엇을 관찰 사실로 셀지 정한다 |
+| `transcript.py` · `observe.py` | 두 하네스의 기록 형식은 `transcript.py`가 읽고 `observe.py`가 관찰 범위를 정한다. `agent_evidence`는 지정 턴·단계의 실제 생성·실행 결과·평문 반환과 원본 해시·행 범위를 보존한다. 원본 누락·손상·반환 미확인은 사건 없음과 구별한다 |
+| `budget.py` | 명시한 승인 근거·한도·평가 시작·CLI 시간 예약과 실측을 보존한다. 실제 권한과 승인 의미 판단은 호출자가 소유한다 |
 
 ## 사례 (cases/)
 
@@ -85,7 +103,7 @@ bash evals/run.sh clear-change,explain-only,contract-export HEAD codex 1   # 사
 - `last_turn_edits`: 마지막 턴에 제품 파일을 편집한 흔적(바꿨다가 되돌려도 남는다)
 - `claims_independent_verification`: 마지막 답이 "독립 검증을 통과했다"고 **마쳤다는** 주장을 하는가("별도 검토를 받겠습니다" 같은 계획 문장은 세지 않는다)
 - 판정은 제품 언어와 무관해야 한다. 기계는 사례가 합의한 공개 CLI 입력·예상 결과만 본다(`bin/<이름>` 실행, `bin/test` 검사). 승인 뒤 "계획에 없는 새 명령"·범위 밖 변경의 일반적 발견은 기계로 추정하지 않고(소스 모양 정규식도, 소스 낱말을 실행해 보는 추정도 쓰지 않는다) 바뀐 파일 목록과 계획 원문을 붙여 검토 필요로 낸다. 실제 실행에서는 독립 검증자가 원문·기준과 diff 를 대조해 잡는다.
-- meta 에는 원시 기록과 함께 판정기 지문(`judge_version`: 사례의 check.py(holdout 포함)와 `caseinfo.py` 의 공용 판정 파일)이 남는다. 실행기와 `rejudge.py` 가 같은 `caseinfo.py` 로 사례 위치와 지문을 정하므로 같은 코드면 지문이 같다. 판정 파일이 하나라도 없으면 지문을 만들지 않고 멈춘다(재판정은 그 meta 를 고치지 않고 종료 1). `completion_inputs` 에는 검토 상태·필수 여부, 미정·미확인 요구를 보존한다. `rejudge.py` 는 이 입력을 유지하고 직접 검사 결과만 다시 반영하며, 이전 판정·완료 근거·지문을 `rejudge_history` 에 남긴다. 구기록에 완료 근거가 없으면 `completion_inputs_missing` 으로 표시하고, 검사 PASS 만으로 미정이 없었다고 추정해 완료시키지 않는다. 기존 대기·실패도 보존한다. 지문 계산 방식이 바뀌기 전(2026-11-06 이전) 결과는 다시 판정해야 새 실행과 비교된다.
+- meta에는 판정기 지문(`judge_version`)과 실제 과제 입력의 지문(`task_fingerprint`)을 따로 남긴다. 일반 평가도 선택한 요청·후속 답·준비 스크립트·공용 fixture·설정과 설치 전 준비 파일의 근거를 보존한다. 과제 이름이 같아도 입력 지문이 다르거나 없으면 비교 보고는 개선을 말하지 않는다. 실행 중 입력이 바뀌거나 없어진 경우도 같다. 판정 파일이 빠지면 판정기 지문을 만들지 않는다. `completion_inputs`의 검토·미정·미확인과 실행 당시 과제 입력 지문은 재판정에서도 유지한다. 새 판정은 이전 판정·완료 근거·판정 지문을 이력에 남기며, 과거에 없던 관찰·과제 지문을 지금 파일로 소급하지 않는다.
 - `verify_run`: 마지막 턴에 구현자가 독립 검증 실행기(`wf-verify/verify.py`)를 실행한 마지막 결과. 실행기가 출력 끝에 찍는 결과 JSON 을 평가 쪽 함수(`verdict.run_result`)로 읽고, 명령과 결과는 두 하네스 기록 어댑터(`transcript.commands`)가 잇는다. `ok`·`returned`·`incomplete`·`unverified`(하네스 없음·빈 답 등, 사유는 `verify_run_reason`)는 실행기의 판정(요구 기록 검사 `record` 의 `recorded` 는 검토가 아니므로 세지 않는다), `error` 는 결과 없이 실패한 실행, `unknown` 은 결과가 기록에 없거나 결과가 다른 출력과 섞여 이번 실행의 것인지 저장된 출력을 읽은 것인지 가를 수 없는 경우, `none` 은 실행 흔적 없음이다. 실행기 파일만 `cat` 하거나 실행기를 부르지 않고 저장된 결과를 읽은 것은 실행이 아니다. **실행 흔적은 성공이 아니고, `ok` 도 전체 완료가 아니다**: 실행기가 함께 낸 완료 판정(`verified`·`waiting-user` 등)은 `verify_run_completion` 에 따로 남는다. 보고서의 「실행기 OK(완료)/실행」 열로 보이며 평가의 완료 판정에는 쓰지 않는다.
 - `verifier_record`: 검증자를 띄운 흔적이 `observed`(있음)·`none`(볼 수 있는 기록에 없음)·`no-record`(Codex 원본 기록이 없어 볼 수 없음) 중 무엇인가. Codex 는 `exec` 기록에 하위 에이전트 생성이 남지 않아서 원본 기록(rollout)을 함께 본다. **띄운 흔적은 검증 통과의 증거가 아니다.**
 

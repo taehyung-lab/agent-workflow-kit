@@ -86,6 +86,7 @@ def initial_result(run):
          "verifier_exit_code": run["verifier_exit_code"],
          "out_of_scope": review.get("out_of_scope", []), "verifier_conditions": review.get("conditions", []),
          "lang": run["lang"] or None, "judge_version": run["judge_version"],
+         "task_fingerprint": run.get("task_fingerprint"), "task_inputs": copy.deepcopy(run.get("task_inputs")),
          "stage": "after-approval" if run["input"] == "with-approval" else "original-input",
          "review_state": state, "review_required": inputs["review_required"],
          "completion_inputs": inputs,

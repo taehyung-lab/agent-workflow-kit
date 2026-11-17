@@ -87,10 +87,11 @@ def compare(base, target, roots):
             marks.append("한쪽 실행 없음")
         else:
             fields = [("하네스 버전", "harness_version"), ("모델", "model"),
-                      ("전역 지침", "global_instructions"), ("판정기", "judge_version")]
+                      ("전역 지침", "global_instructions"), ("판정기", "judge_version"),
+                      ("과제", "task_fingerprint")]
             if any(m.get("mock_user_model") or m.get("goalflow", {}).get("mock") == "asked" for m in b + t):
                 fields += [("모의 사용자 모델", "mock_user_model")]
-            for key, label in (("conversation_contract", "대화 계약"), ("task_fingerprint", "과제"), ("prompt_configuration", "요청 앞문장 설정")):
+            for key, label in (("conversation_contract", "대화 계약"), ("prompt_configuration", "요청 앞문장 설정")):
                 # 모드가 다르면 요구 발견을 포함한 점수와 구현만의 점수를 비교할 수 없다.
                 if any(key in m for m in b + t):
                     fields.append((label, key))

@@ -5,7 +5,7 @@ Claude(`claude -p --output-format stream-json`)와 Codex(`codex exec --json`) �
 사건 형식(type 이름·필드)을 아는 곳은 이 파일뿐이다. 관찰(observe.py)은 여기서 낸 호출 목록으로 정책(무엇을 편집·검증자 흔적으로 볼지)만 정한다.
 실행기가 남기는 기록 파일의 이름(<이름>.jsonl·<이름>.tN.jsonl·<이름>.rollout.jsonl)도 여기서만 정한다.
 """
-import json, re
+import hashlib, json, re
 from pathlib import Path
 
 # 오류 사건이 든 줄: Codex 의 error·turn.failed, Claude 의 오류 결과(is_error). 줄을 풀지 않고 원문 바이트에서 찾는다.
@@ -37,17 +37,31 @@ def last_turn_log(log):
 
 def rollout_log(log):
     """Codex 세션 원본 기록 <이름>.rollout.jsonl(실행기가 세션을 닫을 때 남긴다)."""
+    log = Path(log)
+    if TURN_LOG.search(log.name):
+        log = log.with_name(TURN_LOG.sub('.jsonl', log.name))
     return _beside(log, ".rollout.jsonl")
 
 
 def events(path, errors="strict"):
     """기록의 사건(JSON 한 줄)을 순서대로 낸다. JSON 이 아닌 줄은 건너뛴다. errors 는 UTF-8 이 아닌 바이트를 다루는 방식이다(open 의 errors)."""
     with open(path, encoding="utf-8", errors=errors) as f:
-        for line in f:
-            try:
-                yield json.loads(line)
-            except ValueError:
-                continue
+        for _, event in _decoded_events(f):
+            yield event
+
+
+def _decoded_events(lines, strict=False):
+    """같은 사건 해석을 사용하되, 부재 판정에는 손상된 줄을 건너뛰지 않는다."""
+    for number, line in enumerate(lines, 1):
+        try:
+            value = json.loads(line)
+        except ValueError:
+            if strict and line.strip():
+                raise ValueError(f'{number}행의 사건 JSON이 손상됐다') from None
+            continue
+        if strict and not isinstance(value, dict):
+            raise ValueError(f'{number}행이 사건 객체가 아니다')
+        yield number, value
 
 
 def is_codex(path):
@@ -107,6 +121,150 @@ def rollout_calls(path):
         elif event.get("type") == "response_item" and payload.get("type") == "custom_tool_call":
             found.append({"name": None, "code": str(payload.get("input", ""))})
     return found if seen else None
+
+
+def agent_events(path, harness, turn=1):
+    """지정 턴의 생성·실행 결과·평문 반환. 암호화된 지시문과 역할 추측은 내보내지 않는다.
+
+    기존 최종 검증 관찰과 달리, 없다는 결론에는 온전한 해당 턴이 필요하다.
+    생성과 답변 내용의 옳음은 별개이며 여기서는 실제 사건만 연결한다.
+    """
+    source = {'path': str(Path(path).resolve()), 'sha256': None}
+    result = {'state': 'unverified', 'harness': harness, 'turn': turn,
+              'turn_complete': False, 'source': source, 'agents': [], 'reason': ''}
+    try:
+        raw = Path(path).read_bytes()
+        source['sha256'] = hashlib.sha256(raw).hexdigest()
+        numbered = list(_decoded_events(raw.decode('utf-8').splitlines(), strict=True))
+        if not numbered or type(turn) is not int or turn < 1:
+            raise ValueError('관찰할 턴과 원본 사건이 필요하다')
+        if harness == 'codex':
+            agents, complete, scope = _codex_agents(numbered, turn)
+        elif harness == 'claude':
+            agents, complete, scope = _claude_agents(numbered)
+        else:
+            raise ValueError('지원하지 않는 하네스')
+        result.update(agents=agents, turn_complete=complete, lines=scope)
+        if not complete:
+            result['reason'] = '해당 턴의 완료를 원본에서 확인하지 못했다'
+        elif any(a['state'] in ('attempted', 'started', 'unverified') for a in agents):
+            result['reason'] = '생성 실행 결과 또는 평문 반환을 모두 확인하지 못했다'
+        else:
+            result['state'] = 'observed' if agents else 'none'
+    except (OSError, UnicodeError, ValueError, TypeError, AttributeError) as exc:
+        result['reason'] = f'원본을 온전히 읽지 못했다: {exc}'
+    return result
+
+
+def _codex_agents(numbered, turn):
+    starts = [(i, e.get('payload') or {}) for i, (_, e) in enumerate(numbered)
+              if e.get('type') == 'event_msg' and (e.get('payload') or {}).get('type') == 'task_started']
+    if not starts:
+        starts = [(i, e.get('payload') or {}) for i, (_, e) in enumerate(numbered)
+                  if e.get('type') == 'event_msg' and (e.get('payload') or {}).get('type') == 'user_message']
+    if len(starts) < turn:
+        return [], False, []
+    first, marker = starts[turn - 1]
+    end = starts[turn][0] if len(starts) > turn else len(numbered)
+    selected = numbered[first:end]
+    agents, by_call, complete = [], {}, False
+    for line, event in selected:
+        payload = event.get('payload') or {}
+        kind = payload.get('type')
+        if event.get('type') == 'event_msg' and kind in ('task_complete', 'turn_complete'):
+            if not marker.get('turn_id') or not payload.get('turn_id') or payload['turn_id'] == marker['turn_id']:
+                complete = True
+        if event.get('type') != 'response_item':
+            continue
+        if kind == 'function_call' and str(payload.get('name', '')).split('.')[-1] == 'spawn_agent':
+            agent = {'call_id': payload.get('call_id'), 'spawn_line': line, 'state': 'attempted', 'returns': []}
+            # Only non-secret addressing metadata is retained from arguments.
+            try:
+                args = json.loads(payload.get('arguments') or '{}')
+                if not isinstance(args, dict):
+                    raise TypeError('생성 인자가 객체가 아니다')
+                agent.update(task_name=args.get('task_name'), fork_turns=args.get('fork_turns'))
+            except (ValueError, TypeError):
+                agent['state'] = 'unverified'
+            agents.append(agent)
+            if isinstance(payload.get('call_id'), str) and payload['call_id'].strip():
+                by_call[payload['call_id']] = agent
+            else:
+                agent['state'] = 'unverified'
+        elif kind == 'custom_tool_call' and re.search(r'\bspawn_agent\s*\(', str(payload.get('input', ''))):
+            # A nested code call alone does not prove that its spawn succeeded.
+            agents.append({'call_id': payload.get('call_id'), 'spawn_line': line, 'state': 'unverified', 'returns': []})
+        elif kind == 'function_call_output' and payload.get('call_id') in by_call:
+            agent = by_call[payload['call_id']]
+            agent['result_line'] = line
+            try:
+                output = json.loads(payload.get('output') or '{}')
+                address = output.get('task_name') or output.get('agent_id') or output.get('id')
+                agent.update(state='started' if address else 'unverified', address=address)
+                if output.get('error') or output.get('isError'):
+                    agent['state'] = 'failed'
+            except (ValueError, TypeError, AttributeError):
+                agent['state'] = 'unverified'
+        elif kind == 'agent_message':
+            for part in payload.get('content') or []:
+                text = part.get('text', '') if isinstance(part, dict) else ''
+                returned = re.search(r'Message Type:\s*FINAL_ANSWER\s*\n.*?Sender:\s*([^\s]+)\s*\nPayload:\s*\n(.*)', text, re.S)
+                if not returned:
+                    continue
+                sender, body = returned.groups()
+                matches = [a for a in agents if a.get('address') == sender]
+                if len(matches) == 1:
+                    matches[0]['returns'].append({'line': line, 'sender': sender, 'text': body})
+                    matches[0]['state'] = 'returned'
+    return agents, complete, [selected[0][0], selected[-1][0]]
+
+
+def _claude_agents(numbered):
+    agents, by_id, complete = [], {}, False
+    uses, results = set(), set()
+    # A readable message is not evidence of a particular worker's return when
+    # the addressing is missing or ambiguous, including collisions with Bash.
+    for _, event in numbered:
+        for part in (event.get('message') or {}).get('content') or []:
+            if not isinstance(part, dict) or part.get('type') not in ('tool_use', 'tool_result'):
+                continue
+            is_use = part['type'] == 'tool_use'
+            key = part.get('id' if is_use else 'tool_use_id')
+            seen = uses if is_use else results
+            if not isinstance(key, str) or not key.strip() or key in seen:
+                raise ValueError('도구 호출·실행 결과의 ID가 없거나 비었거나 중복됐다')
+            seen.add(key)
+    if results - uses:
+        raise ValueError('도구 실행 결과에 대응하는 호출 ID가 없다')
+    for line, event in numbered:
+        if event.get('type') == 'result':
+            complete = not event.get('is_error', False)
+        for part in (event.get('message') or {}).get('content') or []:
+            if not isinstance(part, dict):
+                continue
+            if part.get('type') == 'tool_use' and part.get('name') in ('Agent', 'Task'):
+                background = (part.get('input') or {}).get('run_in_background', False)
+                agent = {'call_id': part.get('id'), 'spawn_line': line, 'state': 'attempted',
+                         'run_in_background': background, 'returns': []}
+                agents.append(agent); by_id[part.get('id')] = agent
+            elif part.get('type') == 'tool_result' and part.get('tool_use_id') in by_id:
+                agent = by_id[part['tool_use_id']]
+                body = part.get('content')
+                if isinstance(body, list):
+                    body = '\n'.join(p.get('text', '') for p in body if isinstance(p, dict) and p.get('type') == 'text')
+                agent['result_line'] = line
+                if part.get('is_error'):
+                    agent['state'] = 'failed'
+                elif agent['run_in_background'] is not False:
+                    # This result acknowledges a background launch. The parent's
+                    # result event cannot establish that the worker returned.
+                    agent['state'] = ('started' if agent['run_in_background'] is True
+                                      and isinstance(body, str) and body.strip() else 'unverified')
+                elif isinstance(body, str) and body.strip():
+                    agent.update(state='returned', returns=[{'line': line, 'text': body}])
+                else:
+                    agent['state'] = 'unverified'
+    return agents, complete, [numbered[0][0], numbered[-1][0]]
 
 
 def read(path):

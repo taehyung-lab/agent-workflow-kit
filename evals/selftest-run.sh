@@ -266,26 +266,7 @@ assert log("echo x > todo.py") == ["todo.py"] and log("ls 2>/dev/null; echo y >>
 PY
 # 문서 예산: 매 세션 읽는 키트 영역과 설치되는 키트 문서가 정해 둔 크기를 넘으면 실패한다(늘리려면 다른 문장을 교체·삭제한다).
 # 예산은 증가를 막는 장치일 뿐 원인 교정의 증거가 아니다(교정은 실패 표본으로 확인). 상한을 올리는 것은 기준 변경이라 별도 검토를 받는다.
-python3 -I - "$here/.." <<'PY' && ok "문서 예산: 키트 영역 ≤6000B, 안내·스킬 각 ≤4500B, 설치 문서 전체(검토자 지시문 포함) ≤32000B" || ng "문서 예산 초과"
-import sys
-from pathlib import Path
-kit = Path(sys.argv[1]); bad = []
-agents = (kit / "AGENTS.md").read_text(encoding="utf-8")
-region = agents[agents.index("<!-- agent-workflow-kit:begin -->"):agents.index("<!-- agent-workflow-kit:end -->")].encode()
-if len(region) > 6000: bad.append(f"AGENTS.md 키트 영역 {len(region)}B > 6000B")
-skills = sorted((kit / ".agents/skills").glob("*/SKILL.md"))
-for f in skills:
-    n = len(f.read_bytes())
-    if n > 4500: bad.append(f"{f.relative_to(kit)} {n}B > 4500B")
-docs = [f for f in (kit / ".agents/skills").rglob("*") if f.is_file() and f.suffix in (".md", ".txt")]
-# 검토자에게 주는 지시문도 모델이 읽는 설치 글이다(.py 안에 있어 전에는 세지 않았고, v3.0 이후 가장 많이 늘었다)
-import importlib.util
-spec = importlib.util.spec_from_file_location("awk_verify", kit / ".agents/skills/wf-verify/verify.py"); verify = importlib.util.module_from_spec(spec); spec.loader.exec_module(verify)
-prompt = len(verify.VERIFIER_PROMPT.encode())
-total = len(region) + sum(len(f.read_bytes()) for f in docs) + prompt
-if total > 32000: bad.append(f"설치 문서 전체 {total}B > 32000B")
-print("\n".join(bad) or f"키트 영역 {len(region)}B, 검토자 지시문 {prompt}B, 설치 문서 전체 {total}B"); sys.exit(1 if bad else 0)
-PY
+python3 -I "$here/document_budget.py" "$here/.." && ok "문서 예산: 키트 영역 ≤6000B, 안내·스킬 각 ≤4500B, 설치 문서 전체(검토자 지시문 포함) ≤32000B" || ng "문서 예산 초과"
 # 비교 보고(report.py --compare): 통과 수와 함께 '무엇을 말할 수 있는가'를 낸다. 검토 필요는 실패로 세지 않고 사람 판독 대기로 센다
 python3 -I - "$here" <<'PY' && ok "비교 보고: 섞인 결과는 말할 수 없음·재발·비교 불가 표시(모델이 달라도),  검토 필요는 재발로 세지 않고 사람 판독 대기로 셈" || ng "비교 보고"
 import json, subprocess, sys, tempfile
@@ -293,7 +274,7 @@ from pathlib import Path
 here = Path(sys.argv[1])
 def meta(d, case, commit, passed, review=False, gi="a", model="m", mock="u"):
     m = {"case": case, "harness": "claude", "kit_commit": commit * 5, "input": "original", "check_passed": passed, "check_needs_review": review,
-         "check_unverified": False, "global_instructions": {"g": gi}, "harness_version": "1", "judge_version": "j", "model": model, "mock_user_model": mock,
+         "check_unverified": False, "global_instructions": {"g": gi}, "harness_version": "1", "judge_version": "j", "task_fingerprint": "synthetic-task", "model": model, "mock_user_model": mock,
          "observed": {"first_reply_chars": 100}, "completion": "not-verified"}
     Path(d, f"{case}-{commit}-{passed}-{review}-{gi}-{model}-{mock}.meta.json").write_text(json.dumps(m))
 with tempfile.TemporaryDirectory() as d:
@@ -485,5 +466,9 @@ python3 -I "$here/../tests/work.test.py" && ok "대표 작업 기록 공개 명�
 python3 -I "$here/../tests/evaluation-contract.test.py" && ok "평가 정책·비교 계약" || ng "평가 정책·비교 계약"
 python3 -I "$here/../tests/session-contract.test.py" && ok "공통 세션 시작·재개" || ng "공통 세션 시작·재개"
 python3 -I "$here/../tests/turnwatch.test.py" && ok "파일 사건 종료 배치 보존" || ng "파일 사건 종료 배치 보존"
+python3 -I "$here/../tests/agent-evidence.test.py" && ok "턴별 원본 에이전트 관찰" || ng "턴별 원본 에이전트 관찰"
+python3 -I "$here/../tests/discovery-review.test.py" && ok "저장 원문의 독립 재판독" || ng "저장 원문의 독립 재판독"
+python3 -I "$here/../tests/evaluation-budget.test.py" && ok "평가 실행 한도 보존" || ng "평가 실행 한도 보존"
+python3 -I "$here/../tests/document-budget.test.py" && ok "행동 평가 전 문서 예산" || ng "행동 평가 전 문서 예산"
 printf '%d passed, %d failed%s\n' "$pass" "$failed" "${unrun:+, 1 미실행(표준 쓰기 경계 시험)}"
 [ "$failed" -eq 0 ]

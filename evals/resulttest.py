@@ -45,6 +45,20 @@ class ResultTest(unittest.TestCase):
             after = self.rejudge(root)
             self.assertEqual(after.get('model'), 'fixed-model')
 
+    def test_public_rejudge_keeps_run_time_task_evidence_and_does_not_backfill_legacy(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); self.make_project(root)
+            evidence = {'version': 1, 'turns': ['prompt.txt'], 'files': {'prompt.txt': 'run-time-hash'}}
+            self.initial(root, task_fingerprint='run-time-task', task_inputs=evidence)
+            after = self.rejudge(root)
+            self.assertEqual(after['task_fingerprint'], 'run-time-task')
+            self.assertEqual(after['task_inputs'], evidence)
+            after.pop('task_fingerprint'); after.pop('task_inputs')
+            (root / 'sample.meta.json').write_text(json.dumps(after))
+            legacy = self.rejudge(root)
+            self.assertNotIn('task_fingerprint', legacy)
+            self.assertNotIn('task_inputs', legacy)
+
     def test_current_result_preserves_open_decisions_through_rejudge(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

@@ -50,6 +50,9 @@ def conversation_unfinished(summary):
 
 def behavior_verdict(summary):
     """최종 동작만의 판정: 외부 판정기(oracle.py)가 끝난 프로젝트의 공개 명령으로 본 결과."""
+    stops = [t['runtime_stop'] for t in summary['turns'] if t.get('runtime_stop')]
+    if stops:
+        return UNVERIFIED, 'UNVERIFIED 통제된 한도 중단으로 최종 동작을 확인하지 못했다: ' + ', '.join(stop['reason'] for stop in stops)
     n, failed, unobserved = summary["n_cases"], summary["failed"], summary["unobserved"]
     if summary.get("oracle_error") or not n:
         return UNVERIFIED, "UNVERIFIED 외부 판정기가 결과를 내지 못했다: " + str(summary.get("oracle_error") or "판정 항목 없음")[:200]
@@ -83,6 +86,8 @@ def discovery_state(summary):
     """고정 정책을 듣기 전 발견한 선택. 구기록에서 없는 증거를 만들어 내지 않는다."""
     if 'conversation_contract' not in summary:
         return 'unmeasured', []
+    if summary.get('turns') and any(t.get('runtime_stop') for t in _static(summary)):
+        return 'unverified', []
     if summary.get('mock_error') or summary['conversation_contract'] != 'fixed-policy-v1':
         return 'unverified', []
     policy, found, delivered = (summary.get(k) for k in ('policy_topics', 'discovered', 'answered'))
@@ -143,20 +148,23 @@ def result_meta(summary):
             **{key: summary.get(key) for key in ('global_instructions', 'judge_version', 'task_fingerprint', 'conversation_contract', 'prompt_configuration', 'skills_fingerprint')},
             "goalflow": {"arm": arm, "mock": summary["mock"], "answered": summary["answered"], "edits_before_answer": edits_before_answer(summary),
                          "final_behavior": behavior_verdict(summary)[0], "process": process_state(summary),
+                         "runtime_stops": [{"turn":t["turn"], **t["runtime_stop"]} for t in turns if t.get("runtime_stop")],
                          "required_discovery_topics": summary.get("required_discovery_topics", summary.get("policy_topics")),
                          "discovery_exclusions": summary.get("discovery_exclusions", {}),
                          "discovery": discovery_state(summary)[0], "missing_topics": discovery_state(summary)[1],
                          "surfaced_quotes": summary.get("surfaced_quotes") or {},
+                         "agent_evidence": [t['agent_evidence'] for t in turns] if all('agent_evidence' in t for t in turns) else None,
                          "failed": summary["failed"], "unobserved": summary["unobserved"], "n_cases": summary["n_cases"],
                          "map": summary["map"], "public_tests_rc": summary["public_tests_rc"]}}
 
 
 if __name__ == "__main__":
     for f in sorted(glob.glob(sys.argv[1] + "/*.json")):
-        if f.endswith((".oracle.json", ".meta.json")):
+        if f.endswith((".oracle.json", ".meta.json", ".stop.json")):
             continue
         s = json.load(open(f)); t = s["turns"]
         print(f'{s.get("task", "goalflow"):9} {s["name"]:16} valid={s["automated_valid"]!s:5} fail={len(s["failed"]):2}/{s["n_cases"]} unobs={len(s["unobserved"])} pub={s["public_tests_rc"]} map={s["map"]!s:5} sec={s["seconds"]:5} | '
-              + " ".join(f't{r["turn"]}:ans{r.get("answered_now","")},rc{r["rc"]},{r["seconds"]}s,edit{len(r["product_changes"])},?{r["question_marks"]},rec{r["record_runs"]},rev{r["review_runs"]}' for r in t) + f' | init={s["init"]} err={str(s["oracle_error"])[:80] if s["oracle_error"] else ""}')
+              + " ".join(f't{r["turn"]}:ans{r.get("answered_now","")},rc{r["rc"]},{r["seconds"]}s,edit{len(r["product_changes"])},?{r["question_marks"]},rec{r["record_runs"]},rev{r["review_runs"]}' for r in t) + f' | init={s["init"]} err={str(s["oracle_error"])[:80] if s["oracle_error"] else ""}'
+              + (" | 통제된 한도 중단: " + ", ".join(f"t{r['turn']}:{r['runtime_stop']['reason']}" for r in t if r.get('runtime_stop')) if any(r.get('runtime_stop') for r in t) else ""))
         if "-v" in sys.argv:
             print("    failed:", s["failed"], "| 사용자 답 항목:", s.get("failed_decision"))

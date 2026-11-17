@@ -188,7 +188,7 @@ class EvaluationContract(unittest.TestCase):
                     row = dict(case='same-task', harness='claude', kit_commit=side,
                                check_passed=passed, model='model', harness_version='cli',
                                mock_user_model=None, global_instructions={}, judge_version='judge',
-                               observed={})
+                               observed={}, task_fingerprint='same-task-input')
                     row.update(common or {})
                     if side == 'bbbbbbb':
                         row.update(overrides)
@@ -275,6 +275,63 @@ class EvaluationContract(unittest.TestCase):
 
     def test_matching_conditions_can_describe_the_observed_difference(self):
         self.assertIn('차이: 개선', self.compare_output())
+
+    def test_general_runner_records_actual_inputs_and_rejudge_preserves_them(self):
+        import os, run
+        class Harness:
+            project_trusted = False
+            def __init__(self, project, **kwargs): pass
+            def start(self, prompt, prefix):
+                prompts.append(prompt)
+                log = Path(str(prefix) + '.jsonl'); log.write_text('')
+                err = Path(str(prefix) + '.err'); err.write_text('')
+                return SimpleNamespace(exit_code=0, log=log, err=err, session_id='fake')
+            resume = start
+            def close(self, **kwargs): pass
+            def version(self): return 'fixed-cli'
+        def checkout(commit, kit):
+            kit.mkdir(); (kit / 'AGENTS.md').write_text('kit')
+        def build(project, kit, prepare, **kwargs):
+            project.mkdir(); prepare(project)
+            (project / 'AGENTS.md').write_text('installed kit')
+        prompts = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); case = root / 'same-case'; case.mkdir()
+            (case / 'prompt.txt').write_text('first request')
+            (case / 'prompt2.txt').write_text('followup request')
+            (case / 'approve.txt').write_text('approved request')
+            (case / 'setup.sh').write_text("printf 'start' > product.txt\n")
+            with patch.dict(os.environ, {'EVALS_APPROVE':'1', 'EVALS_VERIFY':'0'}), \
+                 patch.dict(run.session.HARNESSES, {'fake':Harness}), \
+                 patch.object(run.session, 'kit_checkout', side_effect=checkout), \
+                 patch.object(run.session, 'build_project', side_effect=build), \
+                 patch.object(run.session, 'snapshot', return_value='base'), \
+                 patch.object(run, 'judge', return_value=('PASS', 'raw score')), \
+                 patch.object(run, 'current_judge_version', return_value='same-judge'), \
+                 patch.object(run.pins, 'model', return_value='fixed-model'), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                run.run_once('same-case', case, 'ref', 'aaaaaaa', 'fake', 1, root,
+                             {'verifier_tool':''})
+            meta = json.loads((root / 'same-case-aaaaaaa-fake-1.meta.json').read_text())
+            self.assertEqual(prompts, ['first request', 'followup request', 'approved request'])
+            self.assertEqual(meta['task_inputs']['turns'], ['prompt.txt', 'prompt2.txt', 'approve.txt'])
+            self.assertIn('product.txt', meta['task_inputs']['prepared_files'])
+            self.assertTrue(meta['task_fingerprint'])
+            from result import rejudge_result
+            (case / 'prompt.txt').write_text('current request has changed')
+            after = rejudge_result(meta, 'FAIL', 'new raw score', 'new-judge', 'sha')
+            self.assertEqual(after['task_fingerprint'], meta['task_fingerprint'])
+            self.assertEqual(after['task_inputs'], meta['task_inputs'])
+            self.assertEqual(after['rejudge_history'][-1]['check_output'], 'raw score')
+            legacy = dict(meta); legacy.pop('task_fingerprint'); legacy.pop('task_inputs')
+            old = rejudge_result(legacy, 'PASS', 'raw', 'new-judge', 'sha')
+            self.assertNotIn('task_fingerprint', old)
+            self.assertNotIn('task_inputs', old)
+
+    def test_legacy_general_results_without_task_evidence_cannot_claim_improvement(self):
+        text = self.compare_output(common={'task_fingerprint':None})
+        self.assertIn('과제 근거 없음', text)
+        self.assertNotIn('차이: 개선', text)
 
     def test_result_interpretation_does_not_import_session_execution(self):
         command = [sys.executable, '-c',

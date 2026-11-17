@@ -5,7 +5,7 @@
 이미 구현했다고만 보고한 주제와 언급하지 않은 주제는 답 전 발견으로 세지 않는다. 정책 전체의 전달은 conversation.py가 맡는다.
 모델은 주제마다 그 문장을 글에서 그대로 옮기고, 옮긴 문장이 실제 글에 있는지 확인한다. 인용이 다르거나 주제별 판정이 빠졌으면 분류 실패로 남겨 REVIEW로 보낸다. 모델은 evals/pins.json 의 mock_user 로 고정한다. 저장된 답으로 분류를 확인하는 표본은 asked-samples/ 에 있다(asked_samples.py).
 """
-import json, re, subprocess, sys, tempfile
+import json, os, re, subprocess, sys, tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -43,8 +43,12 @@ def surfaced(reply, topics, record_dir=None):
         (evidence / 'prompt.txt').write_text(prompt, encoding='utf-8')
     try:
         with tempfile.TemporaryDirectory() as directory:
-            r = subprocess.run(["claude", "-p", prompt, "--model", pins.mock_user_model(), "--safe-mode", "--max-turns", "1"],
-                               cwd=directory, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
+            command = ["claude", "-p", prompt, "--model", pins.mock_user_model(), "--safe-mode", "--max-turns", "1"]
+            if os.environ.get('EVALS_BUDGET_FILE'):
+                from session import classify
+                r = classify(command, directory)
+            else:
+                r = subprocess.run(command, cwd=directory, capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired) as e:
         if evidence:
             (evidence / 'error.txt').write_text(str(e), encoding='utf-8')
