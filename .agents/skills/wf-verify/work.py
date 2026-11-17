@@ -95,7 +95,7 @@ def reviewed_choices(work, plan, events, kept):
                    max(n for r in plan['requirements'] for n in r['source'])) == plan
                for f in files if f['role'] == 'output'):
         raise ValueError('독립 검토가 이번 계획을 대조하지 않았다')
-    requests = {f['sha256'] for f in files if f['role'] == 'request'}
+    requests = {digest(Path(f['path']).read_bytes()) for f in files if f['role'] == 'request'}
     if not {s['sha256'] for s in sources(events)} <= requests:
         raise ValueError('독립 검토에 현재 사용자 원문이 모두 없다')
     # 검토 입력 자체에 미정 목록을 포함해야 다른 작업의 통과를 재사용하지 못한다.

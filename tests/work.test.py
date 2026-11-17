@@ -130,6 +130,7 @@ class WorkTest(unittest.TestCase):
   rc,r=self.runwork('record','--plan',str(self.plan));self.assertEqual(rc,0,r)
   self.data['requirements'][0]['state']='확정';self.plan.write_text(json.dumps(self.data))
   rc,r=self.runwork('record','--plan',str(self.plan));self.assertNotEqual(rc,0,r)
+  self.data['requirements'][0]['source']=[3];self.plan.write_text(json.dumps(self.data))
   rc,r=self.runwork('record','--request',str(self.req),'--reply-to','R1','--plan',str(self.plan));self.assertEqual(rc,0,r)
  def test_reused_review_for_other_plan_cannot_resolve_question(self):
   self.data['requirements'][0]['state']='미정';self.record()
@@ -137,7 +138,7 @@ class WorkTest(unittest.TestCase):
   rc,r=self.runwork('record','--plan',str(self.plan),'--resolution-review',str(self.root/'missing'))
   self.assertNotEqual(rc,0,r)
  def test_independent_contract_review_resolves_without_reasking_user(self):
-  self.req.write_text('전환해도 최초 발급에서 300초 기한을 유지한다.')
+  self.req.write_bytes('전환해도 최초 발급에서 300초 기한을 유지한다.\r\n'.encode())
   self.data['requirements'][0].update(state='미정',expect='전환 후 기한 유지 여부')
   self.record()
   self.data['requirements'][0].update(state='확정',expect='전환해도 최초 300초 기한 유지')
