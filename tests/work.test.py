@@ -16,7 +16,11 @@ class WorkTest(unittest.TestCase):
   r=subprocess.run(['python3',str(TOOL),*args,str(self.work)],cwd=self.repo,text=True,capture_output=True)
   try: out=json.loads(r.stdout)
   except ValueError: self.fail(r.stderr+r.stdout)
+  if 'prompt_file' in out:
+   self.required=json.loads((Path(out['kept'])/'pending.json').read_text())['required']
   return r.returncode,out
+ def review_answer(self,evidence):
+  return json.dumps({'verdict':'OK','conditions':[{'id':rid,'result':'충족','evidence':evidence} for rid in self.required]})
  def record(self):
   self.plan.write_text(json.dumps(self.data)); return self.runwork('record','--request',str(self.req),'--plan',str(self.plan))
  def test_record_and_check(self):
@@ -44,7 +48,7 @@ class WorkTest(unittest.TestCase):
   self.record();(self.repo/'app.txt').write_text('after');self.runwork('check')
   rc,r=self.runwork('review');self.assertEqual(rc,0,r)
   self.assertIn('ok',Path(r['prompt_file']).read_text())
-  answer=self.root/'answer.txt';answer.write_text(json.dumps({'verdict':'OK','conditions':[{'id':'R1','result':'충족','evidence':'원문과 실행 대조'}]}))
+  answer=self.root/'answer.txt';answer.write_text(self.review_answer('원문과 실행 대조'))
   rc,r=self.runwork('review','--answer',str(answer));self.assertEqual(r['completion'],'verified',r)
   (self.repo/'app.txt').write_text('later')
   rc,r=self.runwork('review','--answer',str(answer));self.assertEqual(r['completion'],'unverified')
@@ -53,7 +57,7 @@ class WorkTest(unittest.TestCase):
   self.runwork('record','--request',str(self.req));rc,r=self.runwork('review');self.assertEqual(r['completion'],'unverified')
  def test_new_check_requires_new_review(self):
   self.record();(self.repo/'app.txt').write_text('after');self.runwork('check');self.runwork('review');self.runwork('check')
-  answer=self.root/'answer.txt';answer.write_text(json.dumps({'verdict':'OK','conditions':[{'id':'R1','result':'충족','evidence':'검토'}]}))
+  answer=self.root/'answer.txt';answer.write_text(self.review_answer('검토'))
   rc,r=self.runwork('review','--answer',str(answer));self.assertEqual(r['completion'],'unverified',r)
  def test_review_output_is_frozen(self):
   self.data['checks'][0]['argv']=['python3','-c','print("UNIQUE_" + "EXECUTION_PROOF")'];self.record();(self.repo/'app.txt').write_text('after');self.runwork('check')
@@ -70,10 +74,37 @@ class WorkTest(unittest.TestCase):
   attachment=Path(attachments[0]['path'])
   self.assertIn('LAST_CHANGE_MARKER',attachment.read_text())
   self.assertIn(str(attachment),Path(r['prompt_file']).read_text())
-  answer=self.root/'answer.txt';answer.write_text(json.dumps({'verdict':'OK','conditions':[{'id':'R1','result':'충족','evidence':'전체 변경 파일의 마지막 변경까지 대조'}]}))
+  answer=self.root/'answer.txt';answer.write_text(self.review_answer('전체 변경 파일의 마지막 변경까지 대조'))
   rc,r=self.runwork('review','--answer',str(answer));self.assertEqual(r['completion'],'verified',r)
   attachment.write_text('검토한 변경의 일부를 제거')
   rc,r=self.runwork('review','--answer',str(answer));self.assertEqual(r['completion'],'unverified',r)
+ def test_single_target_uses_its_own_review_rules(self):
+  (self.repo/'AGENTS.md').write_text('대상 고정 규칙')
+  rules=self.repo/'.agents/skills/wf-verify/SKILL.md';rules.parent.mkdir(parents=True);rules.write_text('대상 검토자 기준')
+  self.record();self.runwork('check');rc,r=self.runwork('review');self.assertEqual(rc,0,r)
+  frozen=Path(r['target_dir'])/'app'
+  prompt=Path(r['prompt_file']).read_text()
+  self.assertIn(str(frozen/'AGENTS.md'),prompt)
+  self.assertIn(str(frozen/'.agents/skills/wf-verify/SKILL.md'),prompt)
+  self.assertNotIn('여러 저장소 작업이다',prompt)
+  self.assertNotIn('그 폴더의 것을 쓰지 않는다',prompt)
+  direct=subprocess.run(['python3',str(TOOL.with_name('verify.py')),'prepare','--request',str(self.req),'--output',str(self.req)],cwd=self.repo,text=True,capture_output=True)
+  self.assertEqual(direct.returncode,0,direct.stderr+direct.stdout)
+  prepared=json.loads(direct.stdout);direct_prompt=Path(prepared['prompt_file']).read_text()
+  self.assertIn(str(Path(prepared['target_dir'])/'.agents/skills/wf-verify/SKILL.md'),direct_prompt)
+  self.assertIn('단일 저장소 작업이다',direct_prompt)
+ def test_target_review_cannot_be_omitted_or_failed(self):
+  self.record();self.runwork('check');rc,r=self.runwork('review');self.assertEqual(rc,0,r)
+  pending=json.loads((Path(r['kept'])/'pending.json').read_text())
+  internal=set(pending['required'])-{'R1'}
+  self.assertEqual(len(internal),1)
+  answer=self.root/'answer.txt'
+  answer.write_text(json.dumps({'verdict':'OK','conditions':[{'id':'R1','result':'충족','evidence':'요청 결과 확인'}]}))
+  rc,result=self.runwork('review','--answer',str(answer));self.assertEqual(result['completion'],'unverified')
+  for state in ['미확인','미충족']:
+   conditions=[{'id':'R1','result':'충족','evidence':'요청 결과 확인'}]+[{'id':rid,'result':state,'evidence':'대상 필수 검토 누락 또는 실패'} for rid in internal]
+   answer.write_text(json.dumps({'verdict':'OK','conditions':conditions}))
+   rc,result=self.runwork('review','--answer',str(answer));self.assertNotEqual(result['completion'],'verified')
  def test_optional_review(self):
   self.data['review_required']=False;self.record();rc,r=self.runwork('check');self.assertEqual(r['completion'],'verified')
  def test_home_two_targets_keep_pins_and_expire_together(self):
@@ -81,25 +112,66 @@ class WorkTest(unittest.TestCase):
   second=self.root/'second';shutil.copytree(self.repo,second)
   for root,version in [(self.repo,'team-v1'),(second,'team-v2')]:
    (root/'.agents').mkdir();(root/'.agents/agent-workflow-kit.version').write_text(version)
+   (root/'AGENTS.md').write_text('프로젝트 규칙 '+version)
+   rules=root/'.agents/skills/wf-verify/SKILL.md';rules.parent.mkdir(parents=True);rules.write_text('검토 기준 '+version)
   self.data['targets'].append({'name':'other','path':str(second),'base':self.data['targets'][0]['base']})
   self.data['checks'].append({'id':'C2','target':'other','requirements':['R1'],'argv':['python3','-c','print("other")']})
   self.record();(second/'app.txt').write_text('after');self.runwork('check');rc,r=self.runwork('review');self.assertEqual(rc,0,r)
   prompt=Path(r['prompt_file']).read_text();self.assertIn('other',prompt);self.assertIn('+after',prompt)
+  for name in ['app','other']:
+   self.assertIn(str(Path(r['target_dir'])/name/'.agents/skills/wf-verify/SKILL.md'),prompt)
+  self.assertEqual(set(self.required),{'R1','TV1','TV2'})
   self.assertEqual((self.repo/'.agents/agent-workflow-kit.version').read_text(),'team-v1')
   self.assertEqual((second/'.agents/agent-workflow-kit.version').read_text(),'team-v2')
   (second/'app.txt').write_text('later');rc,r=self.runwork('review');self.assertEqual(r['completion'],'unverified')
+ def test_ignored_pinned_rules_are_frozen_and_used(self):
+  (self.repo/'.gitignore').write_text('.agents/\n')
+  rules=self.repo/'.agents/skills/wf-verify/SKILL.md';rules.parent.mkdir(parents=True);rules.write_text('별도 역할의 검토가 필수')
+  (self.repo/'.agents/agent-workflow-kit.version').write_text('team-old')
+  self.record();self.runwork('check');rc,r=self.runwork('review');self.assertEqual(rc,0,r)
+  frozen=Path(r['target_dir'])/'app'
+  self.assertEqual((frozen/'.agents/agent-workflow-kit.version').read_text(),'team-old')
+  self.assertEqual((frozen/'.agents/skills/wf-verify/SKILL.md').read_text(),rules.read_text())
+  prompt=Path(r['prompt_file']).read_text()
+  self.assertIn(str(frozen/'.agents/skills/wf-verify/SKILL.md'),prompt)
+  self.assertNotIn('설치 키트가 없으면',prompt)
+ def test_linked_rule_directory_is_frozen_without_writing_source(self):
+  outside=self.root/'shared-rules';rules=outside/'skills/wf-verify/SKILL.md';rules.parent.mkdir(parents=True)
+  rules.write_text('共有 검토 기준');(outside/'agent-workflow-kit.version').write_text('team-shared')
+  (self.repo/'.agents').symlink_to(outside,target_is_directory=True)
+  self.record();self.runwork('check');rc,r=self.runwork('review');self.assertEqual(rc,0,r)
+  frozen=Path(r['target_dir'])/'app/.agents'
+  self.assertFalse(frozen.is_symlink())
+  self.assertEqual((frozen/'skills/wf-verify/SKILL.md').read_text(),rules.read_text())
+  (frozen/'skills/wf-verify/SKILL.md').write_text('검토 사본만 변경')
+  self.assertEqual(rules.read_text(),'共有 검토 기준')
+ def test_direct_review_also_requires_internal_review(self):
+  prepared=subprocess.run(['python3',str(TOOL.with_name('verify.py')),'prepare','--request',str(self.req),'--output',str(self.req)],cwd=self.repo,text=True,capture_output=True)
+  self.assertEqual(prepared.returncode,0,prepared.stderr+prepared.stdout)
+  r=json.loads(prepared.stdout);pending=json.loads((Path(r['kept'])/'pending.json').read_text())
+  self.assertIn('TV1',pending['required'])
+  answer=json.dumps({'verdict':'OK','conditions':[{'id':'R1','result':'충족','evidence':'요청 결과만 확인'}]})
+  finish=subprocess.run(['python3',str(TOOL.with_name('verify.py')),'finish','--round',r['kept'],'--check','PASS'],cwd=self.repo,input=answer,text=True,capture_output=True)
+  self.assertEqual(json.loads(finish.stdout)['completion'],'unverified')
+ def test_pinned_review_rules_change_expires_evidence(self):
+  rules=self.repo/'.agents/skills/wf-verify/SKILL.md';rules.parent.mkdir(parents=True)
+  rules.write_text('현재 대상 검토 기준');(self.repo/'.agents/agent-workflow-kit.version').write_text('team-v1')
+  self.record();self.runwork('check');rc,r=self.runwork('review');self.assertEqual(rc,0,r)
+  rules.write_text('바뀐 대상 검토 기준')
+  answer=self.root/'answer.txt';answer.write_text(self.review_answer('변경 전 기준으로 대조'))
+  rc,result=self.runwork('review','--answer',str(answer));self.assertEqual(result['completion'],'unverified')
  def test_review_requirements_do_not_depend_on_markdown_table_syntax(self):
   self.data['requirements'][0]['expect']='이름 A | B를 그대로 보존\n두 번째 줄도 보존'
   self.record();(self.repo/'app.txt').write_text('after');self.runwork('check')
   rc,r=self.runwork('review');self.assertEqual(rc,0,r)
   pending=json.loads((Path(r['kept'])/'pending.json').read_text())
-  self.assertEqual(pending['required'],['R1'])
+  self.assertEqual(pending['required'],['R1','TV1'])
   self.assertFalse(any(f['role']=='map' for f in pending['inputs']['files']))
   prompt=Path(r['prompt_file']).read_text()
   self.assertIn('이름 A | B를 그대로 보존',prompt)
   # 읽기용 지도를 고쳐도 현재 검토가 받은 원문·요구·검사 근거는 바뀌지 않는다.
   (self.work/'work.md').write_text('읽기용 지도 레이아웃 변경')
-  answer=self.root/'answer.txt';answer.write_text(json.dumps({'verdict':'OK','conditions':[{'id':'R1','result':'충족','evidence':'원문 대조'}]}))
+  answer=self.root/'answer.txt';answer.write_text(self.review_answer('원문 대조'))
   rc,r=self.runwork('review','--answer',str(answer));self.assertEqual(r['completion'],'verified',r)
  def test_reader_question_survives_plan_replacement(self):
   self.record()
@@ -164,7 +236,7 @@ class WorkTest(unittest.TestCase):
   prepared=subprocess.run(command,cwd=self.repo,text=True,capture_output=True)
   self.assertEqual(prepared.returncode,0,prepared.stderr+prepared.stdout)
   kept=json.loads(prepared.stdout)['kept']
-  answer=json.dumps({'verdict':'OK','conditions':[{'id':'R1','result':'충족','evidence':'원문이 최초 발급에서 300초 유지라고 명시'}]})
+  answer=json.dumps({'verdict':'OK','conditions':[{'id':'R1','result':'충족','evidence':'원문이 최초 발급에서 300초 유지라고 명시'},{'id': 'TV1', 'result': '충족', 'evidence': '대상 기준·현재 버전·검사 대조'}]})
   finish=subprocess.run(['python3',str(TOOL.with_name('verify.py')),'finish','--round',kept,'--check','PASS'],
     cwd=self.repo,input=answer,text=True,capture_output=True)
   self.assertEqual(finish.returncode,0,finish.stdout+finish.stderr)

@@ -26,7 +26,7 @@ bash evals/run.sh clear-change,explain-only,contract-export HEAD codex 1   # 사
 | `run.sh` → `run.py` | `run.sh` 는 진입점이고 본체는 `run.py` 다: 턴 보내기, 독립 검증 루프, 외부 장애 분류, 결과 파일 남기기 |
 | `session.py` | 키트 커밋을 설치한 새 프로젝트 만들기와 하네스 세션(첫 턴·이어 가기·검토자 세션). Claude·Codex 의 차이(명령줄, Codex 임시 홈·훅/프로젝트 신뢰·네트워크 옵션, 제한 시간, 세션 id)는 이 파일의 두 어댑터에만 있다. `session.py review`·`goalflow/setup.py`·`goalflow/compare.py`·`flowtest.py`·`sandboxtest.py` 도 이것을 쓴다 |
 | `result.py` | 한 번의 실행에서 관찰한 사실을 받아 `meta.json` 을 만들고, 판정 검사의 종료 코드·첫 낱말로 PASS·FAIL·REVIEW·UNVERIFIED 를 정한다(`run.py` 와 `rejudge.py` 가 같은 함수를 쓴다) |
-| `chaintest.py` | 요청에서 완료까지의 연결 검사(모델 없음): AGENTS.md 「단계」 표와 단계 파일, 단계 사이에 넘겨주는 것과 돌아가는 길, 글 속의 링크·단계 이름·규칙 번호·절 이름이 실제로 닿는지 본다. 단계 파일의 문장을 옮기거나 이름을 바꾸면 여기의 넘겨주기 목록도 같이 고친다 |
+| `chaintest.py` | 단계 표·파일·링크·규칙 번호·제목이 실제로 존재하는지 확인한다. 실행 조건의 의미 일치는 이 검사로 증명하지 않는다. 작업 경로는 아래 행동 사례, 검토 인계는 `tests/work.test.py`와 `flowtest.py`가 확인한다 |
 | `transcript.py` · `observe.py` | 두 하네스의 기록 형식은 `transcript.py` 만 읽고, `observe.py` 는 그 호출 목록에서 무엇을 관찰 사실로 셀지 정한다 |
 
 ## 사례 (cases/)

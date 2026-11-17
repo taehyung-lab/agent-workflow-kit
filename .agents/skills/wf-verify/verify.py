@@ -43,6 +43,7 @@ NOT_DONE = 6  # 검토 판정(ok)은 났지만 완료가 아니다: waiting-user
 DIFF_LIMIT = 60000  # 이보다 큰 변경은 잘라 넣지 않고 전체 근거 파일로 전달한다
 HARNESS_PATHS = (".claude", ".codex")  # 하네스 설정(저장소 맨 위). 제품이 아니라 비교하지 않는다
 KIT_VERSION_FILE = ".agents/agent-workflow-kit.version"  # 있으면 키트가 설치된 저장소다
+REVIEW_RULE_FILES = ("AGENTS.md", KIT_VERSION_FILE, ".agents/skills/wf-verify/SKILL.md")
 KIT_REGION = ("<!-- agent-workflow-kit:begin -->", "<!-- agent-workflow-kit:end -->")  # AGENTS.md 의 키트 표시 영역
 
 
@@ -59,6 +60,7 @@ VERIFIER_PROMPT = """당신은 별도 검증자다. 판정 대상은 아래 「�
 - 바뀐 파일 없이 산출물만 있으면(분석·설계·질문) 그 산출물의 대상·전제·인용·권고가 원문과 맥락에 맞는지 판정한다. 산출물이 구현의 완료 보고·실행 기록이면 그 주장이 실행 기록·현재 동작과 맞는지 판정한다.
 - 조건이 구현자의 행동·보고(직접 실행했는가, 무엇을 확인했다고 보고했는가)를 묻는데 그 기록이 입력에 없으면, 검토자가 직접 실행한 결과로 대신 충족시키지 않고 미확인으로 적는다. 조건의 일부를 판정 범위에서 빼고 나머지만으로 충족을 내지 않는다.
 - 미정·미확인 목록만 보지 말고 그 전제를 쓰는 시나리오·요구·설계·검사 전체를 대조한다. 원문이 이번 완료에 요구한 보장을 확인 없이 확정하면 RETURN이다. 분석 초안에서 계약·결정이 필요한 부분을 실제로 보류했고 원문도 이번에 그 결정을 요구하지 않으면, 그 공백만으로 RETURN하지 않는다.
+- 대상별 내부 검토는 각 대상의 적용 기준으로 수행한다. 필수 검토가 따로 필요한데 현재 근거가 없으면 미확인이다. 검사 성공을 검토 성공으로 대신하지 않는다. 저장소 사이 연결 요구는 내부 검토와 별도로 대조한다.
 - 확인하지 못한 조건은 미확인으로 적는다. 미확인이나 미충족이 하나라도 있으면 verdict 는 OK 가 아니다.
 
 답의 맨 끝에 아래 형식의 JSON 하나를 쓴다. 이 JSON 만 판정으로 읽힌다(없거나 형식이 틀리면 미확인으로 처리된다).
@@ -441,20 +443,31 @@ def products_print(roots, multi):
 
 
 def freeze(root, dest):
-    """판정 대상 버전을 복사본으로 고정하고 커밋한다. 무시된 파일(빌드 산출물 등)은 복사하지 않는다."""
+    """판정 대상 버전을 복사본으로 고정하고 커밋한다. 적용 기준 파일은 Git 무시 여부와 관계없이 보존하고, 무시된 빌드 산출물 등은 복사하지 않는다."""
     dest.mkdir(parents=True)
-    for f in product_list(root):
+    rules = [rel for rel in REVIEW_RULE_FILES if Path(root, rel).is_file()]
+    for f in sorted(set(product_list(root)) | set(rules)):
         src, dst = Path(root, f), Path(dest, f)
         if not (src.is_symlink() or src.is_file()):
             continue
         dst.parent.mkdir(parents=True, exist_ok=True)
-        if src.is_symlink():
+        if src.is_symlink() and any(rel.startswith(f + '/') for rel in rules):
+            # Copy selected rule files into a real directory, never through a
+            # source-owned directory link in the supposedly frozen target.
+            dst.mkdir(exist_ok=True)
+        elif f in rules:
+            dst.write_bytes(src.read_bytes())
+        elif src.is_symlink():
             os.symlink(os.readlink(src), dst)
         else:
             shutil.copy2(src, dst)
     g = ["git", "-c", "user.name=verify", "-c", "user.email=verify@invalid", "-c", "commit.gpgsign=false"]
     # 하나라도 실패하면(쓰기 경계·git 설정·훅 등) 빈 대상으로 판정하지 않도록 멈춘다. 호출한 쪽이 미확인으로 처리한다.
-    for step in (["init", "-q"], ["add", "-A"], ["commit", "-qm", "verify-target", "--allow-empty"]):
+    steps = [["init", "-q"], ["add", "-A"]]
+    if rules:
+        steps.append(["add", "-f", "--", *rules])
+    steps.append(["commit", "-qm", "verify-target", "--allow-empty"])
+    for step in steps:
         r = run(g + step, cwd=dest)
         if r.returncode != 0:
             raise RuntimeError(f"판정 대상 고정 실패(git {step[0]} 종료 코드 {r.returncode}): {r.stderr.decode('utf-8', 'replace').strip()[:300]}")
@@ -523,12 +536,18 @@ def diff(base, target, out):
 def prompt_text(requests, conditions, required, criteria, note, target, change, vdir, base_rev, envelope="", observed="", output=None, targets=None):
     """targets: 대상 표의 대상 목록(여러 저장소 작업). 없으면 지도를 둔 저장소 하나가 대상이다."""
     parts = [VERIFIER_PROMPT]
-    if targets:
-        parts.append(f"\n\n## 판정 기준\n여러 저장소 작업이다. 이 검토를 만든 키트의 {Path(__file__).resolve().parent / 'SKILL.md'} 「검토자 기준」으로 판정한다"
-                     "(대상 폴더의 키트 버전이 달라도 그 폴더의 것을 쓰지 않는다). 판정할 것은 작업 지도의 요구(저장소를 잇는 요구와 완료 조건)다. "
-                     "각 대상 저장소의 내부 규칙 준수는 그 저장소 키트의 검토 결과가 「검토할 산출물」에 있으면 그것을 근거로 쓰고 다시 판정하지 않는다.\n")
-    else:
-        parts.append("\n\n## 판정 기준\n대상 폴더의 AGENTS.md 와 .agents/skills/wf-verify/SKILL.md 「검토자 기준」.\n")
+    folders = [(t['name'], Path(vdir, t['name'])) for t in targets] if targets else [('대상', Path(vdir))]
+    scope = '여러 저장소 작업이다. 내부 검토 뒤 저장소를 잇는 요구도 대조한다.' if len(folders) > 1 else '단일 저장소 작업이다.'
+    parts.append(f"\n\n## 판정 기준\n{scope} 기록 형식과 관계없이 내부 검토는 각 대상의 기준을 따른다.\n")
+    for name, folder in folders:
+        local_rules = folder / '.agents/skills/wf-verify/SKILL.md'
+        installed = (folder / KIT_VERSION_FILE).is_file()
+        rules = local_rules if installed or local_rules.is_file() else Path(__file__).resolve().with_name('SKILL.md')
+        project_rules = str(folder / 'AGENTS.md') if installed or (folder / 'AGENTS.md').is_file() else '별도 AGENTS.md 없음(요청과 대상 README의 프로젝트 계약)'
+        parts.append(f"- {name}: {project_rules}의 프로젝트 규칙과 {rules} 「검토자 기준」. "
+                     + ('고정 키트의 기준을 읽지 못하면 미확인이다.' if installed else '대상의 검토자 기준과 프로젝트 규칙을 적용한다.' if local_rules.is_file() else '설치 키트가 없으면 이 검토 도구의 기준을 작업 방식으로 쓰고 대상의 프로젝트 규칙을 적용한다.') + "\n")
+    parts.append("각 대상에서 이번 검토자가 해당 기준으로 내부 검토를 수행한다. 이미 수행한 검토는 원문·대상 버전·검사와 현재성이 확인되는 근거가 있을 때만 재사용한다. "
+                 "별도 역할이나 검토 절차를 필수로 정한 대상은 그 결과까지 확인한다. 필요한 검토의 누락·실패·미확인은 해당 조건에 그대로 남기며 전체 완료로 넘기지 않는다.\n")
     for n, req in enumerate(requests, 1):
         parts.append(f"\n\n## 사용자 원문 {n}\n{req}")
     listed = "\n".join(x for x in (conditions.strip(), "결과에 반드시 넣을 조건 ID: " + ", ".join(required) if required else "") if x)
@@ -751,6 +770,13 @@ def prepare(args, record_path=None):
         base_key = base_sha
         targets_for_print = [str(root)]
     roots = [str(t["root"]) for t in targets] if multi else targets_for_print
+    for target_root in map(Path, roots):
+        for rel in REVIEW_RULE_FILES:
+            path = target_root / rel
+            if path.is_file():
+                inputs.read(path, 'review-rules')
+        if not (target_root / KIT_VERSION_FILE).is_file() and not (target_root / '.agents/skills/wf-verify/SKILL.md').is_file():
+            inputs.read(Path(__file__).resolve().with_name('SKILL.md'), 'review-rules')
     # 검토 시도: 같은 요청 원문·기준 커밋·지도면 회차를 이어 센다. 다른 요청(새 원문)이나 다른 기준 커밋은 새 시도다.
     attempt = hashlib.sha256(json.dumps([requests, base_key, definition_rel], ensure_ascii=False).encode()).hexdigest()[:16]
     state_file = (Path(root, definition_rel).parent / "verify" if definition_rel else Path(root, "work", "review")) / "state.json"
@@ -841,6 +867,15 @@ def prepare(args, record_path=None):
         unknown = [r['id'] for r in record_requirements if r['state'] == '미확인']
         record_problems = []
     # 미정·미확인 행은 아직 판정할 결과가 없다: 검토자에게 충족을 요구하지 않고 완료 판정의 대기·미확인으로 남긴다.
+    # Every input path uses the same internal-review conditions. A representative
+    # record changes where evidence lives, not which target guarantees are required.
+    used = set(ids(conditions) + requirement_ids)
+    internal = []
+    for name in [t['name'] for t in targets] if targets else ['대상']:
+        number = next(n for n in range(1, 1000) if f'TV{n}' not in used)
+        rid = f'TV{number}'; used.add(rid)
+        internal.append(f"{rid} 대상 {name}: 이 대상의 적용 기준으로 내부 검토를 수행하고, 별도 필수 검토가 있으면 현재 결과까지 확인했다. 근거에 적용 기준·대상 버전·실행 결과를 적는다. 누락·실패·미확인이면 충족이 아니다.")
+    conditions = '\n'.join([conditions, *internal]).strip()
     required = sorted(set(ids(conditions) + requirement_ids) - set(pending + unknown))
     result.update(open_decisions=pending, unconfirmed=unknown, required=required)
     (keep / "criteria.txt").write_text(criteria, encoding="utf-8")

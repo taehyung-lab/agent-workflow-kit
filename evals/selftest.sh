@@ -168,7 +168,7 @@ case "$2" in
 esac
 FAKE
 chmod +x "$vf/bin/claude"
-OKV='"설명.\n{\"verdict\": \"OK\", \"conditions\": [{\"id\": \"C1\", \"result\": \"충족\", \"evidence\": \"python3 x 실행 결과 1\"}], \"out_of_scope\": []}"'
+OKV='"설명.\n{\"verdict\": \"OK\", \"conditions\": [{\"id\": \"C1\", \"result\": \"충족\", \"evidence\": \"python3 x 실행 결과 1\"}, {\"id\": \"TV1\", \"result\": \"충족\", \"evidence\": \"대상 기준·현재 버전·검사 대조\"}], \"out_of_scope\": []}"'
 RETV='"{\"verdict\": \"RETURN\", \"conditions\": [{\"id\": \"C1\", \"result\": \"미충족\", \"evidence\": \"출력 없음\"}], \"return_reason\": \"C1 미충족\"}"'
 vrun() {  # vrun <이름> <판정 줄...>: 가짜 검증자가 차례로 낼 답을 받아 weight-disposable 을 승인 턴 포함·EVALS_VERIFY=1 로 돈다
   d="$vf/$1"; shift; mkdir -p "$d"; : > "$d/verdicts"; for v in "$@"; do printf '%s\n' "$v" >> "$d/verdicts"; done
@@ -205,7 +205,7 @@ FAKE_VARTIFACT=1 vrun artifact "$OKV"
 FAKE_VRC=5 vrun crash "$OKV"
 [ "$(mget verifier)" = unverified ] && [ "$(mget verifier_exit_code)" = 5 ] && [ "$(mget exit_code)" = 0 ] && [ "$(cat "$vf/crash/rc")" = 0 ] \
   && ok "검증: 검증자 종료 코드 5 는 보존되고 미확인, 구현자 종료 코드는 그대로" || ng "검증자 오류: $(mget verifier) vrc=$(mget verifier_exit_code) rc=$(mget exit_code)"
-vrun oos '"{\"verdict\": \"OK\", \"conditions\": [{\"id\": \"C1\", \"result\": \"충족\", \"evidence\": \"실행 결과\"}], \"out_of_scope\": [\"새 요구: 음수 입력 처리\"]}"'
+vrun oos '"{\"verdict\": \"OK\", \"conditions\": [{\"id\": \"C1\", \"result\": \"충족\", \"evidence\": \"실행 결과\"}, {\"id\": \"TV1\", \"result\": \"충족\", \"evidence\": \"대상 기준·현재 버전·검사 대조\"}], \"out_of_scope\": [\"새 요구: 음수 입력 처리\"]}"'
 [ "$(mget verifier)" = ok ] && grep -q '음수 입력' "$meta" && ok "검증: 범위 밖 반례는 완료를 막지 않고 따로 남음" || ng "검증 범위 밖: $(mget verifier)"
 FAKE_MAP=1 vrun map "$OKV"
 grep -q 'C9 | 기존 보장' "$vf/map/vprompt.1" && ! grep -q SELF-ASSESS-MARKER "$vf/map/vprompt.1" && [ "$(mget verifier)" = unverified ] && grep -q 'C9' "$meta" \

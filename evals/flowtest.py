@@ -28,6 +28,7 @@ def sh(*cmd, cwd=None, env=None, input=None):
 G = ["git", "-c", "user.name=t", "-c", "user.email=t@invalid", "-c", "commit.gpgsign=false"]
 OK = {"verdict": "OK", "conditions": [{"id": "B1", "result": "충족", "evidence": "bin/test 실행 결과: 로그인하기"},
                                       {"id": "E1", "result": "충족", "evidence": "영어 화면 Login 그대로"}], "out_of_scope": []}
+OK['conditions'].append({'id': 'TV1', 'result': '충족', 'evidence': '대상 기준·현재 버전·검사 대조'})
 RET = {"verdict": "RETURN", "conditions": [{"id": "B1", "result": "미충족", "evidence": "버튼 글자가 아직 로그인"}],
        "return_reason": "B1 미충족. 진행해 주세요."}
 REQ = "로그인 버튼 글자를 '로그인하기'로 바꿔 주세요"
@@ -202,6 +203,7 @@ exit 0
     def rec_map(name, rows):
         return write_map(name, f"- 요청 원문: {REQ}\n\n" + HEAD + rows)
     ok_r1 = {"verdict": "OK", "conditions": [{"id": "R1", "result": "충족", "evidence": "bin/test 통과"}], "out_of_scope": []}
+    ok_r1['conditions'].append({'id': 'TV1', 'result': '충족', 'evidence': '대상 기준·현재 버전·검사 대조'})
     m_open = rec_map("rec-open", "| R1 | 한국어 버튼 → 화면 → 로그인하기 | 원문 | - | bin/test | 확정 |\n| Q1 | 영어 버튼 문구 | 원문이 정하지 않음 | - | 답 뒤 | 미정 |\n")
     rd = prep("--map", m_open)
     o = json.loads(fin(rd["kept"], json.dumps(ok_r1, ensure_ascii=False), "--check", "PASS").stdout.strip().splitlines()[-1]) if rd.get("state") == "ready" else rd
@@ -544,14 +546,14 @@ exit 0
           and (Path(rd["target_dir"]) / "lib-b/src/index.txt").read_text() == "use new_name LIB-B-CHANGE\n")
     check("대상 표: 표에 없는 홈(지도를 둔 저장소)의 변경은 검토 대상이 아니다", rd.get("state") == "ready" and "HOME-CHANGE" not in mprompt)
     check("대상 표: 대상마다 맥락 도구가 본 경로가 관찰 맥락에 들어간다", str(lib_a.resolve()) in mprompt and str(lib_b.resolve()) in mprompt)
-    check("대상 표: 판정 기준은 이 검토를 만든 키트의 검토자 기준, 실행·검사 명령은 각 대상 폴더의 AGENTS.md, 대상 저장소 내부 규칙은 그 저장소 검토 결과로 받는다",
-          str(verifier.parent / "SKILL.md") in mprompt and "각 대상 폴더" in mprompt and "내부 규칙" in mprompt)
-    got = json.loads(fin(rd["kept"], json.dumps(ok_r1, ensure_ascii=False), "--check", "PASS").stdout.strip().splitlines()[-1]) if rd.get("state") == "ready" else {}
+    check("대상 표: 판정 기준은 대상별 적용 기준, 내부 검토와 저장소 연결 요구를 함께 확인한다",
+          str(verifier.parent / "SKILL.md") in mprompt and "각 대상 폴더" in mprompt and "내부 검토" in mprompt and "TV1" in mprompt and "TV2" in mprompt)
+    got = json.loads(fin(rd["kept"], json.dumps({**ok_r1, 'conditions': ok_r1['conditions'] + [{'id': rid, 'result': '충족', 'evidence': '대상 기준·현재 버전·실행 대조'} for rid in ['TV2']]}, ensure_ascii=False), "--check", "PASS").stdout.strip().splitlines()[-1]) if rd.get("state") == "ready" else {}
     check("대상 표: 아무것도 바뀌지 않으면 검토 판정으로 완료(verified)", got.get("state") == "ok" and got.get("completion") == "verified")
     rd = prep("--map", m_multi, "--request", req_file("lib 두 번째 시도"))
     if rd.get("state") == "ready":
         (lib_a / "src/index.txt").write_text("export new_name WHILE-REVIEW\n")
-    got = json.loads(fin(rd["kept"], json.dumps(ok_r1, ensure_ascii=False), "--check", "PASS").stdout.strip().splitlines()[-1]) if rd.get("state") == "ready" else {}
+    got = json.loads(fin(rd["kept"], json.dumps({**ok_r1, 'conditions': ok_r1['conditions'] + [{'id': rid, 'result': '충족', 'evidence': '대상 기준·현재 버전·실행 대조'} for rid in ['TV2']]}, ensure_ascii=False), "--check", "PASS").stdout.strip().splitlines()[-1]) if rd.get("state") == "ready" else {}
     check("대상 표: 검토하는 동안 어느 대상이라도 바뀌면 unverified", got.get("state") == "unverified")
     (lib_a / "src/index.txt").write_text("export old_name\n")
     rd = prep("--map", multi_map("multi-badbase", f"| lib-a | {lib_a} | {base_a} |\n| lib-b | {lib_b} | {'0' * 40} |\n"))
