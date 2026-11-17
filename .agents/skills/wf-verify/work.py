@@ -59,13 +59,14 @@ def current(events):
 
 def pending_choices(events):
     """미정이 생긴 당시의 출처를 보존한다. 계획 교체는 사용자 답이 아니다."""
-    pending, known = {}, set()
+    pending, known, count = {}, set(), 0
     for event in events:
         known.update(source['sha256'] for source in event.get('sources', []))
+        count += len(event.get('sources', []))
         for requirement in event.get('plan', {}).get('requirements', []) + event.get('findings', []):
             key = requirement['id']
             if requirement['state'] == '미정':
-                pending.setdefault(key, set(known))
+                pending.setdefault(key, (set(known), count))
             else:
                 pending.pop(key, None)
     return pending
@@ -107,13 +108,13 @@ def reviewed_choices(work, plan, events, kept):
 
 def preserve_choices(events, plan, source_items, reviewed=()):
     requirements = {r['id']: r for r in plan['requirements']}
-    for key, original_sources in pending_choices(events).items():
+    for key, (original_sources, original_count) in pending_choices(events).items():
         if key not in requirements:
             raise ValueError(f'{key}: 미정인 선택을 다음 계획에서 지울 수 없다')
         requirement = requirements[key]
         if requirement['state'] != '미정':
             if key not in reviewed and not any(source_items[n - 1]['sha256'] not in original_sources or
-                       key in source_items[n - 1].get('reply_to', []) for n in requirement['source']):
+                       (n > original_count and key in source_items[n - 1].get('reply_to', [])) for n in requirement['source']):
                 raise ValueError(f'{key}: 미정 해소에는 새 사용자 답의 출처가 필요하다')
 
 
@@ -193,6 +194,8 @@ def record(work, args, events):
     plan = validate(json.loads(Path(args.plan).read_text()), len(previous) + len(incoming)) if args.plan else current(events)
     if args.reply_to and (not incoming or not set(args.reply_to) <= set(pending_choices(events))):
         raise ValueError('--reply-to는 새 사용자 원문과 현재 미정 질문 ID가 필요하다')
+    if args.resolution_review and incoming:
+        raise ValueError('새 원문을 먼저 기록한 뒤 현재 원문 전체로 독립 검토해야 한다')
     if args.plan:
         reviewed = reviewed_choices(work, plan, events, args.resolution_review)
         preserve_choices(events, plan, previous + [{'sha256': digest(raw), 'reply_to': args.reply_to} for raw in incoming], reviewed)

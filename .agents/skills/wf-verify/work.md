@@ -41,4 +41,4 @@ python3 .agents/skills/wf-verify/verify.py finish --round KEPT --check PASS < in
 python3 .agents/skills/wf-verify/work.py record W --plan revised-plan.json --resolution-review KEPT
 ```
 
-현재 원문을 모두 --request로 전달하고, prepare가 만든 prompt_file을 부모 맥락 없는 독립 검토자에게 그대로 넘긴다. 검토자는 제안 계획의 결과가 이미 원문·계약으로 정해졌는지 해당 문장을 인용해 판단한다. 미정이 남으면 사용자에게 묻는다. 도구는 통과한 회차가 현재 원문·현재 미정·같은 제안 계획을 실제로 대조했는지 확인하고, 바뀐 근거의 옛 통과는 사용하지 않는다.
+새 사용자 원문이 있다면 먼저 record로 보존한다. 현재 원문을 모두 --request로 전달하고, prepare가 만든 prompt_file을 부모 맥락 없는 독립 검토자에게 그대로 넘긴다. 검토자는 제안 계획의 결과가 이미 원문·계약으로 정해졌는지 해당 문장을 인용해 판단한다. 미정이 남으면 사용자에게 묻는다. 도구는 통과한 회차가 현재 원문·현재 미정·같은 제안 계획을 실제로 대조했는지 확인하고, 바뀐 근거의 옛 통과는 사용하지 않는다.

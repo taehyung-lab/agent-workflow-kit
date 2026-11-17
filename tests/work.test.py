@@ -121,6 +121,16 @@ class WorkTest(unittest.TestCase):
   self.plan.write_text(json.dumps(self.data))
   rc,r=self.runwork('record','--request',str(self.req),'--reply-to','Q1','--plan',str(self.plan))
   self.assertEqual(rc,0,r)
+ def test_old_reply_cannot_resolve_reopened_question(self):
+  self.data['requirements'][0]['state']='미정';self.record()
+  self.req.write_text('추천대로 해주세요')
+  self.data['requirements'][0].update(state='확정',source=[2]);self.plan.write_text(json.dumps(self.data))
+  rc,r=self.runwork('record','--request',str(self.req),'--reply-to','R1','--plan',str(self.plan));self.assertEqual(rc,0,r)
+  self.data['requirements'][0]['state']='미정';self.plan.write_text(json.dumps(self.data))
+  rc,r=self.runwork('record','--plan',str(self.plan));self.assertEqual(rc,0,r)
+  self.data['requirements'][0]['state']='확정';self.plan.write_text(json.dumps(self.data))
+  rc,r=self.runwork('record','--plan',str(self.plan));self.assertNotEqual(rc,0,r)
+  rc,r=self.runwork('record','--request',str(self.req),'--reply-to','R1','--plan',str(self.plan));self.assertEqual(rc,0,r)
  def test_reused_review_for_other_plan_cannot_resolve_question(self):
   self.data['requirements'][0]['state']='미정';self.record()
   self.data['requirements'][0]['state']='확정';self.plan.write_text(json.dumps(self.data))
@@ -142,6 +152,9 @@ class WorkTest(unittest.TestCase):
   finish=subprocess.run(['python3',str(TOOL.with_name('verify.py')),'finish','--round',kept,'--check','PASS'],
     cwd=self.repo,input=answer,text=True,capture_output=True)
   self.assertEqual(finish.returncode,0,finish.stdout+finish.stderr)
+  self.req.write_text('앞선 답을 바꿉니다. 전환마다 기한을 새로 시작해 주세요.')
+  rc,r=self.runwork('record','--request',str(self.req),'--plan',str(self.plan),'--resolution-review',kept)
+  self.assertNotEqual(rc,0,r)
   rc,r=self.runwork('record','--plan',str(self.plan),'--resolution-review',kept)
   self.assertEqual(rc,0,r)
   rc,r=self.runwork('check');self.assertEqual(r['check'],'PASS',r)
