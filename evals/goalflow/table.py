@@ -3,8 +3,8 @@
   python3 -I evals/goalflow/table.py <결과 폴더> [-v]
 
 result_meta(summary) 는 요약 하나를 <이름>.meta.json 의 내용으로 바꾼다(compare.py 가 요약과 함께 쓴다). 파일·모델을 쓰지 않는 함수다.
-evals/result.py 의 initial_result 는 쓰지 않는다: 그 함수가 받는 하네스 버전·전역 지침 지문·판정기 지문·검증 루프 상태·관찰(observe.py) 결과를
-compare.py 는 재지 않는다. 재지 않은 값을 채우지 않고 report.py 가 읽는 항목만 적는다.
+evals/result.py 의 initial_result 는 일반 사례의 검증 루프 상태를 계산한다. 이 경로는 요구 발견·진행 허가·최종 동작을 따로 계산한다.
+실행기가 관찰한 비교 조건만 옮기며 구기록에 없는 근거는 None으로 남긴다.
 """
 import glob, json, sys
 
@@ -68,6 +68,24 @@ def process_state(summary):
     return "review" if summary.get("mock_error") or unreadable_before_answer(summary) or conversation_unfinished(summary) else "ok"
 
 
+def discovery_state(summary):
+    """고정 정책을 듣기 전 발견한 선택. 구기록에서 없는 증거를 만들어 내지 않는다."""
+    if summary.get('conversation_contract') != 'fixed-policy-v1':
+        return 'unmeasured', []
+    required, found, delivered = (summary.get(k) for k in ('policy_topics', 'discovered', 'answered'))
+    valid = lambda values: isinstance(values, list) and all(type(v) is int for v in values) and len(set(values)) == len(values)
+    if not all(valid(values) for values in (required, found, delivered)) or not required:
+        return 'unverified', []
+    if set(delivered) != set(required) or not set(found) <= set(required):
+        return 'unverified', []
+    if summary.get('mock') == 'all':
+        return 'not-measured', []
+    if summary.get('mock') != 'asked':
+        return 'unverified', []
+    missing = sorted(set(required) - set(found))
+    return ('incomplete' if missing else 'complete'), missing
+
+
 def oracle_verdict(summary):
     """전체 판정 낱말과 한 줄 설명. 최종 동작과 절차를 함께 본다: 나중에 고쳐 최종 동작이 맞아도 앞선 절차 위반은 지우지 않는다.
     결정 대기 턴 편집 → 실패(이미 일어난 사실), 모의 사용자 분류 실패 → 검토 필요(대화를 못 끝내 최종 동작이 근거가 아니다), 그 밖에는 최종 동작 판정."""
@@ -81,6 +99,11 @@ def oracle_verdict(summary):
         return REVIEW, "REVIEW 모의 사용자 분류가 실패해 대화를 끝까지 진행하지 못했다: " + summary["mock_error"][:150] + f" / 최종 동작: {line}"
     if conversation_unfinished(summary):
         return REVIEW, "REVIEW 대화를 끝까지 진행하지 못했다: " + conversation_unfinished(summary) + f" / 최종 동작: {line}"
+    discovery, missing = discovery_state(summary)
+    if discovery == 'unverified':
+        return REVIEW, 'REVIEW 요구 발견의 근거가 없다 / 최종 동작: ' + line
+    if discovery == 'incomplete':
+        return FAIL, 'FAIL 답 전에 발견하지 못한 사용자 선택: ' + ', '.join(map(str, missing)) + ' / 최종 동작: ' + line
     return word, line
 
 
@@ -89,7 +112,7 @@ def result_meta(summary):
     report.py 가 읽는 항목: case·harness·kit_commit·exit_code·seconds·agents_md_bytes·check_passed·check_needs_review·check_unverified·
     user_turns·observed.first_reply_chars·global_instructions. 그 밖에 lang·input·completion·observed 의 검증 흔적은 없으면 기본값으로 센다.
     kit_commit 은 키트 구성이면 설치한 키트 커밋, 스킬 설치·지침 없음 구성이면 구성 이름이다(세 구성이 표에서 세 줄이 된다).
-    global_instructions 는 None 이다: 세션을 사용자 전역 설정과 격리해 돌리고, 전역 지침의 지문은 재지 않는다.
+    global_instructions는 세션이 실제 적용한 격리 설정이다. 구기록에 없으면 None이다.
     goalflow 에는 table.py 가 보이는 구성별 사실을 둔다: 모의 사용자가 답한 정책, 답 전(1턴)에 바꾼 제품 파일, 실패·관찰 불가 판정 항목."""
     arm, turns = summary["arm"], summary["turns"]
     word, line = oracle_verdict(summary)
@@ -99,9 +122,11 @@ def result_meta(summary):
             "exit_code": next((t["rc"] for t in turns if t["rc"] != 0), 0), "seconds": summary["seconds"],
             "agents_md_bytes": summary["agents_md_bytes"], "check_passed": word == PASS, "check_needs_review": word == REVIEW,
             "check_unverified": word == UNVERIFIED, "check_output": line, "user_turns": len(turns),
-            "observed": {"first_reply_chars": turns[0]["reply_chars"]}, "global_instructions": None,
+            "observed": {"first_reply_chars": turns[0]["reply_chars"] if turns else None},
+            **{key: summary.get(key) for key in ('global_instructions', 'judge_version', 'task_fingerprint', 'conversation_contract')},
             "goalflow": {"arm": arm, "mock": summary["mock"], "answered": summary["answered"], "edits_before_answer": edits_before_answer(summary),
                          "final_behavior": behavior_verdict(summary)[0], "process": process_state(summary),
+                         "discovery": discovery_state(summary)[0], "missing_topics": discovery_state(summary)[1],
                          "surfaced_quotes": summary.get("surfaced_quotes") or {},
                          "failed": summary["failed"], "unobserved": summary["unobserved"], "n_cases": summary["n_cases"],
                          "map": summary["map"], "public_tests_rc": summary["public_tests_rc"]}}

@@ -73,4 +73,17 @@ class WorkTest(unittest.TestCase):
   self.assertEqual((self.repo/'.agents/agent-workflow-kit.version').read_text(),'team-v1')
   self.assertEqual((second/'.agents/agent-workflow-kit.version').read_text(),'team-v2')
   (second/'app.txt').write_text('later');rc,r=self.runwork('review');self.assertEqual(r['completion'],'unverified')
+ def test_review_requirements_do_not_depend_on_markdown_table_syntax(self):
+  self.data['requirements'][0]['expect']='이름 A | B를 그대로 보존\n두 번째 줄도 보존'
+  self.record();(self.repo/'app.txt').write_text('after');self.runwork('check')
+  rc,r=self.runwork('review');self.assertEqual(rc,0,r)
+  pending=json.loads((Path(r['kept'])/'pending.json').read_text())
+  self.assertEqual(pending['required'],['R1'])
+  self.assertFalse(any(f['role']=='map' for f in pending['inputs']['files']))
+  prompt=Path(r['prompt_file']).read_text()
+  self.assertIn('이름 A | B를 그대로 보존',prompt)
+  # 읽기용 지도를 고쳐도 현재 검토가 받은 원문·요구·검사 근거는 바뀌지 않는다.
+  (self.work/'work.md').write_text('읽기용 지도 레이아웃 변경')
+  answer=self.root/'answer.txt';answer.write_text(json.dumps({'verdict':'OK','conditions':[{'id':'R1','result':'충족','evidence':'원문 대조'}]}))
+  rc,r=self.runwork('review','--answer',str(answer));self.assertEqual(r['completion'],'verified',r)
 if __name__=='__main__':unittest.main()

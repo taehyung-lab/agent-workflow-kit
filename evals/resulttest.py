@@ -36,6 +36,15 @@ class ResultTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads((root / "sample.meta.json").read_text())
 
+    def test_model_evidence_survives_storage_and_rejudge(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.make_project(root)
+            before = self.initial(root, model='fixed-model')
+            self.assertEqual(before.get('model'), 'fixed-model')
+            after = self.rejudge(root)
+            self.assertEqual(after.get('model'), 'fixed-model')
+
     def test_current_result_preserves_open_decisions_through_rejudge(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

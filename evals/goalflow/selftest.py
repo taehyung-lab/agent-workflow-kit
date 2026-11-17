@@ -163,22 +163,22 @@ def meta_checks():
 def conversation_checks():
  """대화 진행(conversation.py) 시험: 모델 대신 낱말로 주제를 고르는 가짜 분류기를 쓴다(인용문은 그 낱말)."""
  sys.path.insert(0,str(ROOT))
- from conversation import MockUser,product_changes,product_diff,read_state,ANSWERED,CLOSE,NOTHING
+ from conversation import MockUser,product_changes,product_diff,read_state,ANSWERED,CLOSE
  answer="이렇게 해 주세요.\n\n1. 정책 일\n2. 정책 이\n3. 정책 삼\n"
  fake=lambda text,topics:{n:w for n,w in ((1,"주제일"),(2,"주제이"),(3,"주제삼")) if w in text}
- # 답 턴에 그때까지 드러낸 주제만 답하고 나머지는 맡긴다. 인용문을 증거로 남긴다
+ # 전달하는 정답은 발견 여부와 무관하게 고정한다. 발견은 답 전 인용문으로 따로 남긴다
  m=MockUser(["요청"],answer,"t",fake)
  assert m.prompt(1)=="요청"; m.observe("주제일 은 어떻게 할까요?")
- p2=m.prompt(2); assert "1. 정책 일" in p2 and "2. 정책 이" not in p2 and p2.endswith(ANSWERED) and m.quotes=={1:"주제일"},(p2,m.quotes)
- # 답 뒤에는 정책을 더 알려 주지 않는다(사용자가 남은 결정을 맡겼다): 답 뒤 턴에 새로 물어도 마무리 지시만 간다
+ p2=m.prompt(2); assert "1. 정책 일" in p2 and "2. 정책 이" in p2 and p2.endswith(ANSWERED) and m.quotes=={1:"주제일"},(p2,m.quotes)
+ # 답 뒤 질문은 답 전 발견 점수를 바꾸지 않는다
  m.observe("1 을 구현했습니다. 주제삼 은 어떻게 할까요?")
- assert m.prompt(3)==CLOSE and m.answered=={1}
+ assert m.prompt(3)==CLOSE and m.answered=={1,2,3} and m.discovered=={1}
  # 정정 글이 있으면 답하기 전까지의 글을 함께 분류한다: 정정 턴 답이 앞 질문을 가리키기만 해도 놓치지 않는다
  m=MockUser(["요청","사실은 이런 뜻"],answer,"t",fake)
  m.prompt(1); m.observe("주제이 는 어떻게 할까요?"); m.prompt(2); m.observe("위 질문에 답해 주세요.")
  assert m.answer_turn==3 and "2. 정책 이" in m.prompt(3)
- # 드러낸 주제가 없으면 그대로 진행하라고만 한다
- m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("구현했습니다"); assert m.prompt(2)==NOTHING and m.answered==set()
+ # 드러낸 주제가 없어도 정답은 전달하고 발견 없음은 보존한다
+ m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("구현했습니다"); assert answer.strip() in m.prompt(2) and m.answered=={1,2,3} and m.discovered==set()
  # 분류 실패는 감추지 않는다(compare.py 가 증거 부족으로 남긴다)
  def broken(text,topics): raise RuntimeError("분류 실패")
  m=MockUser(["요청"],answer,"t",broken); m.prompt(1); m.observe("주제일?")

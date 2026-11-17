@@ -48,6 +48,24 @@ def judge_version(case_dir):
     return h.hexdigest()[:12]
 
 
+def goalflow_fingerprints(task):
+    """실제로 전달한 과제 자료와 결과를 만드는 실행·판정 코드를 각각 고정한다."""
+    task = Path(task)
+    goal = EVALS / 'goalflow'
+    inputs = sorted(f for f in (task / 'fixture').rglob('*') if f.is_file() and '__pycache__' not in f.parts)
+    inputs += [task / name for name in ('request.txt', 'followup.txt', 'answer.txt', 'topics.txt', 'state.txt', 'turns.json') if (task / name).is_file()]
+    rules = [task / 'oracle.py', goal / 'tasks/taskcheck.py']
+    rules += [goal / name for name in ('compare.py', 'conversation.py', 'table.py', 'asked.py', 'turnwatch.py')]
+    rules += [EVALS / name for name in ('caseinfo.py', 'session.py', 'transcript.py', 'pins.py', 'pins.json')]
+    rules += sorted(task.glob('*.sql'))
+    def fingerprint(files):
+        h = hashlib.sha256()
+        for f in sorted(set(files)):
+            h.update(f.relative_to(EVALS).as_posix().encode() + b'\0' + hashlib.sha256(f.read_bytes()).digest())
+        return h.hexdigest()
+    return {'task_fingerprint': fingerprint(inputs), 'judge_version': fingerprint(rules)}
+
+
 if __name__ == "__main__":
     if len(sys.argv) != 3 or sys.argv[1] not in ("path", "version"):
         sys.exit(__doc__.split("사용:", 1)[1])

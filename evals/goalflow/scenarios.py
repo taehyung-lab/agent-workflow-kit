@@ -102,7 +102,11 @@ def run_case(kit, suite, case, work):
     metas = list((d / "out").glob("*.meta.json"))
     if not metas:
         return "ERROR", "결과 없음"
-    line = json.loads(metas[0].read_text(encoding="utf-8"))["check_output"]
+    meta = json.loads(metas[0].read_text(encoding="utf-8"))
+    line = meta["check_output"]
+    for key, expected in case.get('dimensions', {}).items():
+        if meta.get('goalflow', {}).get(key) != expected:
+            return "ERROR", f"{key}: 기대 {expected}, 실제 {meta.get('goalflow', {}).get(key)}"
     return next((w for w in WORDS if line.startswith(w)), "ERROR"), line
 
 

@@ -86,16 +86,34 @@ def compare(base, target, roots):
         if not b or not t:
             marks.append("한쪽 실행 없음")
         else:
-            diff = [k for k, f in (("하네스 버전", lambda m: m.get("harness_version")), ("모델", lambda m: m.get("model")), ("모의 사용자 모델", lambda m: m.get("mock_user_model")),
-                                   ("전역 지침", lambda m: json.dumps(m.get("global_instructions"), sort_keys=True)), ("판정기", lambda m: m.get("judge_version")))
-                    if {f(m) for m in b} != {f(m) for m in t}]
-            if diff:
-                marks.append("비교 불가: " + "·".join(diff))
-            # 검토 필요는 통과도 실패도 아니다: 판단의 횟수에서 빼고 '사람 판독 대기'로 따로 센다.
+            fields = [("하네스 버전", "harness_version"), ("모델", "model"),
+                      ("전역 지침", "global_instructions"), ("판정기", "judge_version")]
+            if any(m.get("mock_user_model") or m.get("goalflow", {}).get("mock") == "asked" for m in b + t):
+                fields += [("모의 사용자 모델", "mock_user_model")]
+            for key, label in (("conversation_contract", "대화 계약"), ("task_fingerprint", "과제")):
+                # 모드가 다르면 요구 발견을 포함한 점수와 구현만의 점수를 비교할 수 없다.
+                if any(key in m for m in b + t):
+                    fields.append((label, key))
+            differences = []
+            if any(m.get("goalflow") for m in b + t):
+                modes = {m.get("goalflow", {}).get("mock") for m in b + t}
+                if len(modes) != 1 or None in modes:
+                    differences.append("발견 측정 방식")
+            for label, key in fields:
+                values = [{json.dumps(m.get(key), sort_keys=True) for m in group} for group in (b, t)]
+                if any(m.get(key) is None for m in b + t):
+                    differences.append(label + " 근거 없음")
+                elif values[0] != values[1] or len(values[0]) != 1:
+                    differences.append(label)
             settled = lambda ms: [m for m in judged(ms) if not m.get("check_needs_review")]
             pending = sum(bool(m.get("check_needs_review")) for m in judged(b) + judged(t))
-            marks.insert(0, decide(sum(m["check_passed"] for m in settled(b)), len(settled(b)),
-                                   sum(m["check_passed"] for m in settled(t)), len(settled(t)), pending))
+            if differences:
+                marks.append("비교 불가: " + "·".join(differences))
+                if pending:
+                    marks.append(f"사람 판독 대기 {pending}")
+            else:
+                marks.append(decide(sum(m["check_passed"] for m in settled(b)), len(settled(b)),
+                                    sum(m["check_passed"] for m in settled(t)), len(settled(t)), pending))
         if any(m.get("check_unverified") for m in b + t):
             marks.append(f"외부 장애 {sum(m.get('check_unverified', False) for m in b + t)}")
         print(f"{case:<26} {lang:<4} {harness:<7} {inp:<13} {passed:>16} {review:>9} {waiting:>7} {first:>11}  {', '.join(marks)}")

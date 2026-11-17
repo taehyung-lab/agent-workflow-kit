@@ -1,24 +1,10 @@
-"""평가 실행기가 쓰는 판정 함수와 검토 세션. 판정 규칙(judge·completion)은 설치되는 검토 도구(.agents/skills/wf-verify/verify.py)의
-함수를 그대로 쓴다(일반 설치와 평가가 같은 규칙을 쓰게 하려는 것이다). 검토 한 회차를 돌리는 일은 평가만 하므로 여기에 있다(하네스 기록은 transcript.py 가 읽는다).
-검토자 세션을 띄우는 명령(두 하네스의 차이)은 session.py 의 어댑터가 맡는다.
+"""평가 결과의 판정과 검토 출력 해석. 모델을 실행하지 않는다.
 
-검증자는 답 끝에 JSON 하나를 쓴다(verify.py 의 VERIFIER_PROMPT 형식):
-  {"verdict": "OK" 또는 "RETURN", "conditions": [{"id": "C1", "result": "충족|미충족|미확인", "evidence": "..."}],
-   "return_reason": "...", "out_of_scope": ["..."]}
-판정(state): ok / returned / unverified(그 밖 전부, 완료 아님). out_of_scope 는 판정을 막지 않고 따로 남긴다.
-
-사용:
-  python3 -I evals/verdict.py session --tool <verify.py> --harness claude|codex [--log <기록>] <prepare 인자 ...>
-      → 평가용 검토 한 회차: 설치된 도구를 사용자와 같은 옵션으로 불러 입력을 묶고(prepare), 이 파일이 검토자 하네스 세션을 띄운 뒤,
-        그 마지막 답을 도구의 표준 입력으로 넘겨 판정(finish)한다. --map 을 주지 않으면 `## 기준` 이 있는 작업 지도(work/*/work.md)가 하나일 때 그것을 쓴다(여러 개면 미확인).
-        마지막 줄이 결과 JSON. 하네스가 없거나 실패하면 finish 를 부르지 않고 미확인을 낸다(검토자 답이 없다).
+완료 규칙은 설치 검토 도구의 함수를 그대로 사용한다. 검토 세션 실행은
+session.py review가 같은 공개 prepare/finish 명령으로 담당한다.
 """
-import importlib.util, json, os, re, shutil, subprocess, sys, tempfile
+import importlib.util, json, re
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from session import HARNESSES
-from transcript import final_answer  # 검증자 기록(Claude stream-json, Codex --json)의 마지막 답 전체
 
 _spec = importlib.util.spec_from_file_location("awk_verify", Path(__file__).resolve().parents[1] / ".agents/skills/wf-verify/verify.py")
 _verify = importlib.util.module_from_spec(_spec)
@@ -57,63 +43,3 @@ def run_result(output, exit_code=None):
                 return obj, f"결과 state {obj['state']} 와 종료 코드 {exit_code} 가 맞지 않는다"
             return obj, ""
     return None, ""
-
-
-def session(args):
-    opt = lambda name: args[args.index(name) + 1] if name in args[:-1] else None
-    tool, harness, log = opt("--tool"), opt("--harness"), opt("--log")
-    rest, skip = [], {"--tool", "--harness", "--log"}
-    it = iter(args)
-    for a in it:
-        if a in skip:
-            next(it, None)
-        else:
-            rest.append(a)
-    unverified = lambda reason, **more: print(json.dumps({"state": "unverified", "reason": reason, "completion": "unverified", **more}, ensure_ascii=False)) or EXIT["unverified"]
-    if "--map" not in rest:
-        maps = sorted(str(p) for p in Path("work").glob("*/work.md") if p.is_file() and _verify.criteria_text(p.read_text(encoding="utf-8", errors="replace")))
-        if len(maps) > 1:
-            return unverified("작업 지도가 여러 개라 검토할 지도를 정할 수 없다: " + ", ".join(maps))
-        rest += ["--map", maps[0]] if maps else []
-    r = subprocess.run([sys.executable, "-I", tool, "prepare", *rest], capture_output=True, text=True)
-    sys.stderr.write(r.stderr)
-    out = json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
-    if out.get("state") != "ready":  # 한도·근거 불완전 등으로 prepare 가 최종 결과를 냈다
-        print(json.dumps(out, ensure_ascii=False)); return r.returncode
-    keep = Path(out["kept"]); vlog = keep / "verify.jsonl"
-    # 검토자 세션을 판정 대상 폴더에서 띄운다. 종료 코드, 하네스가 없으면 None.
-    rc = HARNESSES[harness]().review(out["target_dir"], Path(out["prompt_file"]).read_text(encoding="utf-8"), vlog) if harness in HARNESSES else None
-    if log:  # --log 는 최신 회차 기록의 복사본(원시 기록은 회차 폴더에 그대로 있다)
-        for src, dst in ((vlog, Path(log)), (Path(str(vlog) + ".err"), Path(log + ".err"))):
-            if src.is_file():
-                dst.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(src, dst)
-    seen = {"round": out.get("round"), "kept": str(keep), "log": str(vlog), "verifier_exit_code": rc}
-    if rc is None:
-        return unverified(f"검토 하네스({harness})를 찾지 못했다. 설치·로그인된 하네스가 있으면 다시 실행한다", **seen)
-    if rc != 0:
-        return unverified(f"검토자 하네스 종료 코드 {rc}. 재개 조건: 검토자를 띄울 수 있는 환경에서 prepare 부터 다시 실행한다", **seen)
-    f = subprocess.run([sys.executable, "-I", tool, "finish", "--round", str(keep)], input=final_answer(vlog), capture_output=True, text=True)
-    sys.stderr.write(f.stderr)
-    res = json.loads(f.stdout.strip().splitlines()[-1]) if f.stdout.strip() else {"state": "unverified", "reason": "finish 결과 없음"}
-    res.update(log=str(vlog), verifier_exit_code=rc)
-    print(json.dumps(res, ensure_ascii=False))
-    return f.returncode
-
-
-def snapshot(project):
-    """지금 작업 트리(추적 파일과 무시되지 않은 새 파일)를 가지·index 를 건드리지 않고 커밋 하나로 남긴다. 검토의 기준 커밋(--base)으로 쓴다."""
-    index = Path(tempfile.mkdtemp()) / "index"
-    env = {**os.environ, "GIT_INDEX_FILE": str(index)}
-    git = lambda *a: subprocess.run(["git", "-c", "user.name=evals", "-c", "user.email=evals@invalid", "-c", "commit.gpgsign=false", *a],
-                                    cwd=project, env=env, capture_output=True, text=True, check=True).stdout.strip()
-    try:
-        git("add", "-A")
-        return git("commit-tree", git("write-tree"), "-m", "evals: 작업 시작 상태")
-    finally:
-        shutil.rmtree(index.parent, ignore_errors=True)
-
-
-if __name__ == "__main__":
-    cmd = sys.argv[1]
-    if cmd == "session":
-        sys.exit(session(sys.argv[2:]))

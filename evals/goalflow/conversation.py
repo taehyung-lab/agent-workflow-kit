@@ -2,10 +2,10 @@
 
 판정 기준은 키트의 요구 확정 기준에서 온다(docs/direction.md v3.4: "사용자 결정이 남아 있으면 조사·재현까지만 하고 제품 파일은 답을 받은 뒤 고친다").
 턴: 정해진 사용자 글(요청, 있으면 followup.txt) → 모의 사용자의 답 → 마무리 지시.
-  - 모의 사용자는 답 턴에 한 번 답한다: 그때까지 에이전트가 쓴 글 전부에서 질문·제안으로 드러낸 주제(asked.py, 원문 인용 필수)의 정책을 알려 주고
-    "나머지는 추천안대로 진행해 주세요"로 남은 결정을 맡긴다. 그 뒤로는 정책을 더 알려 주지 않는다(실제 사용자도 맡긴 뒤 다시 알려 주지 않는다).
+  - 고정 정책 과제는 답 턴에 answer.txt 전체를 전달한다. 답 전에 드러낸 주제는 따로 보존해 요구 발견을 평가한다.
+    모르는 정책을 위임한 뒤 숨은 고정 정답으로 채점하지 않는다. 답 이후에는 전달한 정책대로 구현하도록 한다.
   - v3.4 위반은 사용자 결정이 남는 턴에 제품을 고치는 것이다. 과제의 turns.json은 미정이 생기는 턴을 정하고, 없으면 모든 답 전 턴을 결정 대기로 본다. 첫 요청이 명확하고 정정에서 미정이 생기면 정정 턴의 변경만 본다.
-    물어야 할 것을 첫 답 전에 찾지 못했으면 그 주제는 추천안대로 정해져 최종 동작 판정(oracle)에서 드러난다.
+    발견하지 못한 주제와 답 이후 구현의 정확성은 서로 다른 결과다. 뒤에 맞게 구현해도 발견 누락은 보존한다.
   - 답 뒤 턴의 새 질문을 판정하려고 정책 검사 결과·실패 문구로 "이미 구현했나"를 추론하던 장치는 2026-11-16 지웠다:
     정책 검사는 "정책에 맞나"에 답할 뿐 "구현했나"에 답하지 못했고(독립 검토 네 번 반려), 위 기준에서는 그 판정이 필요 없다.
 제품 변경은 파일 시스템에서 센다(대화 기록의 도구 호출은 쓰지 않는다). 제품 파일은 시작 커밋의 파일과, 턴 끝에 남은 새 파일이다.
@@ -116,24 +116,29 @@ def product_diff(proj, base, state=()):
     return text
 
 
-ANSWERED = "물으신 것은 위와 같이 해 주세요. 나머지는 추천안대로 진행해 주세요."
-NOTHING = "질문이 없으면 그대로 진행해 주세요."
-CLOSE = "더 물을 것이 없으면 그대로 마무리해 주세요. 남은 질문이 있으면 추천안대로 정해 완료하고, 정한 내용과 실제 실행한 명령·결과를 보고해 주세요."
+CONVERSATION_CONTRACT = "fixed-policy-v1"
+ANSWERED = "위 정책이 제가 원하는 결과입니다. 앞서 제안한 내용과 다르면 위 정책을 적용해 주세요."
+CLOSE = "앞서 전달한 정책으로 마무리해 주세요. 정책이 정하지 않은 결과가 남으면 질문하고, 실제 실행한 명령·결과를 보고해 주세요."
 
 
 class MockUser:
     """static: 정해진 사용자 글 목록, answer: answer.txt 전문, topics: topics.txt 전문, surfaced: (글, 주제) → {주제: 인용문}(asked.py),
-    mode: asked(드러낸 주제만 답) | all(정책을 전부 알려 줌)."""
+    mode: asked(답 전 정책 발견을 측정) | all(발견을 측정하지 않는 구현 대조). 두 방식 모두 같은 고정 정책을 전달한다."""
 
     def __init__(self, static, answer, topics, surfaced, mode="asked"):
         self.static, self.answer, self.topics, self.surfaced, self.mode = list(static), answer, topics, surfaced, mode
         self.items = {int(m.group(1)): m.group(0).strip() for m in re.finditer(r"^(\d+)\. .*$", answer, re.M)}
         self.answer_turn = len(self.static) + 1
         self.turns = self.answer_turn + 1
-        self.replies, self.quotes = [], {}  # 답 전까지의 에이전트 글, 답한 주제 → 그 주제를 드러낸 인용문(증거)
+        self.replies, self.quotes = [], {}
+        self.delivered = False
 
     @property
     def answered(self):
+        return set(self.items) if self.delivered else set()
+
+    @property
+    def discovered(self):
         return set(self.quotes)
 
     def observe(self, reply):
@@ -148,12 +153,13 @@ class MockUser:
         if n > self.answer_turn:
             return CLOSE
         if self.mode == "all":
-            self.quotes = {t: "(MOCK=all)" for t in self.items}
-            return self.answer + "\n\n위 답으로 진행해 주세요."
+            self.delivered = True
+            return self.answer + "\n\n" + ANSWERED
         found = {}
         for reply in self.replies:
             for t, quote in (self.surfaced(reply, self.topics) if reply.strip() else {}).items():
                 if t in self.items:
                     found.setdefault(t, quote)
         self.quotes = dict(sorted(found.items()))
-        return "\n".join(self.items[t] for t in self.quotes) + f"\n\n{ANSWERED}" if self.quotes else NOTHING
+        self.delivered = True
+        return self.answer + "\n\n" + ANSWERED

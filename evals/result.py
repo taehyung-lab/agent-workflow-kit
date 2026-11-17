@@ -77,7 +77,7 @@ def initial_result(run):
     inputs = {"version": 1, "review_state": state, "review_required": run["review_required"],
               "open_decisions": evidence.get("open_decisions"), "unconfirmed": evidence.get("unconfirmed")}
     m = {"case": run["case"], "kit_ref": run["kit_ref"], "kit_commit": run["kit_commit"], "harness": run["harness"],
-         "run": run["run"], "harness_version": run["harness_version"], "exit_code": run["exit_code"], "seconds": run["seconds"],
+         "run": run["run"], "model": run.get("model"), "harness_version": run["harness_version"], "exit_code": run["exit_code"], "seconds": run["seconds"],
          "agents_md_bytes": run["agents_md_bytes"], "check_passed": run["check"] == PASS,
          "check_needs_review": run["check"] == REVIEW, "check_unverified": run["check"] == UNVERIFIED,
          "input": run["input"], "user_turns": run["user_turns"], "planned_turns": run["planned_turns"],

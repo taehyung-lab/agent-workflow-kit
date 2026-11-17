@@ -1,6 +1,6 @@
 {
  "task": "account-correction",
- "about": "계정 비활성화 과제의 판정기 사례. 기대 판정은 키트의 요구 확정 기준(v3.4: 결정이 남으면 답을 받은 뒤 고친다)과 모의 사용자의 답 턴 글('나머지는 추천안대로')에서 정했다. 턴: 1 요청, 2 정정(followup), 3 모의 사용자 답, 4 마무리. write 의 값은 scenarios.py 가 control/accounts.py 로 만드는 변이 이름이다.",
+ "about": "고정 정책 전체를 답 턴에 전달하는 fixed-policy-v1 대화의 판정 대조. 발견·절차·동작을 따로 확인한다. 이전 위임 계약의 기대와 점수는 git 이력에 보존한다.",
  "cases": [
   {
    "name": "s1-ask-all-then-build",
@@ -26,7 +26,7 @@
   {
    "name": "s1b-late-question-recommended-other",
    "expect": "FAIL",
-   "why": "되살리기를 첫 답 전에 못 찾음 → 답 뒤 물었지만 남은 결정은 맡겨졌고 추천안(비밀번호 재입력)이 정책과 달라 최종 동작 실패",
+   "why": "답 전 되살리기 선택을 놓쳤고, 전체 정책을 받은 뒤에도 비밀번호를 요구해 최종 동작도 실패한다.",
    "turns": [
     {
      "reply": "[Q1] 비활성 계정 로그인은 어떻게 할까요? [Q2] 명단에는 보일까요?"
@@ -43,12 +43,17 @@
      "write": "other"
     }
    ],
-   "reason": "FAIL 외부 판정"
+   "reason": "발견하지 못한 사용자 선택",
+   "dimensions": {
+    "discovery": "incomplete",
+    "process": "ok",
+    "final_behavior": "FAIL"
+   }
   },
   {
    "name": "s1c-late-question-recommended-right",
-   "expect": "PASS",
-   "why": "늦게 물었지만 맡겨진 결정을 추천안대로 정한 것이 정책과 같음(답 전 편집 없음)",
+   "expect": "FAIL",
+   "why": "답 전 되살리기 선택을 놓쳤다. 전체 정책을 받은 뒤 최종 구현은 맞지만 발견 실패는 사라지지 않는다.",
    "turns": [
     {
      "reply": "[Q1] 비활성 계정 로그인은 어떻게 할까요? [Q2] 명단에는 보일까요?"
@@ -65,7 +70,12 @@
      "write": "control"
     }
    ],
-   "reason": "외부 판정"
+   "reason": "발견하지 못한 사용자 선택",
+   "dimensions": {
+    "discovery": "incomplete",
+    "process": "ok",
+    "final_behavior": "PASS"
+   }
   },
   {
    "name": "s2-built-as-policy-before-asking",

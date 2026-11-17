@@ -93,7 +93,7 @@ exit 0
     def verify(mp, verdicts, harness="claude", path=True, extra=(), **env):
         d = Path(tempfile.mkdtemp(dir=t)); (d / "verdicts").write_text("".join(json.dumps(json.dumps(v, ensure_ascii=False) if isinstance(v, dict) else v, ensure_ascii=False) + "\n" for v in verdicts))
         e = {**base_env, "FAKE_DIR": str(d), "PATH": (f"{fake}:" if path else "") + "/usr/bin:/bin", **env}
-        r = sh(sys.executable, "-I", str(KIT / "evals/verdict.py"), "session", "--tool", str(verifier), "--harness", harness, *(("--map", mp) if mp else ()), *extra, cwd=proj, env=e)
+        r = sh(sys.executable, "-I", str(KIT / "evals/session.py"), "review", "--tool", str(verifier), "--harness", harness, *(("--map", mp) if mp else ()), *extra, cwd=proj, env=e)
         out = json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
         prompt = (d / "vprompt.1").read_text() if (d / "vprompt.1").is_file() else ""
         return r.returncode, out, prompt
@@ -299,7 +299,7 @@ exit 0
           out2.get("round") == 1 and k2 != k1 and k2.is_dir() and r1 is not None and (k1 / "result.json").read_text() == r1
           and (k1 / "diff.txt").is_file() and sh("git", "cat-file", "-e", f"{out1.get('target')}^{{commit}}", cwd=k1 / "target").returncode == 0)
     check("증거 폴더는 제품 파일 목록에 섞이지 않는다(work/ 아래)", Path(os.path.realpath(proj / "work")) in Path(os.path.realpath(k1)).parents)
-    # 평가 실행기의 검토 세션(verdict.py session --log): 회차의 원시 기록은 회차 폴더에, --log 는 최신 복사본
+    # 평가 실행기의 검토 세션(session.py review --log): 회차의 원시 기록은 회차 폴더에, --log 는 최신 복사본
     logp = t / "ev" / "x.verify1.jsonl"
     lreq = req_file("기록 위치 시도")
     (proj / "log-change.txt").write_text("검토할 변경\n")
@@ -422,7 +422,7 @@ exit 0
     check("record 결과에는 review=off 가 붙어 검토 결과와 구별된다", rec(m_done)[1].get("review") == "off")
     # 평가 관찰: 세션이 record 만 실행했으면 독립 검토를 한 것으로 세지 않는다
     sys.path.insert(0, str(KIT / "evals"))
-    import observe, verdict
+    import observe, verdict, session
     def seen(result, rc_):
         log = t / "obs.jsonl"
         log.write_text(json.dumps({"type": "item.completed", "item": {"type": "command_execution", "command": "python3 .agents/skills/wf-verify/verify.py x",
@@ -440,7 +440,7 @@ exit 0
     # 평가 실행기의 보조: 작업 시작 상태 커밋은 가지·index·작업 트리를 바꾸지 않고, 지도가 여러 개면 고르지 않는다
     (proj / "untracked-start.txt").write_text("시작 상태\n")
     head_before, status_before = sh(*G, "rev-parse", "HEAD", cwd=proj).stdout, sh(*G, "status", "--porcelain", cwd=proj).stdout
-    snap = verdict.snapshot(str(proj))
+    snap = session.snapshot(str(proj))
     check("snapshot: 추적하지 않는 새 파일까지 커밋 하나로 남기고 가지·index 는 그대로다",
           "untracked-start.txt" in sh(*G, "ls-tree", "-r", "--name-only", snap, cwd=proj).stdout
           and sh(*G, "rev-parse", "HEAD", cwd=proj).stdout == head_before and sh(*G, "status", "--porcelain", cwd=proj).stdout == status_before)

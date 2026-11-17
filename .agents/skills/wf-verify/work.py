@@ -208,14 +208,14 @@ def checked(events, plan):
     return result
 
 
-def call_verify(argv, answer=None):
+def call_verify(argv, answer=None, record_path=None):
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         old = sys.stdin
         try:
             if answer is not None:
                 sys.stdin = io.StringIO(answer)
-            code = verify.cli(argv)
+            code = verify.prepare(argv[1:], record_path=record_path) if record_path else verify.cli(argv)
         finally:
             sys.stdin = old
     return json.loads(output.getvalue().splitlines()[-1]), code
@@ -239,10 +239,12 @@ def review(work, args, events):
     for item in frozen['results']:
         item['stdout_stderr'] = Path(item['output']).read_text(encoding='utf-8', errors='replace')
     bundle.write_bytes(encoded(frozen))
-    command = ['prepare', '--map', str(work / 'work.md'), '--output', str(bundle)]
+    record_path = work / 'review-input.json'
+    record_path.write_bytes(encoded(plan))
+    command = ['prepare', '--output', str(bundle)]
     for source in sources(events):
         command += ['--request', str(work / source['file'])]
-    result, code = call_verify(command)
+    result, code = call_verify(command, record_path=record_path)
     if code == 0:
         append(work, {'kind': 'review', 'context': context_key(events), 'kept': result['kept'], 'check': digest(encoded(evidence))})
     return result, code

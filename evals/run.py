@@ -92,7 +92,7 @@ def plugins_fingerprint(project):
 
 
 def verify_loop(harness, project, out, turns, base_sha, case_dir, tool, t):
-    """독립 검증 루프. 검증 입력 묶기·결과 판정·재검증 한도는 설치된 검토 도구가 맡고, 검토자 세션을 띄우는 일만 verdict.py session 이 한다.
+    """독립 검증 루프. 검증 입력 묶기·결과 판정·재검증 한도는 설치된 검토 도구가 맡고, 검토자 세션을 띄우는 일만 session.py review 이 한다.
     도구는 사용자와 같은 옵션으로 부른다: 사용자 턴 전부(--request), 작업 시작 커밋(--base), 사례의 필수 조건(--conditions), 지도가 하나면 그 지도(--map, session 이 고른다).
     돌려줌: 검증 사실(state·reason·rounds·verifier_exit_code·review·baseline_changed)과, 교정 턴에서 구현자 하네스가 실패했으면 그 종료 코드(아니면 0)."""
     max_rounds = os.environ.get("EVALS_VERIFY_ROUNDS") or "2"
@@ -126,7 +126,7 @@ def verify_loop(harness, project, out, turns, base_sha, case_dir, tool, t):
         v["rounds"] += 1
         vlog = f"{out}.verify{v['rounds']}.jsonl"
         with open(f"{out}.err", "ab") as err:
-            printed = subprocess.run([sys.executable, "-I", str(HERE / "verdict.py"), "session", "--tool", str(tool), "--harness", harness.name,
+            printed = subprocess.run([sys.executable, "-I", str(HERE / "session.py"), "review", "--tool", str(tool), "--harness", harness.name,
                                       "--rounds", max_rounds, "--log", vlog, *args], cwd=project, stdout=subprocess.PIPE, stderr=err, text=True).stdout
         if os.path.isfile(vlog):
             shutil.copy(vlog, f"{out}.verify.jsonl")  # 마지막 판정 기록(이전 판정은 .verifyN.jsonl 로 남는다)
@@ -257,7 +257,7 @@ def run_once(case_name, case_dir, ref, commit, harness_name, i, out_root, state)
     t = sent = 0
     # 작업 시작 상태(첫 턴 직전)를 커밋 하나로 남긴다(가지·index 는 그대로). 검증자는 마지막 턴만이 아니라 작업 시작부터의 변경 전체를 받는다.
     try:
-        base_sha = verdict.snapshot(str(project))
+        base_sha = session.snapshot(str(project))
     except Exception:
         base_sha = ""
         append(f"{out}.err", traceback.format_exc().rstrip("\n"))

@@ -240,12 +240,19 @@ def target_table(context, root):
             break
     else:
         return None, []
-    targets, problems, seen = [], [], {}
+    values = []
     for line in lines[i + 2:]:
         row = cells(line)
         if not row:
             break
-        name, raw, base = (row[head.index(w)].strip("`").strip() if head.index(w) < len(row) else "" for w in TARGET_COLUMNS)
+        values.append(tuple(row[head.index(w)].strip("`").strip() if head.index(w) < len(row) else "" for w in TARGET_COLUMNS))
+    return review_targets(values, root)
+
+
+def review_targets(values, root):
+    """구 지도와 대표 기록이 공유하는 실제 검토 대상 확인."""
+    targets, problems, seen = [], [], {}
+    for name, raw, base in values:
         label = name or raw or "(이름 없음)"
         path = Path(os.path.expanduser(raw)) if raw else None
         if path is not None and not path.is_absolute():
@@ -287,11 +294,19 @@ class ReviewInputs:
         """검토자에게 넘기는 지도 부분(`## 기준`·`## 맥락`)만. 설계·증거 절은 넘기지 않으므로 현재성 대조에도 넣지 않는다."""
         return "\n\n".join(f"## {name}\n{body}" for name, body in (("기준", criteria_text(text)), ("맥락", context_text(text))) if body)
 
+    @classmethod
+    def selected_content(cls, text, definition):
+        if definition == 'records':
+            return json.dumps([json.loads(line) for line in text.splitlines()
+                               if line.strip() and json.loads(line).get('kind') == 'record'],
+                              ensure_ascii=False, sort_keys=True)
+        return cls.definition(text) if definition else text
+
     def read(self, path, role, definition=False):
         path = os.path.abspath(path)
         if path not in self.cache:
             self.cache[path] = Path(path).read_text(encoding="utf-8")
-        text = self.definition(self.cache[path]) if definition else self.cache[path]
+        text = self.selected_content(self.cache[path], definition)
         self.snapshot["files"].append({"path": path, "role": role, "definition": definition,
                                        "sha256": hashlib.sha256(text.encode()).hexdigest()})
         return text
@@ -304,12 +319,11 @@ class ReviewInputs:
         try:
             for item in snapshot["files"]:
                 text = Path(item["path"]).read_text(encoding="utf-8")
-                if item["definition"]:
-                    text = cls.definition(text)
+                text = cls.selected_content(text, item["definition"])
                 if hashlib.sha256(text.encode()).hexdigest() != item["sha256"]:
                     return False
             return True
-        except (OSError, UnicodeError, KeyError, TypeError):
+        except (OSError, UnicodeError, KeyError, TypeError, ValueError):
             return False
 
 
@@ -672,7 +686,7 @@ def record(args):
     return record_report(result)
 
 
-def prepare(args):
+def prepare(args, record_path=None):
     """검토 입력을 묶는다: 요청 원문·지도 기준·기준 커밋부터의 변경(diff)과 판정 대상의 고정 복사본. 검토자는 띄우지 않는다.
     한도에 닿았거나 입력·근거가 불완전하면 여기서 최종 결과를 낸다."""
     asked_max = int(opt(args, "--rounds") or 2)
@@ -709,6 +723,24 @@ def prepare(args):
         problems.append("산출물(--output) 파일이 비었다")
     conditions = inputs.read(opt(args, "--conditions"), "conditions") if opt(args, "--conditions") else ""
     envelope = f"### {map_rel}\n{body}" if inputs.map is not None and (body := context_text(inputs.map)) else ""
+    record_requirements = None
+    definition_rel = map_rel
+    if record_path is not None:
+        if map_rel or opt(args, '--base'):
+            raise ValueError('대표 기록과 수동 지도·기준 커밋을 함께 받지 않는다')
+        plan = json.loads(inputs.read(record_path, 'requirements'))
+        inputs.read(Path(record_path).parent / 'journal.jsonl', 'journal', definition='records')
+        targets, target_problems = review_targets([(t['name'], t['path'], t['base']) for t in plan['targets']], root)
+        problems += target_problems
+        record_requirements = plan['requirements']
+        requirement_ids = [r['id'] for r in record_requirements]
+        if (not record_requirements or len(set(requirement_ids)) != len(requirement_ids)
+                or any(not re.fullmatch(r'[A-Z]{1,3}[0-9]{1,3}', r['id']) or r['state'] not in RECORD_STATES
+                       or not r['expect'].strip() for r in record_requirements)):
+            raise ValueError('대표 기록의 요구·상태가 잘못됐다')
+        criteria = json.dumps(record_requirements, ensure_ascii=False, indent=2)
+        envelope = json.dumps(plan['targets'], ensure_ascii=False, indent=2)
+        definition_rel = os.path.relpath(record_path, root)
     multi = targets is not None
     if multi:
         base_rev = "대상 표의 행마다"
@@ -722,8 +754,8 @@ def prepare(args):
         targets_for_print = [str(root)]
     roots = [str(t["root"]) for t in targets] if multi else targets_for_print
     # 검토 시도: 같은 요청 원문·기준 커밋·지도면 회차를 이어 센다. 다른 요청(새 원문)이나 다른 기준 커밋은 새 시도다.
-    attempt = hashlib.sha256(json.dumps([requests, base_key, map_rel], ensure_ascii=False).encode()).hexdigest()[:16]
-    state_file = (Path(root, map_rel).parent / "verify" if map_rel else Path(root, "work", "review")) / "state.json"
+    attempt = hashlib.sha256(json.dumps([requests, base_key, definition_rel], ensure_ascii=False).encode()).hexdigest()[:16]
+    state_file = (Path(root, definition_rel).parent / "verify" if definition_rel else Path(root, "work", "review")) / "state.json"
     vstate = json.loads(state_file.read_text()) if state_file.is_file() else {}
     if vstate.get("attempt") != attempt:
         vstate = {}  # 새 시도: 회차를 1부터 센다(앞선 증거 폴더는 그대로 남는다)
@@ -749,7 +781,7 @@ def prepare(args):
     state_file.parent.mkdir(parents=True, exist_ok=True)
     keep = Path(tempfile.mkdtemp(prefix=f"round-{n}-", dir=state_file.parent))
     result["kept"] = str(keep)  # 이 회차의 고정 대상(git 저장소)·시작 상태·diff·입력·판정을 지우지 않고 남긴다
-    changed = bool(map_rel) and first_criteria.strip() != criteria.strip()
+    changed = bool(definition_rel) and first_criteria.strip() != criteria.strip()
     note = ("\n주의: 1회차 검토 뒤 작업 지도의 기준이 바뀌었다. 바뀐 부분이 사용자 원문에 근거하는지 대조하고, 근거 없이 결과·범위를 바꿨으면 RETURN 한다. "
             f"1회차 기준:\n{first_criteria or '(없음)'}\n") if changed else ""
     result["criteria_changed"] = changed
@@ -795,9 +827,15 @@ def prepare(args):
         problems.append("검토할 것이 없다(입력 부족): 기준 커밋부터 바뀐 파일이 없고 산출물(--output)도 없다. 분석·설계만 한 작업은 답·보고서를 --output 으로 넘긴다")
     result.update(target=target, diff_truncated=cut)
     # 요구 기록 표: 미정(사용자 답 필요)·미확인(조사 필요) 행이 남으면 완료가 아니다. 형식 문제는 검토자를 띄우지 않고 돌려보낸다.
-    pending, unknown, record_problems, _ = open_rows(criteria)
+    if record_requirements is None:
+        pending, unknown, record_problems, _ = open_rows(criteria)
+        requirement_ids = ids(criteria)
+    else:
+        pending = [r['id'] for r in record_requirements if r['state'] == '미정']
+        unknown = [r['id'] for r in record_requirements if r['state'] == '미확인']
+        record_problems = []
     # 미정·미확인 행은 아직 판정할 결과가 없다: 검토자에게 충족을 요구하지 않고 완료 판정의 대기·미확인으로 남긴다.
-    required = [i for i in ids(conditions + "\n" + criteria) if i not in set(pending + unknown)]
+    required = sorted(set(ids(conditions) + requirement_ids) - set(pending + unknown))
     result.update(open_decisions=pending, unconfirmed=unknown, required=required)
     (keep / "criteria.txt").write_text(criteria, encoding="utf-8")
     (keep / "requests.json").write_text(json.dumps(requests, ensure_ascii=False), encoding="utf-8")

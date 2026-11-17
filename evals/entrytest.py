@@ -49,6 +49,7 @@ check("사용자 홈의 전역 지침 파일은 바뀌지 않았다", before == 
 
 # 모델 고정: Codex 의 실행기 교정 턴(from_runner)도 고정 모델로 돈다(네트워크·훅 신뢰 옵션만 빼는 턴이다)
 _cx = session.Codex.__new__(session.Codex); _cx.project, _cx.session_id, _cx.flags, _cx.home = "/nonexistent", "sid", session._model_flags("codex") + ["-c", "x=1"], None
+_cx.profile = "personal"
 _seen = []; _cx._turn = lambda cmd, out, **kw: _seen.append(cmd)
 _cx.resume("p", "/tmp/out", from_runner=True); _cx.resume("p", "/tmp/out")
 check("Codex 교정 턴과 사용자 턴 모두 고정 모델을 넘긴다", all("-m" in c for c in _seen) and "x=1" not in _seen[0])
