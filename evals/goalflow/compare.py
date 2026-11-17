@@ -33,7 +33,7 @@ import pins  # noqa: E402
 from transcript import read, commands, replies  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from asked import surfaced  # noqa: E402
-from conversation import MockUser, log_readable, product_changes as changes_since, product_diff, read_state, turn_writes  # noqa: E402
+from conversation import MockUser, log_readable, product_changes as changes_since, product_diff, read_state, turn_writes, product_snapshot, decision_contract  # noqa: E402
 from turnwatch import Watch  # noqa: E402
 from table import result_meta  # noqa: E402
 
@@ -77,6 +77,7 @@ FIRST = (PREFIX + "\n\n" if PREFIX else "") + request
 # 정해진 사용자 글(요청, 있으면 followup.txt). 그 뒤 턴은 모의 사용자의 답, 마지막은 마무리 지시다.
 STATIC = [FIRST] + ([(TASK / "followup.txt").read_text(encoding="utf-8").strip()] if (TASK / "followup.txt").is_file() else [])
 mock = MockUser(STATIC, answer, topics, surfaced, MOCK)
+DECISION_TURNS = decision_contract(TASK, len(STATIC))
 
 # ---- 세션(전역 설정 격리) ----
 env = dict(os.environ)
@@ -132,13 +133,14 @@ for n in range(1, mock.turns + 1):
     except RuntimeError as e:  # 모의 사용자 분류 실패: 증거 부족(검토 필요)으로 남기고 멈춘다
         mock_error = str(e)[:300]
         break
+    start_product = product_snapshot(proj, STATE)
     try:
         watch, watch_error = Watch(proj), None
     except OSError as e:  # 감시를 켜지 못하면 이 턴의 편집은 관찰 불가(증거 부족)
         watch, watch_error = None, str(e)
     rc, log, secs = launch(n, prompt)
     try:
-        touched = turn_writes(watch.stop(), proj, base, STATE) if watch else None  # 턴 안에서 쓰거나 만들거나 지운 제품 파일(되돌려도 남는다)
+        touched = turn_writes(watch.stop(), proj, base, STATE, files=start_product) if watch else None  # 턴 안에서 쓰거나 만들거나 지운 제품 파일(되돌려도 남는다)
     except OSError as e:
         touched, watch_error = None, str(e)
     try:
@@ -153,10 +155,12 @@ for n in range(1, mock.turns + 1):
     # 분류기가 내용 없는 글을 보고 물은 것으로 세어 묻지 않은 답까지 준다(2026-11-13 표본 라벨 과제의 스킬 구성 3회가 그랬다).
     mock.observe("\n\n".join(replies(str(log))) or final)
     (out / f"{name}.t{n}.diff").write_text(product_diff(proj, base, STATE), encoding="utf-8")  # 증거: 그 턴이 끝났을 때의 제품 변경
-    rows.append({"turn": n, "rc": rc, "answered_now": sorted(mock.answered - before), "product_touched": touched, "watch_error": watch_error, "log_readable": log_readable(str(log)), "seconds": secs, "product_changes": product_changes(), "reply_chars": len(final),
+    end_product = product_snapshot(proj, STATE)
+    changed_this_turn = sorted(f for f in start_product.keys() | end_product.keys() if start_product.get(f) != end_product.get(f))
+    rows.append({"turn_changes": changed_this_turn, "turn": n, "rc": rc, "answered_now": sorted(mock.answered - before), "product_touched": touched, "watch_error": watch_error, "log_readable": log_readable(str(log)), "seconds": secs, "product_changes": product_changes(), "reply_chars": len(final),
                  "question_marks": final.count("?") + final.count("？"), "reply": final[:6000],
-                 "record_runs": sum(bool(re.search(r"verify\.py\s+record\b", c["command"])) for c in cmds),
-                 "review_runs": sum(bool(re.search(r"verify\.py\s+prepare\b", c["command"])) for c in cmds),
+                 "record_runs": sum(bool(re.search(r"(?:verify|work)\.py\s+record\b", c["command"])) for c in cmds),
+                 "review_runs": sum(bool(re.search(r"(?:verify\.py\s+prepare|work\.py\s+review)\b", c["command"])) for c in cmds),
                  "test_runs": sum(bool(re.search(r"unittest|pytest|bin/probe", c["command"])) for c in cmds)})
     if rc != 0 or not sid:
         break
@@ -179,7 +183,7 @@ if harness == "claude":
         if ev.get("type") == "system" and ev.get("subtype") == "init":
             init = {"skills": [s for s in ev.get("skills", []) if s in ("grilling", "tdd")], "plugins": len(ev.get("plugins", [])), "n_skills": len(ev.get("skills", []))}
             break
-summary = {"name": name, "task": TASK_NAME, "model": pins.model(harness), "mock_user_model": pins.mock_user_model() if MOCK == "asked" else None, "harness_version": pins.cli_version(harness), "static_turns": len(STATIC), "arm": arm, "harness": harness, "run": int(idx) if idx.isdigit() else idx, "kit_ref": kit_ref, "kit_commit": kit_commit, "agents_md_bytes": agents_md_bytes, "base": base, "seconds": int(time.time() - started), "turns": rows,
+summary = {"name": name, "task": TASK_NAME, "model": pins.model(harness), "mock_user_model": pins.mock_user_model() if MOCK == "asked" else None, "harness_version": pins.cli_version(harness), "static_turns": len(STATIC), "decision_turns": DECISION_TURNS, "arm": arm, "harness": harness, "run": int(idx) if idx.isdigit() else idx, "kit_ref": kit_ref, "kit_commit": kit_commit, "agents_md_bytes": agents_md_bytes, "base": base, "seconds": int(time.time() - started), "turns": rows,
            "mock": MOCK, "answered": sorted(mock.answered),
            "surfaced_quotes": {str(t): q for t, q in mock.quotes.items()}, "mock_error": mock_error, "map": any((proj / "work").glob("*/work.md")), "final_changes": product_changes(), "init": init,
            "oracle_exit": oracle.returncode, "automated_valid": verdict.get("automated_valid"), "observation_complete": verdict.get("observation_complete"),

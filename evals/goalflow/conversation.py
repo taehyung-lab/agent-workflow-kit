@@ -4,13 +4,13 @@
 턴: 정해진 사용자 글(요청, 있으면 followup.txt) → 모의 사용자의 답 → 마무리 지시.
   - 모의 사용자는 답 턴에 한 번 답한다: 그때까지 에이전트가 쓴 글 전부에서 질문·제안으로 드러낸 주제(asked.py, 원문 인용 필수)의 정책을 알려 주고
     "나머지는 추천안대로 진행해 주세요"로 남은 결정을 맡긴다. 그 뒤로는 정책을 더 알려 주지 않는다(실제 사용자도 맡긴 뒤 다시 알려 주지 않는다).
-  - 그래서 v3.4 위반은 "첫 답 전에 제품을 고쳤다" 하나로 정해지고(table.edits_before_answer), 답 뒤의 구현은 맡긴 결정이다.
+  - v3.4 위반은 사용자 결정이 남는 턴에 제품을 고치는 것이다. 과제의 turns.json은 미정이 생기는 턴을 정하고, 없으면 모든 답 전 턴을 결정 대기로 본다. 첫 요청이 명확하고 정정에서 미정이 생기면 정정 턴의 변경만 본다.
     물어야 할 것을 첫 답 전에 찾지 못했으면 그 주제는 추천안대로 정해져 최종 동작 판정(oracle)에서 드러난다.
   - 답 뒤 턴의 새 질문을 판정하려고 정책 검사 결과·실패 문구로 "이미 구현했나"를 추론하던 장치는 2026-11-16 지웠다:
     정책 검사는 "정책에 맞나"에 답할 뿐 "구현했나"에 답하지 못했고(독립 검토 네 번 반려), 위 기준에서는 그 판정이 필요 없다.
 제품 변경은 파일 시스템에서 센다(대화 기록의 도구 호출은 쓰지 않는다). 제품 파일은 시작 커밋의 파일과, 턴 끝에 남은 새 파일이다.
   - 턴이 끝났을 때 시작 커밋(base)과의 차이(product_changes): 커밋해도, 새 파일도 잡힌다. git 이 무시하는 파일은 아니다.
-  - 턴 동안 운영체제가 낸 파일 사건(turnwatch.py, macOS FSEvents)이 시작 커밋의 제품 파일에 닿았나(turn_writes):
+  - 턴 동안 운영체제가 낸 파일 사건(turnwatch.py, macOS FSEvents)이 그 턴 시작의 제품 파일에 닿았나(turn_writes):
     같은 턴 안에서 고쳤다가 되돌리거나, 그 파일이 든 폴더를 바꿔 끼웠다 되돌리거나, 지웠다가 git checkout 해도 잡힌다.
     도구와 관계없고, 읽기·검색·시험 실행·실패한 편집 호출은 사건을 내지 않는다. 감시를 켜지 못하면 그 턴은 관찰 불가(증거 부족)다.
   - 턴 안에서 생겼다 사라진 새 파일·폴더(시험 도구의 임시 캐시 폴더, 초안)는 제품이 된 적이 없어 보지 않는다. 무엇을 구현했는지는 최종 동작이 본다.
@@ -19,7 +19,7 @@
   2026-11-16 지운 것: 확장자로 앱 상태를 짐작하던 규칙(.json·.csv·.db 등), 대화 기록의 편집 호출 판별, 턴 앞뒤 변경 시각 비교, 프로젝트 안 모든 사건을 분류하던 규칙(git 무시 확인·폴더 옮기기 구분).
   모든 사건을 분류하려다 시험 도구 캐시·빈 폴더마다 예외가 늘었다(재검토 3‴~3⁵). 제품 파일에 닿은 사건만 보면 예외가 필요 없다.
 """
-import fnmatch, json, re, subprocess
+import fnmatch, hashlib, json, os, re, subprocess
 from pathlib import Path
 
 # 제품이 아닌 것: 작업 지도·키트·하네스 설정, 파이썬 캐시, 그리고 과제가 state.txt 에 적은 앱 상태 파일(앱이 실행 중에 저장하는 자리).
@@ -58,12 +58,38 @@ def product_changes(proj, base, state=()):
     return sorted({f for f in changed + new if f and _product(f, state)})
 
 
-def turn_writes(found, proj, base, state=()):
+def decision_contract(task, static_turns):
+    path = Path(task, 'turns.json')
+    if not path.exists():
+        return list(range(1, static_turns + 1))
+    data = json.loads(path.read_text())
+    turns = data['decision_turns']
+    if not data.get('reason') or not isinstance(turns, list) or any(type(n) is not int or not 1 <= n <= static_turns for n in turns) or len(set(turns)) != len(turns):
+        raise ValueError('과제의 결정 대기 턴·이유가 잘못됐다')
+    return turns
+
+
+def product_snapshot(proj, state=()):
+    """턴 시작/끝의 실제 제품 파일. 이전에 허용된 턴이 만든 새 파일도 포함한다."""
+    paths = _git(proj, 'ls-files', '--cached', '--others', '--exclude-standard', '-z').decode('utf-8', 'replace').split('\0')
+    result = {}
+    for name in set(paths):
+        if not name or not _product(name, state):
+            continue
+        path = Path(proj, name)
+        if path.is_symlink():
+            result[name] = 'link:' + os.readlink(path)
+        elif path.is_file():
+            result[name] = str(path.stat().st_mode & 0o111) + ':' + hashlib.sha256(path.read_bytes()).hexdigest()
+    return result
+
+
+def turn_writes(found, proj, base, state=(), files=None):
     """턴 동안 사건이 난 경로({경로: 폴더인가}, turnwatch.Watch.stop) 가운데 시작 커밋의 제품 파일에 닿은 것:
     그 파일 자체의 사건이거나, 그 파일을 품은 폴더의 사건(폴더 옮기기·지우기는 안의 파일마다 사건이 나지 않을 수 있다).
     시작 커밋에 없던 경로는 여기서 보지 않는다: 턴 끝까지 남은 새 파일은 product_changes 가 잡고, 턴 안에서 생겼다 사라진 것
     (시험 도구의 임시 폴더, 초안 파일)은 제품이 된 적이 없다."""
-    tracked = {f for f in base_files(proj, base) if _product(f, state)}
+    tracked = set(files) if files is not None else {f for f in base_files(proj, base) if _product(f, state)}
     return sorted(p for p, is_dir in found.items() if p in tracked or (is_dir and any(f.startswith(p + "/") for f in tracked)))
 
 

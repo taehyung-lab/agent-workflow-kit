@@ -485,6 +485,7 @@ else
   cat "$entry_log"
 fi
 rm -f "$entry_log"
+python3 -I "$here/../tests/decision-turns.test.py" && ok "결정 대기 턴 판정" || ng "결정 대기 턴 판정"
 python3 -I "$here/../tests/work.test.py" && ok "대표 작업 기록 공개 명령" || ng "대표 작업 기록 공개 명령"
 printf '%d passed, %d failed%s\n' "$pass" "$failed" "${unrun:+, 1 미실행(표준 쓰기 경계 시험)}"
 [ "$failed" -eq 0 ]
