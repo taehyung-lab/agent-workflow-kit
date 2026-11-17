@@ -41,9 +41,9 @@ def load(work):
     path = work / 'journal.jsonl'
     events = [json.loads(line) for line in path.read_bytes().splitlines()] if path.exists() else []
     for event in events:
-        for source in event.get('sources', []):
+        for source in event.get('sources', []) + event.get('evidence', []):
             if digest((work / source['file']).read_bytes()) != source['sha256']:
-                raise ValueError('원문 파일이 기록 뒤 바뀌었다')
+                raise ValueError('원문 또는 보존한 증거 파일이 기록 뒤 바뀌었다')
     return events
 
 
@@ -185,10 +185,11 @@ def render(work, events):
 
 
 def record(work, args, events):
-    if not args.request and not args.plan and not args.findings:
-        raise ValueError('추가할 원문·계획·독자 발견이 필요하다')
+    if not args.request and not args.plan and not args.findings and not args.evidence:
+        raise ValueError('추가할 원문·계획·독자 발견·증거가 필요하다')
     previous = sources(events)
     incoming = [Path(path).read_bytes() for path in args.request]
+    attachments = [(str(Path(path).resolve()), Path(path).read_bytes()) for path in args.evidence]
     if any(not raw.strip() for raw in incoming):
         raise ValueError('빈 원문은 기록하지 않는다')
     plan = validate(json.loads(Path(args.plan).read_text()), len(previous) + len(incoming)) if args.plan else current(events)
@@ -220,6 +221,14 @@ def record(work, args, events):
         with (work / name).open('xb') as stream:
             stream.write(raw)
         event['sources'].append({'file': name, 'sha256': digest(raw), 'reply_to': args.reply_to})
+    event['evidence'] = []
+    count = sum(len(e.get('evidence', [])) for e in events)
+    for origin, raw in attachments:
+        name = f'evidence/{count + len(event["evidence"]) + 1:04}.txt'
+        (work / 'evidence').mkdir(exist_ok=True)
+        with (work / name).open('xb') as stream:
+            stream.write(raw)
+        event['evidence'].append({'file': name, 'sha256': digest(raw), 'origin': origin})
     if args.plan:
         event['plan'] = plan
     if findings:
@@ -290,9 +299,10 @@ def checked(events, plan):
     result = candidates[-1]
     if result['context'] != context_key(events) or result['after'] != fingerprint(plan):
         raise ValueError('검사 뒤 원문·계획·대상이 바뀌었다')
-    for item in result['results']:
-        if digest(Path(item['output']).read_bytes()) != item['sha256']:
-            raise ValueError('검사 출력이 바뀌었다')
+    for run in candidates:
+        for item in run['results']:
+            if digest(Path(item['output']).read_bytes()) != item['sha256']:
+                raise ValueError('현재 또는 과거 검사 출력이 바뀌었다')
     return result
 
 
@@ -324,8 +334,14 @@ def review(work, args, events):
     render(work, events)
     bundle = work / 'check-evidence.json'
     frozen = json.loads(json.dumps(evidence))
-    for item in frozen['results']:
-        item['stdout_stderr'] = Path(item['output']).read_text(encoding='utf-8', errors='replace')
+    # 과거 실패는 당시 요구·명령과 함께 전달하며 현재 PASS를 대신하지 않는다.
+    frozen['history'] = json.loads(json.dumps([e for e in events if e['kind'] in ('record', 'check') and e is not evidence]))
+    for run in [frozen] + [e for e in frozen['history'] if e['kind'] == 'check']:
+        for item in run['results']:
+            item['stdout_stderr'] = Path(item['output']).read_text(encoding='utf-8', errors='replace')
+    for event in frozen['history']:
+        for item in event.get('evidence', []):
+            item['content'] = (work / item['file']).read_text(encoding='utf-8', errors='replace')
     bundle.write_bytes(encoded(frozen))
     record_path = work / 'review-input.json'
     record_path.write_bytes(encoded(plan))
@@ -347,6 +363,7 @@ def main():
     parser.add_argument('--reply-to', action='append', default=[], help='새 사용자 답이 해소하는 미정 질문 ID')
     parser.add_argument('--resolution-review', help='새 답 없이 잘못 표시한 미정을 정정할 독립 검토 회차 경로')
     parser.add_argument('--findings', help='독자가 반환한 새 미정 요구 JSON 배열')
+    parser.add_argument('--evidence', action='append', default=[], help='원문과 구분해 보존할 실제 검사·관찰 증거 파일')
     parser.add_argument('--answer')
     args = parser.parse_args()
     work = args.work.resolve(); work.mkdir(parents=True, exist_ok=True)

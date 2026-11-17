@@ -283,7 +283,7 @@ def review_targets(values, root):
 
 class ReviewInputs:
     """검토자에게 넘긴 근거 입력(지도의 기준·맥락, 원문·산출물 파일)의 읽기와 현재성 확인을 함께 소유한다."""
-    VERSION = 3
+    VERSION = 4
 
     def __init__(self, root, map_rel=None):
         self.cache = {}
@@ -298,9 +298,9 @@ class ReviewInputs:
 
     @classmethod
     def selected_content(cls, text, definition):
-        if definition == 'records':
+        if definition in ('records', 'evidence'):
             return json.dumps([json.loads(line) for line in text.splitlines()
-                               if line.strip() and json.loads(line).get('kind') == 'record'],
+                               if line.strip() and json.loads(line).get('kind') in (('record', 'check') if definition == 'evidence' else ('record',))],
                               ensure_ascii=False, sort_keys=True)
         return cls.definition(text) if definition else text
 
@@ -313,6 +313,12 @@ class ReviewInputs:
                                        "sha256": hashlib.sha256(text.encode()).hexdigest()})
         return text
 
+    def watch_bytes(self, path, role):
+        """본문은 검토 묶음에 있고, 원본 로그·첨부는 바이트 그대로 변경을 감지한다."""
+        path = os.path.abspath(path)
+        self.snapshot['files'].append({'path': path, 'role': role, 'definition': 'bytes',
+                                      'sha256': hashlib.sha256(Path(path).read_bytes()).hexdigest()})
+
     @classmethod
     def current(cls, snapshot):
         if (not isinstance(snapshot, dict) or snapshot.get("version") != cls.VERSION
@@ -320,9 +326,12 @@ class ReviewInputs:
             return False
         try:
             for item in snapshot["files"]:
-                text = Path(item["path"]).read_text(encoding="utf-8")
-                text = cls.selected_content(text, item["definition"])
-                if hashlib.sha256(text.encode()).hexdigest() != item["sha256"]:
+                if item["definition"] == 'bytes':
+                    raw = Path(item["path"]).read_bytes()
+                else:
+                    text = Path(item["path"]).read_text(encoding="utf-8")
+                    raw = cls.selected_content(text, item["definition"]).encode()
+                if hashlib.sha256(raw).hexdigest() != item["sha256"]:
                     return False
             return True
         except (OSError, UnicodeError, KeyError, TypeError, ValueError):
@@ -746,7 +755,13 @@ def prepare(args, record_path=None):
         if map_rel or opt(args, '--base'):
             raise ValueError('대표 기록과 수동 지도·기준 커밋을 함께 받지 않는다')
         plan = json.loads(inputs.read(record_path, 'requirements'))
-        inputs.read(Path(record_path).parent / 'journal.jsonl', 'journal', definition='records')
+        work = Path(record_path).parent
+        journal = inputs.read(work / 'journal.jsonl', 'journal', definition='evidence')
+        for event in json.loads(journal):
+            for item in event.get('results', []):
+                inputs.watch_bytes(item['output'], 'check-log')
+            for item in event.get('evidence', []):
+                inputs.watch_bytes(work / item['file'], 'evidence')
         targets, target_problems = review_targets([(t['name'], t['path'], t['base']) for t in plan['targets']], root)
         problems += target_problems
         record_requirements = plan['requirements']

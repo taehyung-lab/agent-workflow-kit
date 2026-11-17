@@ -182,9 +182,10 @@ def conversation_checks():
  # 분류 실패는 감추지 않는다(compare.py 가 증거 부족으로 남긴다)
  def broken(text,topics): raise RuntimeError("분류 실패")
  m=MockUser(["요청"],answer,"t",broken); m.prompt(1); m.observe("주제일?")
- try: m.prompt(2); raised=False
- except RuntimeError: raised=True
- assert raised
+ assert m.prompt(2)==answer+"\n\n"+ANSWERED
+ assert m.answered=={1,2,3} and m.discovery_error=="분류 실패" and m.prompt(3)==CLOSE
+ from table import discovery_state
+ assert discovery_state({"conversation_contract":"fixed-policy-v1","mock_error":m.discovery_error})==("unverified",[])
  # 제품 변경은 시작 커밋과의 차이: 커밋해도 잡히고, 증거 diff 에 새 파일 내용까지 남는다
  with tempfile.TemporaryDirectory(prefix="conv-") as d:
   G=["git","-c","user.name=t","-c","user.email=t@invalid","-c","commit.gpgsign=false"]

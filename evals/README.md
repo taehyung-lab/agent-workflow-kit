@@ -99,7 +99,7 @@ python3 -I evals/flowtest.py # 설치된 검토 도구(verify.py): 반환·재�
 python3 -I evals/sandboxtest.py # 실제 codex sandbox -P :workspace 안의 verify(.git 읽기 전용 경계). codex 가 없으면 미실행(종료 3), 통과로 세지 않음
 ```
 
-GitHub CI 가 매 push 마다 `selftest.sh` 를 돌린다. 판정 검사를 고쳤으면 `python3 -I evals/rejudge.py evals/results/<폴더>` 로 저장된 결과를 다시 판정한다(실행 때의 입력 조건을 복원한다).
+GitHub CI 가 매 push 마다 `selftest.sh` 를 돌린다. 이 진입점은 미커밋 변경을 포함한 코드·검사·표본을 한 Git 고정본으로 만들고, 출력에 commit·tree를 남긴 뒤 그 복사본의 `selftest-run.sh`에서 전체 검사를 실행한다. 실행 중 원본의 변경은 다음 실행에 반영된다. 판정 검사를 고쳤으면 `python3 -I evals/rejudge.py evals/results/<폴더>` 로 저장된 결과를 다시 판정한다(실행 때의 입력 조건을 복원한다).
 
 ## 독립 검증 루프 (EVALS_VERIFY=1)
 

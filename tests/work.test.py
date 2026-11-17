@@ -78,6 +78,38 @@ class WorkTest(unittest.TestCase):
   rc,r=self.runwork('review','--answer',str(answer));self.assertEqual(r['completion'],'verified',r)
   attachment.write_text('검토한 변경의 일부를 제거')
   rc,r=self.runwork('review','--answer',str(answer));self.assertEqual(r['completion'],'unverified',r)
+ def test_missing_attachment_can_be_corrected_and_retried(self):
+  self.record();extra=self.root/'extra.txt';extra.write_text('evidence')
+  rc,r=self.runwork('record','--evidence',str(extra),'--evidence',str(self.root/'missing'))
+  self.assertNotEqual(rc,0)
+  self.assertFalse((self.work/'evidence/0001.txt').exists())
+  rc,r=self.runwork('record','--evidence',str(extra));self.assertEqual(rc,0,r)
+ def test_review_keeps_failed_run_criteria_and_supplement(self):
+  self.data['checks'][0]['argv']=['python3','-c','print("BEFORE_FAILURE");raise SystemExit(1)'];self.record();self.runwork('check')
+  self.data['checks'][0]['argv']=['python3','-c','print("AFTER_SUCCESS")'];self.plan.write_text(json.dumps(self.data))
+  self.runwork('record','--plan',str(self.plan))
+  extra=self.root/'extra.txt';extra.write_bytes(b'INDEPENDENT_OBSERVATION\r\n')
+  rc,r=self.runwork('record','--evidence',str(extra));self.assertEqual(rc,0,r)
+  self.runwork('check');rc,r=self.runwork('review');self.assertEqual(rc,0,r)
+  prompt=Path(r['prompt_file']).read_text()
+  for marker in ['BEFORE_FAILURE','AFTER_SUCCESS','INDEPENDENT_OBSERVATION','raise SystemExit(1)']:
+   self.assertIn(marker,prompt)
+  self.assertEqual((self.work/'evidence/0001.txt').read_bytes(),extra.read_bytes())
+  answer=self.root/'answer.txt';answer.write_text(self.review_answer('과거 실패와 현재 성공을 별도로 대조'))
+  rc,r=self.runwork('review','--answer',str(answer));self.assertEqual(r['completion'],'verified',r)
+  (self.work/'evidence/0001.txt').write_text('changed')
+  rc,r=self.runwork('review','--answer',str(answer));self.assertEqual(r['completion'],'unverified',r)
+ def test_historical_log_tamper_blocks_review_and_finish(self):
+  self.record();self.runwork('check')
+  first=json.loads((self.work/'journal.jsonl').read_text().splitlines()[-1])
+  self.runwork('check');rc,r=self.runwork('review');self.assertEqual(rc,0,r)
+  answer=self.root/'answer.txt';answer.write_text(self.review_answer('전후 근거 대조'))
+  kept=r['kept']
+  Path(first['results'][0]['output']).write_text('changed')
+  direct=subprocess.run(['python3',str(TOOL.with_name('verify.py')),'finish','--round',kept,'--check','PASS'],cwd=self.repo,input=answer.read_text(),text=True,capture_output=True)
+  self.assertEqual(json.loads(direct.stdout)['completion'],'unverified')
+  for args in [('review',),('review','--answer',str(answer))]:
+   rc,r=self.runwork(*args);self.assertEqual(r['completion'],'unverified',r)
  def test_single_target_uses_its_own_review_rules(self):
   (self.repo/'AGENTS.md').write_text('대상 고정 규칙')
   rules=self.repo/'.agents/skills/wf-verify/SKILL.md';rules.parent.mkdir(parents=True);rules.write_text('대상 검토자 기준')

@@ -58,6 +58,69 @@ class EvaluationContract(unittest.TestCase):
         self.assertIn('1. 대여 금지', user.prompt(2))
         self.assertNotIn('추천안대로', user.prompt(3))
 
+    def test_compare_completes_fixed_policy_after_classifier_outage(self):
+        import os, runpy
+        import session, pins, turnwatch
+        class Harness:
+            def __init__(self, project, **kwargs):
+                self.project=project; self.session_id='fake'; self.count=0
+            def start(self, prompt, prefix):
+                self.count+=1
+                if self.count == 2:
+                    self_test.assertIn('1.', prompt)
+                    task=ROOT/'evals/goalflow/tasks/labels/control'
+                    for source in task.glob('*.py'):
+                        shutil.copy2(source, self.project/source.name)
+                log=Path(str(prefix)+'.jsonl')
+                log.write_text(json.dumps({'type':'assistant','message':{'content':[{'type':'text','text':'기존 이름과 대여 정책은 어떻게 처리할까요?'}]}})+'\n')
+                return SimpleNamespace(exit_code=0,log=log)
+            resume=start
+            def instruction_context(self): return {}
+            def close(self, path): pass
+        class Watch:
+            def __init__(self, project): pass
+            def stop(self): return {}
+        self_test=self
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.dict(os.environ, {'CMP_TASK':'labels','MOCK':'asked'}), \
+             patch.object(sys,'argv',['compare.py','none','codex','1',directory]), \
+             patch.dict(session.HARNESSES, {'codex':Harness}), \
+             patch.object(pins,'check', return_value=None), \
+             patch.object(pins,'cli_version', return_value='fake'), \
+             patch.object(turnwatch,'Watch',Watch), \
+             patch.object(asked,'surfaced',side_effect=RuntimeError('quota exhausted')), \
+             contextlib.redirect_stdout(io.StringIO()):
+            runpy.run_path(str(ROOT/'evals/goalflow/compare.py'),run_name='__main__')
+            data=json.loads(Path(directory,'none-codex-1.json').read_text())
+            self.assertEqual(len(data['turns']),3)
+            self.assertEqual(data['answered'],data['policy_topics'])
+            self.assertEqual(data['mock_error'],'quota exhausted')
+            result=result_meta(data)
+            self.assertEqual(result['goalflow']['final_behavior'],'PASS',result)
+            self.assertEqual(result['goalflow']['discovery'],'unverified')
+            self.assertFalse(result['check_passed'])
+
+    def test_partial_classification_outage_preserves_quotes_without_claiming_discovery(self):
+        def classify(text, topics):
+            if text == 'second':
+                raise RuntimeError('quota exhausted')
+            return {1: 'first'}
+        user = MockUser(['request', 'followup'], '1. first\n2. second', 'topics', classify)
+        user.observe('first'); user.observe('second')
+        self.assertIn('2. second', user.prompt(3))
+        self.assertEqual(user.quotes, {1: 'first'})
+        data = summary('kit', conversation_contract='fixed-policy-v1', policy_topics=[1, 2],
+                       discovered=sorted(user.discovered), answered=sorted(user.answered), mock_error=user.discovery_error)
+        result = result_meta(data)
+        self.assertEqual(result['goalflow']['discovery'], 'unverified')
+        self.assertEqual(result['goalflow']['final_behavior'], 'PASS')
+        self.assertFalse(result['check_passed'])
+        self.assertNotIn('끝까지 진행하지 못했다', result['check_output'])
+        data['turns'][0]['product_touched'] = ['service.py']
+        result = result_meta(data)
+        self.assertEqual(result['goalflow']['process'], 'violation')
+        self.assertIn('FAIL 답 전에', result['check_output'])
+
     def test_discovery_failure_does_not_claim_unauthorized_implementation(self):
         data = summary('kit', conversation_contract='fixed-policy-v1',
                        policy_topics=[1, 2], discovered=[1], answered=[1, 2])

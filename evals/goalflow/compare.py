@@ -39,8 +39,10 @@ from turnwatch import Watch  # noqa: E402
 from table import result_meta, discovery_scope  # noqa: E402
 
 arm, harness, idx, out = sys.argv[1], sys.argv[2], sys.argv[3], Path(sys.argv[4]).resolve()
-# 고정한 CLI 가 아니면 같은 조건의 비교가 아니다. 모의 사용자(asked.py)는 하네스와 상관없이 claude CLI 로 돈다.
-for mismatch in filter(None, (pins.check(harness), pins.check("claude"))):
+# 실행 하네스는 시작 전에, 발견 분류기는 분류할 때 자신의 고정 버전을 확인한다.
+MOCK = os.environ.get("MOCK", "asked")
+mismatch = pins.check(harness)
+if mismatch:
     sys.exit(mismatch)
 name = f"{arm}-{harness}-{idx}"
 out.mkdir(parents=True, exist_ok=True)
@@ -81,12 +83,15 @@ request = next(f for f in (TASK / "request.txt", TASK / "fixture/request.txt") i
 answer = (TASK / "answer.txt").read_text(encoding="utf-8").strip()
 topics = (TASK / "topics.txt").read_text(encoding="utf-8").strip()
 # 고정 정책을 모두 전달한다. asked는 전달 전 발견한 선택을 따로 측정하며 all은 구현만 비교한다.
-MOCK = os.environ.get("MOCK", "asked")
 PREFIX = os.environ.get("CMP_PREFIX", "grilling 스킬로 요구를 확인한 다음 tdd 스킬로 구현해 주세요." if arm == "skills" else "")
 FIRST = (PREFIX + "\n\n" if PREFIX else "") + request
 # 정해진 사용자 글(요청, 있으면 followup.txt). 그 뒤 턴은 모의 사용자의 답, 마지막은 마무리 지시다.
 STATIC = [FIRST] + ([(TASK / "followup.txt").read_text(encoding="utf-8").strip()] if (TASK / "followup.txt").is_file() else [])
-classifier = lambda reply, topics: surfaced(reply, topics, record_dir=out / f"{name}.classifier")
+def classifier(reply, topics):
+    mismatch = pins.check("claude")
+    if mismatch:
+        raise RuntimeError(mismatch)
+    return surfaced(reply, topics, record_dir=out / f"{name}.classifier")
 mock = MockUser(STATIC, answer, topics, classifier, MOCK)
 DECISION_TURNS = decision_contract(TASK, len(STATIC))
 discovery_file = TASK / 'discovery.json'
@@ -117,14 +122,9 @@ try:
         return changes_since(proj, base, STATE)
 
 
-    mock_error = None
     for n in range(1, mock.turns + 1):
         before = set(mock.answered)
-        try:
-            prompt = mock.prompt(n)
-        except RuntimeError as e:  # 모의 사용자 분류 실패: 증거 부족(검토 필요)으로 남기고 멈춘다
-            mock_error = str(e)[:300]
-            break
+        prompt = mock.prompt(n)
         start_product = product_snapshot(proj, STATE)
         try:
             watch, watch_error = Watch(proj), None
@@ -180,7 +180,7 @@ try:
                **goalflow_fingerprints(TASK), "global_instructions": implementation.instruction_context(),
                "prompt_configuration": {"prefix_override": os.environ.get("CMP_PREFIX")}, "effective_prefix": PREFIX,
                "conversation_contract": CONVERSATION_CONTRACT, "policy_topics": sorted(mock.items), **DISCOVERY, "discovered": sorted(mock.discovered),
-               "surfaced_quotes": {str(t): q for t, q in mock.quotes.items()}, "mock_error": mock_error, "map": any((proj / "work").glob("*/work.md")), "final_changes": product_changes(), "init": init,
+               "surfaced_quotes": {str(t): q for t, q in mock.quotes.items()}, "mock_error": mock.discovery_error, "map": any((proj / "work").glob("*/work.md")), "final_changes": product_changes(), "init": init,
                "oracle_exit": oracle.returncode, "automated_valid": verdict.get("automated_valid"), "observation_complete": verdict.get("observation_complete"),
                "failed": [c.get("name") for c in cases if c.get("passed") is False], "failed_decision": verdict.get("failed_decision"), "unobserved": [c.get("name") for c in cases if c.get("passed") is None],
                "n_cases": len(cases), "oracle_error": verdict.get("error"), "public_tests_rc": smoke.returncode}

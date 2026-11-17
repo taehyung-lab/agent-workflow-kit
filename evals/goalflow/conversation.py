@@ -132,6 +132,7 @@ class MockUser:
         self.turns = self.answer_turn + 1
         self.replies, self.quotes = [], {}
         self.delivered = False
+        self.discovery_error = None
 
     @property
     def answered(self):
@@ -147,7 +148,7 @@ class MockUser:
             self.replies.append(reply)
 
     def prompt(self, n):
-        """n 번째 턴(1부터)에 보낼 사용자 글. 모의 사용자 분류가 실패하면 RuntimeError(증거 부족)."""
+        """n 번째 턴(1부터)에 보낼 사용자 글. 분류 장애도 보존하되 고정 답 전달은 계속한다."""
         if n <= len(self.static):
             return self.static[n - 1]
         if n > self.answer_turn:
@@ -156,10 +157,13 @@ class MockUser:
             self.delivered = True
             return self.answer + "\n\n" + ANSWERED
         found = {}
-        for reply in self.replies:
-            for t, quote in (self.surfaced(reply, self.topics) if reply.strip() else {}).items():
-                if t in self.items:
-                    found.setdefault(t, quote)
+        try:
+            for reply in self.replies:
+                for t, quote in (self.surfaced(reply, self.topics) if reply.strip() else {}).items():
+                    if t in self.items:
+                        found.setdefault(t, quote)
+        except RuntimeError as exc:
+            self.discovery_error = str(exc)[:300]
         self.quotes = dict(sorted(found.items()))
         self.delivered = True
         return self.answer + "\n\n" + ANSWERED

@@ -6,6 +6,7 @@
 python3 .agents/skills/wf-verify/work.py record W --request request.txt --plan plan.json
 python3 .agents/skills/wf-verify/work.py record W --findings reader.json
 python3 .agents/skills/wf-verify/work.py record W --request answer.txt --plan revised-plan.json
+python3 .agents/skills/wf-verify/work.py record W --evidence before-failure.txt --evidence observed-result.txt
 python3 .agents/skills/wf-verify/work.py check W
 python3 .agents/skills/wf-verify/work.py review W
 python3 .agents/skills/wf-verify/work.py review W --answer review-answer.txt
@@ -23,9 +24,9 @@ python3 .agents/skills/wf-verify/work.py review W --answer review-answer.txt
 
 `check`는 대상별 명령을 실행하고 출력·종료 코드·코드 상태를 보존한다. 미정이면 실행하지 않고 대기한다. 누락된 요구의 검사, 장애, 시간 초과, 검사 중 제품 변경은 미확인이다. 기본은 검사 성공 뒤 검토를 기다린다. 필수 독립 검토 조건에 해당하지 않는 작업은 계획에 review_required: false를 명시할 수 있다. 이 선택의 타당성과 최종 원문 대조는 에이전트가 책임진다.
 
-`review`는 구조화한 현재 요구·대상을 기존 검토 핵심에 직접 넘긴다. 생성된 work.md는 읽기용이며 판정 입력이 아니다.
+`review`는 현재 요구·대상·최신 검사와 함께 이전 요구·검사 명령·실패 출력을 기존 검토 핵심에 넘긴다. 과거 실행은 이력이며 현재 PASS를 대신하지 않는다. 별도 재현·관찰 로그는 `record --evidence`로 원문과 구분해 바이트 그대로 보존한다. 증거 추가도 검토 맥락을 바꾸므로 최종 check 전에 기록한다. 생성된 work.md는 읽기용이며 판정 입력이 아니다.
 
-`review`가 낸 prompt_file을 별도 검토자에게 그대로 넘기고 받은 답을 수정 없이 --answer로 준다. 큰 변경은 전체 diff를 읽기 전용 근거 파일로 전달하므로 검토자는 안내된 파일을 끝까지 읽는다. 원문·계획·대상·검사 출력·전체 변경 근거가 바뀌면 이전 증거는 완료에 쓰지 않는다. 실패는 원인을 고치고 check부터, 반환은 prepare를 다시 만드는 review부터 진행한다. 검토 한도는 기존 verify.py가 관리한다.
+`review`가 낸 prompt_file을 별도 검토자에게 그대로 넘기고 받은 답을 수정 없이 --answer로 준다. 큰 변경은 전체 diff를 읽기 전용 근거 파일로 전달하므로 검토자는 안내된 파일을 끝까지 읽는다. 원문·계획·대상·현재/과거 검사 출력·보존한 추가 증거·전체 변경 근거가 바뀌거나 없어지면 이전 증거는 완료에 쓰지 않는다. 실패는 원인을 고치고 check부터, 반환은 prepare를 다시 만드는 review부터 진행한다. 검토 한도는 기존 verify.py가 관리한다.
 
 대상 수와 기록 형식에 관계없이 내부 구현·검토는 해당 저장소의 적용 기준을 따른다. review는 대상마다 내부 검토 조건을 붙인다. 검토자는 대상의 고정 기준으로 직접 검토하고, 별도 역할·절차가 필수면 그 결과도 확인한다. 기존 검토는 원문·대상 버전·검사와 현재성을 확인할 수 있을 때만 재사용한다. 누락·실패·미확인인 대상 조건을 빼고 전체 완료로 판정할 수 없다. 여러 대상이면 저장소를 잇는 요구도 별도로 대조한다. 이 도구는 파일 소유자의 조작을 막는 보안 장치가 아니며 원문 누락·숨은 미정·검사의 타당성은 독립 검토가 확인한다.
 
