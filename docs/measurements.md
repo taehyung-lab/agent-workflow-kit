@@ -126,7 +126,7 @@ MOCK=all은 같은 고정 정책 전체를 답 턴에 전달하며 자동 발견
 
 ## v4 목적 중심 구조 교정 (2026-11-17, 로컬 후보)
 
-요구 기록→표→다시 기록을 읽던 경로를 구조화 입력→공통 검토로 바꿨고, 일반 평가와 목표 대화가 같은 세션 실행을 사용하게 했다. 실행과 순수 결과 해석도 분리했다. 비교 조건이 없거나 다르면 개선·퇴보를 주장하지 않게 했다. 현재 구조·16개 책임은 [direction.md](direction.md), 이전 결정 원문은 [direction-history.md](direction-history.md)에 있다.
+요구 기록→표→다시 기록을 읽던 경로를 구조화 입력→공통 검토로 바꿨고, 일반 평가와 목표 대화가 같은 세션 실행을 사용하게 했다. 실행과 순수 결과 해석도 분리했다. 비교 조건이 없거나 다르면 개선·퇴보를 주장하지 않게 했다. 현재 구조와 통과 조건은 [direction.md](direction.md), 이전 결정 원문은 [direction-history.md](direction-history.md)에 있다.
 
 원시 자료는 이 작업 트리의 `work/purpose-led-v4/`에 보존했다. `measurement-manifest.json`이 실행 구성과 제한을, `models/`와 `final-models/`가 대화·출력·완료 프로젝트를 보존한다. 기존 평가 결과나 실패 점수를 소급해 수정하지 않았다. 모델은 Codex `gpt-6.1-sol`/CLI0.169.0, Claude `claude-opus-5-5`/CLI2.1.326, 모의 사용자 `claude-sonnet-5-5`로 고정했다. 스킬 구성은 깨끗한 `5863806dd4e15c63174bee4e7515a4256792ecfa` 체크아웃의 grilling·tdd다.
 

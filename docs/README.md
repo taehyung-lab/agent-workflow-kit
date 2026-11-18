@@ -4,7 +4,7 @@
 
 | 문서 | 언제 보나 |
 | --- | --- |
-| [direction.md](direction.md) | 키트의 목적, 16개 기능의 책임·연결, 현재 평가·채택 기준을 볼 때 |
+| [direction.md](direction.md) | 키트의 목적, 통과 조건과 지금 값, 현재 평가·채택 기준을 볼 때 |
 | [direction-history.md](direction-history.md) | 과거 사용자 결정·분리 이유·당시 측정 범위와 고정 참고 출처를 확인할 때 |
 | [skill-selection.md](skill-selection.md) | 스킬의 소개문(description)이나 담당 범위를 바꿀 때. 새 세션이 실제 요청을 받고 맞는 스킬을 골라 읽는지, 필요 없는 단계를 강제하지 않는지 확인하는 방법 |
 | [measurements.md](measurements.md) | 어떤 변경을 무엇으로 쟀고 무엇을 세지 않았는지, 날짜·버전별 실측 기록을 확인할 때. 측정 표와 실행별 수치는 여기에 둔다 |
