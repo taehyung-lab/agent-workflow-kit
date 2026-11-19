@@ -31,9 +31,19 @@ def _plain(text):
     return re.sub(r"[\s*`_>\-•]+", "", text)
 
 
-def parse_quotes(stdout):
-    """분류기 출력의 {"quotes": {...}} 답. 같은 답을 설명과 함께 여러 번 낸 경우는 하나로 본다.
-    서로 다른 답이 여럿이거나 답이 없으면 형식 오류다(어느 쪽을 골라도 판정을 지어내는 셈이다)."""
+def _topics_asked(quotes):
+    return {k for k, q in quotes.items() if q is not None} if isinstance(quotes, dict) else None
+
+
+def _verifiable(quotes, body):
+    return isinstance(quotes, dict) and all(
+        q is None or (isinstance(q, str) and len(_plain(q)) >= 4 and _plain(q) in body) for q in quotes.values())
+
+
+def parse_quotes(stdout, reply=None):
+    """분류기 출력의 {"quotes": {...}} 답. 답을 설명과 함께 여러 번 낸 경우(서식만 고친 재인용 등),
+    물었다고 본 주제가 모두 같으면 판정이 같으므로 원문에서 확인되는 답을 쓴다.
+    물었다고 본 주제가 서로 다르거나 답이 없으면 형식 오류다(어느 쪽을 골라도 판정을 지어내는 셈이다)."""
     decoder, answers = json.JSONDecoder(), []
     for m in re.finditer(r'\{\s*"quotes"\s*:', stdout):
         try:
@@ -43,8 +53,13 @@ def parse_quotes(stdout):
             continue
     if not answers:
         raise RuntimeError("모의 사용자 판단 실패: " + stdout[-300:])
-    if any(a != answers[0] for a in answers[1:]):
+    if any(_topics_asked(a) != _topics_asked(answers[0]) for a in answers[1:]):
         raise RuntimeError('모의 사용자 답 형식 오류: 서로 다른 답이 여러 개다')
+    if reply is not None:
+        body = _plain(reply[:12000])
+        for a in answers:
+            if _verifiable(a, body):
+                return a
     return answers[0]
 
 
@@ -81,7 +96,7 @@ def surfaced(reply, topics, record_dir=None):
         (evidence / 'execution.json').write_text(json.dumps({'model': pins.mock_user_model(), 'exit_code': r.returncode}))
     if r.returncode:
         raise RuntimeError("모의 사용자 판단 실패: " + (r.stdout + r.stderr)[-300:])
-    quotes = parse_quotes(r.stdout)
+    quotes = parse_quotes(r.stdout, reply)
     expected = {str(n) for n in numbers}
     reason = None
     if not isinstance(quotes, dict) or set(quotes) != expected:

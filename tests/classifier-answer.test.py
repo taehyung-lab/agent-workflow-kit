@@ -14,7 +14,13 @@ class ClassifierAnswerTest(unittest.TestCase):
 
     def test_different_answers_stop(self):
         with self.assertRaisesRegex(RuntimeError, '서로 다른 답'):
-            parse_quotes(ANSWER + '\n' + '{"quotes": {"1": "나", "2": null}}')
+            parse_quotes(ANSWER + '\n' + '{"quotes": {"1": null, "2": "나"}}')
+
+    def test_same_topics_reworded_uses_verifiable_quote(self):
+        reply = '1. **가나다 라:** 물었다'
+        first = '{"quotes": {"1": "가나다 라마", "2": null}}'
+        fixed = '{"quotes": {"1": "**가나다 라:** 물었다", "2": null}}'
+        self.assertEqual(parse_quotes(first + '\nCorrection:\n' + fixed, reply), {'1': '**가나다 라:** 물었다', '2': None})
 
     def test_no_answer_stops(self):
         with self.assertRaisesRegex(RuntimeError, '판단 실패'):
