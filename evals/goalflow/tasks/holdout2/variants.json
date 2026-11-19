@@ -1,0 +1,41 @@
+{
+  "미수금차단": {
+    "files": {
+      "service.py": "variants/미수금차단/service.py"
+    },
+    "failed_given": [],
+    "failed_decision": [
+      "일반미수금출고허용",
+      "무대의상미수금출고허용"
+    ]
+  },
+  "누구나수령": {
+    "files": {
+      "service.py": "variants/누구나수령/service.py"
+    },
+    "failed_given": [],
+    "failed_decision": [
+      "미등록수령인거절"
+    ]
+  },
+  "과거출고차단": {
+    "files": {
+      "service.py": "variants/과거출고차단/service.py"
+    },
+    "failed_given": [],
+    "failed_decision": [
+      "재수선재출고허용",
+      "재수선수령인변경허용"
+    ]
+  },
+  "본인만수령": {
+    "files": {
+      "service.py": "variants/본인만수령/service.py"
+    },
+    "failed_given": [],
+    "failed_decision": [
+      "등록대리수령허용",
+      "재수선수령인변경허용"
+    ]
+  }
+}
