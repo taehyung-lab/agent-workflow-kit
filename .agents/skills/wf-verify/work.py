@@ -17,7 +17,9 @@ import time
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'wf-ask'))
 import verify
+import situations
 
 
 def digest(data):
@@ -169,6 +171,9 @@ def render(work, events):
     for req in plan['requirements']:
         commands = ', '.join(c['id'] for c in plan['checks'] if req['id'] in c['requirements']) or '미확인'
         refs = ', '.join(f'sources/{n:04}.txt' for n in req['source'])
+        by = req.get('decided_by')
+        if by:
+            refs += f" — {by['kind']}{' ' + by['file'] if by.get('file') else ''} “{by['quote']}”"
         lines.append(f"| {req['id']} | {cell(req['expect'])} | {refs} | | {commands} | {req['state']} |")
     (work / 'resolution-context.md').write_text(resolution_context(plan))
     (work / 'work.md').write_text('\n'.join(lines) + '\n')
@@ -198,10 +203,14 @@ def record(work, args, events):
     if findings:
         if not plan:
             raise ValueError('독자 발견을 더할 현재 계획이 필요하다')
+        # 독자는 찾은 상황을 모두 넘긴다. 확정은 그 결과를 말하는 인용이 원문·합의 문서에 있을 때만 남고, 아니면 미정이 된다.
+        texts = [(work / s['file']).read_text(encoding='utf-8') for s in previous] + [raw.decode('utf-8') for raw in incoming]
+        sorted_out = situations.classify(findings, texts, [Path(t['path']) for t in plan['targets']])
+        findings = sorted_out['settled'] + sorted_out['open']
         validate({'targets': plan['targets'], 'requirements': findings, 'checks': []}, len(previous) + len(incoming))
         existing = {r['id'] for r in plan['requirements']}
-        if any(r['state'] != '미정' or r['id'] in existing for r in findings):
-            raise ValueError('독자 발견은 중복 없는 새 미정 요구여야 한다')
+        if any(r['id'] in existing for r in findings):
+            raise ValueError('독자 발견은 현재 요구와 겹치지 않는 새 ID여야 한다')
     # 미정 해소 출처는 기록한다. 답의 의미는 독립 검토에서도 대조한다.
     event = {'kind': 'record', 'time': time.time(), 'sources': []}
     for raw in incoming:
@@ -224,7 +233,10 @@ def record(work, args, events):
     if findings:
         event['findings'] = findings
     append(work, event); events.append(event); render(work, events)
-    return {'state': 'recorded', 'sources': len(sources(events)), 'map': str(work / 'work.md')}, 0
+    result = {'state': 'recorded', 'sources': len(sources(events)), 'map': str(work / 'work.md')}
+    if findings:
+        result['demoted'] = sorted_out['demoted']
+    return result, 0
 
 
 def fingerprint(plan):
@@ -347,7 +359,7 @@ def main():
     parser.add_argument('--plan')
     parser.add_argument('--reply-to', action='append', default=[], help='새 사용자 답이 해소하는 미정 질문 ID')
     parser.add_argument('--resolution-review', help='새 답 없이 잘못 표시한 미정을 정정할 독립 검토 회차 경로')
-    parser.add_argument('--findings', help='독자가 반환한 새 미정 요구 JSON 배열')
+    parser.add_argument('--findings', help='독자가 반환한 상황 배열(확정은 인용 출처를 확인하고, 없으면 미정으로 기록)')
     parser.add_argument('--evidence', action='append', default=[], help='원문과 구분해 보존할 실제 검사·관찰 증거 파일')
     parser.add_argument('--answer')
     args = parser.parse_args()
