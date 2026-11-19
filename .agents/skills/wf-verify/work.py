@@ -198,14 +198,16 @@ def record(work, args, events):
     elif args.resolution_review:
         raise ValueError('독립 검토로 미정을 정정할 계획이 필요하다')
     findings = json.loads(Path(args.findings).read_text()) if args.findings else []
-    if not isinstance(findings, list):
-        raise ValueError('독자 발견은 요구 배열이어야 한다')
+    if not isinstance(findings, (list, dict)):
+        raise ValueError('독자 발견은 상황 배열 또는 상태 × 명령 표여야 한다')
     if findings:
         if not plan:
             raise ValueError('독자 발견을 더할 현재 계획이 필요하다')
         # 독자는 찾은 상황을 모두 넘긴다. 확정은 그 결과를 말하는 인용이 원문·합의 문서에 있을 때만 남고, 아니면 미정이 된다.
         texts = [(work / s['file']).read_text(encoding='utf-8') for s in previous] + [raw.decode('utf-8') for raw in incoming]
         sorted_out = situations.classify(findings, texts, [Path(t['path']) for t in plan['targets']])
+        if sorted_out['missing']:
+            raise ValueError(f"상태 × 명령 표에 상황이 없는 칸이 있다: {sorted_out['missing']}")
         findings = sorted_out['settled'] + sorted_out['open']
         validate({'targets': plan['targets'], 'requirements': findings, 'checks': []}, len(previous) + len(incoming))
         existing = {r['id'] for r in plan['requirements']}

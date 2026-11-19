@@ -19,11 +19,18 @@ class SituationsTest(unittest.TestCase):
         (self.root / 'docs').mkdir(); (self.root / 'docs/rules.md').write_text(CONTRACT)
         self.request = self.root / 'request.txt'; self.request.write_text(REQUEST)
 
-    def run_tool(self, items):
-        path = self.root / 'situations.json'; path.write_text(json.dumps(items, ensure_ascii=False))
+    def run_tool(self, items, axes=None, code=0):
+        """axes 를 주지 않으면 항목마다 고유한 칸을 만들어 표 확인을 통과시킨다(출처 확인만 보는 시험)."""
+        if axes is None:
+            for n, item in enumerate(items):
+                item.setdefault('cell', [f's{n}', 'c'])
+            axes = {'states': [{'name': item['cell'][0], 'where': 'data.json'} for item in items],
+                    'commands': [{'name': 'c', 'where': 'app.py'}]}
+        path = self.root / 'situations.json'
+        path.write_text(json.dumps({'axes': axes, 'situations': items}, ensure_ascii=False))
         r = subprocess.run([sys.executable, '-I', str(TOOL), str(path), '--request', str(self.request), '--root', str(self.root)],
                            capture_output=True, text=True)
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.returncode, code, r.stdout + r.stderr)
         return json.loads(r.stdout)
 
     def ids(self, result, key):
@@ -62,6 +69,31 @@ class SituationsTest(unittest.TestCase):
         result = self.run_tool([{'id': 'Q1', 'expect': '빌린 물품 새로 담기 → 허용 / 거절', 'source': [1], 'state': '미정'}])
         self.assertEqual(self.ids(result, 'open'), ['Q1'])
 
+    def test_empty_cell_stops(self):
+        # 저장 실행: '이미 겹친 기록 × 보존'은 합의 문장으로 정했고 '이미 겹친 기록 × 옮기기'는 상황이 없어 묻지 않았다.
+        axes = {'states': [{'name': '이미 겹친 기록', 'where': 'data.json:7-8'}, {'name': '확정 기록', 'where': 'data.json:3'}],
+                'commands': [{'name': '보존', 'where': 'app.py:load'}, {'name': '옮기기', 'where': 'app.py:move'}]}
+        items = [
+            {'id': 'Q1', 'cell': ['이미 겹친 기록', '보존'], 'expect': '이미 겹친 기록 → 그대로', 'source': [1], 'state': '확정',
+             'decided_by': {'kind': '합의', 'file': 'docs/rules.md', 'quote': '이미 들어 있는 기록은 지우거나 바꾸지 않는다.'}},
+            {'id': 'Q2', 'cell': ['확정 기록', '보존'], 'expect': '확정 기록 → 그대로', 'source': [1], 'state': '미정'},
+            {'id': 'Q3', 'cell': ['확정 기록', '옮기기'], 'expect': '확정 기록 옮기기 → 허용 / 거절', 'source': [1], 'state': '미정'}]
+        result = self.run_tool(items, axes, code=3)
+        self.assertEqual(result['missing'], [['이미 겹친 기록', '옮기기']])
+        items.append({'id': 'Q4', 'cell': ['이미 겹친 기록', '옮기기'], 'expect': '이미 겹친 기록을 옮겨도 겹침이 남음 → 허용 / 거절',
+                      'source': [1], 'state': '미정'})
+        result = self.run_tool(items, axes)
+        self.assertEqual(result['missing'], [])
+        self.assertIn('Q4', self.ids(result, 'open'))
+
+    def test_table_needs_real_locations_and_known_cells(self):
+        axes = {'states': [{'name': '확정 기록', 'where': ''}], 'commands': [{'name': '옮기기', 'where': 'app.py'}]}
+        item = {'id': 'Q1', 'cell': ['확정 기록', '옮기기'], 'expect': '옮기기 → 허용 / 거절', 'source': [1], 'state': '미정'}
+        self.assertIn('where', self.run_tool([item], axes, code=3)['error'])
+        axes['states'][0]['where'] = 'data.json:3'
+        item['cell'] = ['없는 상태', '옮기기']
+        self.assertIn('표에 없는 칸', self.run_tool([item], axes, code=3)['error'])
+
     def test_record_tool_applies_same_check(self):
         repo = self.root / 'repo'; repo.mkdir()
         for args in (('init', '-q'), ('config', 'user.name', 't'), ('config', 'user.email', 't@invalid')):
@@ -97,6 +129,14 @@ class SituationsTest(unittest.TestCase):
                                  {'id': 'Q2', 'expect': '기존 기록 → 그대로', 'source': [1], 'state': '확정'}]
         plan.write_text(json.dumps(data, ensure_ascii=False))
         self.assertNotEqual(call('--plan', str(plan))[0], 0)
+        # 표를 넣으면 빈 칸이 있을 때 기록하지 않는다.
+        findings.write_text(json.dumps({'axes': {'states': [{'name': 'a', 'where': 'data.json'}, {'name': 'b', 'where': 'data.json'}],
+                                                 'commands': [{'name': 'c', 'where': 'app.py'}]},
+                                        'situations': [{'id': 'Q5', 'cell': ['a', 'c'], 'expect': 'a → 허용 / 거절', 'source': [1], 'state': '미정'}]},
+                                       ensure_ascii=False))
+        rc, out = call('--findings', str(findings))
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn('칸', out['reason'])
 
 
 if __name__ == '__main__':
