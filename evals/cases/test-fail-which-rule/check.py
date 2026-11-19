@@ -47,6 +47,12 @@ def read_answer(reply):
         record = Path(log).with_suffix(".reader")
         record.mkdir(parents=True, exist_ok=True)
         (record / "prompt.txt").write_text(prompt, encoding="utf-8")
+        # 독자도 고정한 CLI 에서만 읽는다. 버전이 다르면 에이전트의 실패가 아니므로 사람이 보게 넘긴다.
+        version = pins.cli_version("claude")
+        (record / "cli-version.txt").write_text(version + "\n", encoding="utf-8")
+        mismatch = pins.check("claude")
+        if mismatch:
+            done("REVIEW 독자를 고정 조건에서 실행하지 못했다: " + mismatch)
         command = ["claude", "-p", prompt, "--model", pins.mock_user_model(), "--safe-mode", "--max-turns", "1"]
         with tempfile.TemporaryDirectory() as directory:
             if os.environ.get("EVALS_BUDGET_FILE"):
