@@ -31,6 +31,23 @@ def _plain(text):
     return re.sub(r"[\s*`_>\-•]+", "", text)
 
 
+def parse_quotes(stdout):
+    """분류기 출력의 {"quotes": {...}} 답. 같은 답을 설명과 함께 여러 번 낸 경우는 하나로 본다.
+    서로 다른 답이 여럿이거나 답이 없으면 형식 오류다(어느 쪽을 골라도 판정을 지어내는 셈이다)."""
+    decoder, answers = json.JSONDecoder(), []
+    for m in re.finditer(r'\{\s*"quotes"\s*:', stdout):
+        try:
+            value, _ = decoder.raw_decode(stdout, m.start())
+            answers.append(value["quotes"])
+        except (ValueError, KeyError, TypeError):
+            continue
+    if not answers:
+        raise RuntimeError("모의 사용자 판단 실패: " + stdout[-300:])
+    if any(a != answers[0] for a in answers[1:]):
+        raise RuntimeError('모의 사용자 답 형식 오류: 서로 다른 답이 여러 개다')
+    return answers[0]
+
+
 def surfaced(reply, topics, record_dir=None):
     """주제별 실제 인용을 반환한다. 실행·형식 오류는 대화가 REVIEW로 보존할 수 있게 알린다."""
     reply = reply[:12000]
@@ -62,13 +79,9 @@ def surfaced(reply, topics, record_dir=None):
         (evidence / 'stdout.txt').write_text(r.stdout, encoding='utf-8')
         (evidence / 'stderr.txt').write_text(r.stderr, encoding='utf-8')
         (evidence / 'execution.json').write_text(json.dumps({'model': pins.mock_user_model(), 'exit_code': r.returncode}))
-    m = re.search(r'\{\s*"quotes"\s*:\s*\{.*\}\s*\}', r.stdout, re.S)
-    if r.returncode or not m:
+    if r.returncode:
         raise RuntimeError("모의 사용자 판단 실패: " + (r.stdout + r.stderr)[-300:])
-    try:
-        quotes = json.loads(m.group(0))["quotes"]
-    except (ValueError, KeyError, TypeError) as e:
-        raise RuntimeError('모의 사용자 답 형식 오류: ' + str(e)) from e
+    quotes = parse_quotes(r.stdout)
     expected = {str(n) for n in numbers}
     reason = None
     if not isinstance(quotes, dict) or set(quotes) != expected:
