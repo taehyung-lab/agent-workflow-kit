@@ -65,18 +65,27 @@ def read_answer(reply):
         if r.returncode:
             done("REVIEW 독자 실행 실패: " + (r.stdout + r.stderr)[-300:])
         raw = r.stdout
-    m = re.search(r"\{.*\}", raw, re.S)
-    try:
-        quotes = json.loads(m.group(0)) if m else None
-    except ValueError:
-        quotes = None
-    if not isinstance(quotes, dict) or set(quotes) != set(KEYS):
+    # 독자가 답을 고쳐 여러 번 내면, 비어 있는 항목이 모두 같을 때만 같은 판정으로 보고 원문에서 확인되는 답을 쓴다.
+    answers, decoder = [], json.JSONDecoder()
+    for m in re.finditer(r"\{", raw):
+        try:
+            value, _ = decoder.raw_decode(raw, m.start())
+        except ValueError:
+            continue
+        if isinstance(value, dict) and set(value) == set(KEYS):
+            answers.append(value)
+    if not answers:
         done("REVIEW 독자 답 형식 오류: " + raw[-300:])
+    if any({k for k, q in a.items() if q is None} != {k for k, q in answers[0].items() if q is None} for a in answers[1:]):
+        done("REVIEW 독자가 서로 다른 답을 여러 개 냈다: " + raw[-300:])
     body = plain(reply)
-    bad = [k for k, q in quotes.items() if q is not None and (not isinstance(q, str) or len(plain(q)) < 4 or plain(q) not in body)]
-    if bad:
-        done("REVIEW 독자가 옮긴 문장이 답에 없다: " + ", ".join(bad))
-    return quotes
+
+    def bad(quotes):
+        return [k for k, q in quotes.items() if q is not None and (not isinstance(q, str) or len(plain(q)) < 4 or plain(q) not in body)]
+    for quotes in answers:
+        if not bad(quotes):
+            return quotes
+    done("REVIEW 독자가 옮긴 문장이 답에 없다: " + ", ".join(bad(answers[0])))
 
 
 q = read_answer(final)
