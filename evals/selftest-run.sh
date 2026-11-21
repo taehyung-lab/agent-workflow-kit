@@ -377,7 +377,7 @@ rm -f "${TMPDIR:-/tmp}/flowtest.$$"
 python3 -I "$here/sandboxtest.py" > "${TMPDIR:-/tmp}/sandboxtest.$$" 2>&1; rc=$?
 case $rc in
   0) ok "표준 쓰기 경계 시험 $(tail -1 "${TMPDIR:-/tmp}/sandboxtest.$$")" ;;
-  3) printf 'SKIP %s\n' "$(tail -1 "${TMPDIR:-/tmp}/sandboxtest.$$")"; unrun=1 ;;
+  3) printf 'SKIP %s\n' "$(tail -1 "${TMPDIR:-/tmp}/sandboxtest.$$")"; unrun="${unrun:+$unrun, }표준 쓰기 경계 시험" ;;
   *) ng "표준 쓰기 경계 시험"; grep -v '^ok' "${TMPDIR:-/tmp}/sandboxtest.$$" ;;
 esac
 rm -f "${TMPDIR:-/tmp}/sandboxtest.$$"
@@ -400,12 +400,12 @@ else
 fi
 # 판정기 사례: 기대 판정(키트의 요구 확정 기준에서 정함)이 있는 대화를 가짜 하네스로 compare.py 끝까지 돌려 판정이 맞는지 본다(모델 없음)
 scen_log=$(mktemp)
-if python3 -I "$here/goalflow/scenarios.py" > "$scen_log" 2>&1; then
-  ok "판정기 사례 $(tail -1 "$scen_log")"
-else
-  ng "판정기 사례"
-  cat "$scen_log"
-fi
+python3 -I "$here/goalflow/scenarios.py" > "$scen_log" 2>&1; rc=$?
+case $rc in
+  0) ok "판정기 사례 $(tail -1 "$scen_log")" ;;
+  3) printf 'SKIP %s\n' "$(tail -1 "$scen_log")"; unrun="${unrun:+$unrun, }판정기 사례" ;;
+  *) ng "판정기 사례"; cat "$scen_log" ;;
+esac
 rm -f "$task_log"
 # 요청에서 완료까지의 연결(모델 호출 없음): 단계 표·단계 사이 넘겨주기·글 속 가리킴이 끊기지 않았다.
 chain_log=$(mktemp)
@@ -470,5 +470,5 @@ python3 -I "$here/../tests/agent-evidence.test.py" && ok "턴별 원본 에이�
 python3 -I "$here/../tests/discovery-review.test.py" && ok "저장 원문의 독립 재판독" || ng "저장 원문의 독립 재판독"
 python3 -I "$here/../tests/evaluation-budget.test.py" && ok "평가 실행 한도 보존" || ng "평가 실행 한도 보존"
 python3 -I "$here/../tests/document-budget.test.py" && ok "행동 평가 전 문서 예산" || ng "행동 평가 전 문서 예산"
-printf '%d passed, %d failed%s\n' "$pass" "$failed" "${unrun:+, 1 미실행(표준 쓰기 경계 시험)}"
+printf '%d passed, %d failed%s\n' "$pass" "$failed" "${unrun:+, 미실행: $unrun}"
 [ "$failed" -eq 0 ]

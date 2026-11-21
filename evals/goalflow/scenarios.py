@@ -111,7 +111,24 @@ def run_case(kit, suite, case, work):
     return next((w for w in WORDS if line.startswith(w)), "ERROR"), line
 
 
+def watch_available():
+    """사례의 기대 판정은 턴 동안의 파일 사건 관찰(turnwatch, macOS)을 전제로 한다. 관찰할 수 없으면 판정기는 모두 검토 필요로 내므로 대조하지 않는다."""
+    sys.path.insert(0, str(HERE))
+    from turnwatch import Watch
+    with tempfile.TemporaryDirectory(prefix="scenarios-probe-") as d:
+        (Path(d) / ".git").mkdir()
+        try:
+            Watch(d).stop()
+        except OSError as e:
+            return str(e)
+    return None
+
+
 def main(kits):
+    blind = watch_available()
+    if blind:
+        print(f"미실행 판정기 사례: {blind}. 재개 조건: 파일 사건 감시가 되는 macOS 에서 다시 실행한다")
+        return 3
     suites = [json.loads(f.read_text(encoding="utf-8")) for f in sorted((HERE / "scenarios").glob("*.json"))]
     names = [k.name for k in kits]
     tally = {k: {"맞음": 0, "잘못된 통과": 0, "잘못된 실패": 0, "검토 필요": 0, "그 밖": 0} for k in names}

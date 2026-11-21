@@ -2,7 +2,12 @@ name: test
 on: [push, pull_request]
 jobs:
   install:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 판정기 사례는 턴 동안의 파일 사건(macOS FSEvents)을 관찰해야 돌 수 있어 macOS 에서도 돌린다. Linux 에서는 미실행으로 표시된다.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
