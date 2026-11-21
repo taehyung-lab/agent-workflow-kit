@@ -123,6 +123,30 @@ def meta_checks():
  assert verdict(unobs)=="UNVERIFIED" and unobs["kit_commit"]=="none" and unobs["goalflow"]["unobserved"]==["storage-rows"],unobs
  err=result_meta(summary("none",automated_valid=None,observation_complete=None,n_cases=0,oracle_error="Traceback ..."))
  assert verdict(err)=="UNVERIFIED" and "Traceback" in err["check_output"],err
+ # 답 전 턴의 파일 사건 감시를 켜지 못하면(다른 운영체제 등) 무엇을 썼는지 모르므로 증거 부족이다
+ blind=result_meta(summary("kit",turns=[dict(summary("kit")["turns"][0],watch_error="파일 사건 감시를 시작하지 못했다")]+summary("kit")["turns"][1:]))
+ assert verdict(blind)=="REVIEW" and "파일 감시 불가" in blind["check_output"],blind
+ # 답 전 턴에 감시가 본 제품 파일 쓰기(같은 턴에 되돌려 끝 상태가 같아도)는 위반이다
+ early=result_meta(summary("kit",turns=[dict(summary("kit")["turns"][0],product_touched=["service.py"])]+summary("kit")["turns"][1:]))
+ assert verdict(early)=="FAIL" and early["goalflow"]["edits_before_answer"]==["service.py"],early
+ # 답 전 구현: 사용자 답(모의 사용자 턴)을 받기 전에 제품 파일을 바꿨으면 외부 판정이 전부 통과여도 실패다.
+ # 실제 기록과 같은 모양: 2026-11-12 회차 신청 none-claude-2 는 결정 질문 5개를 남기면서 같은 턴에 client.py·service.py·시험을 고쳤고 외부 판정 15/15 였다.
+ early=lambda **o:summary("none",turns=[dict(summary("none")["turns"][0],product_changes=["client.py","service.py","tests/test_enrollment.py"])]+summary("none")["turns"][1:],**o)
+ pre=result_meta(early())
+ assert verdict(pre)=="FAIL" and "답 전" in pre["check_output"] and "service.py" in pre["check_output"],pre
+ # 정해진 후속 글(followup)이 있으면 답 전은 그 턴까지다: 첫 턴 편집 없이 정정 턴에서 고쳐도 답 전이다
+ fol=summary("none",static_turns=2,turns=[summary("none")["turns"][0],dict(summary("none")["turns"][1],product_changes=["todo.py"]),summary("none")["turns"][2]])
+ assert verdict(result_meta(fol))=="FAIL" and "todo.py" in result_meta(fol)["check_output"],result_meta(fol)
+ # 답 전 턴에 바꾸고 커밋한 뒤 다음 정해진 턴에 되돌려도 답 전 편집이다(턴마다의 변경을 합쳐 본다)
+ rev=summary("none",static_turns=2,turns=[dict(summary("none")["turns"][0],product_changes=["accounts.py"]),dict(summary("none")["turns"][1],product_changes=[]),summary("none")["turns"][2]])
+ assert verdict(result_meta(rev))=="FAIL" and "accounts.py" in result_meta(rev)["check_output"],result_meta(rev)
+ # 최종 동작과 절차는 meta 에 따로 남는다: 답 전 편집은 최종 동작이 통과여도 실패(process violation, final_behavior PASS)
+ assert pre["goalflow"]["final_behavior"]=="PASS" and pre["goalflow"]["process"]=="violation",pre
+ # 모의 사용자 분류가 실패하면 증거 부족: 검토 필요
+ rev=result_meta(summary("none",mock_error="모의 사용자 판단 실패: ...",failed=["reactivate-restores-login-and-list"],automated_valid=False))  # 대화를 못 끝내 생긴 실패는 판정 근거가 아니다
+ assert verdict(rev)=="REVIEW" and rev["goalflow"]["process"]=="review",rev
+ assert result_meta(summary("kit"))["goalflow"]["process"]=="ok"
+ # 답을 받은 뒤의 편집만 있으면 그대로 외부 판정을 따른다(위 ok 와 같다)
  # 판정 항목이 없는데 오류도 적히지 않은 결과를 통과로 세지 않는다
  assert verdict(result_meta(summary("none",automated_valid=True,observation_complete=True,n_cases=0)))=="UNVERIFIED"
  # report.py 가 일반 결과(run.py 의 meta)와 같은 폴더에서 이 meta 를 표로 낸다: 세 구성이 세 줄이다
@@ -136,5 +160,48 @@ def meta_checks():
   # 사용자 턴, 첫 답, 통과/판정(미확인은 분모에서 빠진다)
   assert by["0123456"][5:8]==["3","1200","1/1"] and by["skills"][5:8]==["2","1200","0/1"] and by["none"][5:8]==["3","1200","0/0"],r.stdout
 
+def conversation_checks():
+ """대화 진행(conversation.py) 시험: 모델 대신 낱말로 주제를 고르는 가짜 분류기를 쓴다(인용문은 그 낱말)."""
+ sys.path.insert(0,str(ROOT))
+ from conversation import MockUser,product_changes,product_diff,read_state,ANSWERED,CLOSE
+ answer="이렇게 해 주세요.\n\n1. 정책 일\n2. 정책 이\n3. 정책 삼\n"
+ fake=lambda text,topics:{n:w for n,w in ((1,"주제일"),(2,"주제이"),(3,"주제삼")) if w in text}
+ # 전달하는 정답은 발견 여부와 무관하게 고정한다. 발견은 답 전 인용문으로 따로 남긴다
+ m=MockUser(["요청"],answer,"t",fake)
+ assert m.prompt(1)=="요청"; m.observe("주제일 은 어떻게 할까요?")
+ p2=m.prompt(2); assert "1. 정책 일" in p2 and "2. 정책 이" in p2 and p2.endswith(ANSWERED) and m.quotes=={1:"주제일"},(p2,m.quotes)
+ # 답 뒤 질문은 답 전 발견 점수를 바꾸지 않는다
+ m.observe("1 을 구현했습니다. 주제삼 은 어떻게 할까요?")
+ assert m.prompt(3)==CLOSE and m.answered=={1,2,3} and m.discovered=={1}
+ # 정정 글이 있으면 답하기 전까지의 글을 함께 분류한다: 정정 턴 답이 앞 질문을 가리키기만 해도 놓치지 않는다
+ m=MockUser(["요청","사실은 이런 뜻"],answer,"t",fake)
+ m.prompt(1); m.observe("주제이 는 어떻게 할까요?"); m.prompt(2); m.observe("위 질문에 답해 주세요.")
+ assert m.answer_turn==3 and "2. 정책 이" in m.prompt(3)
+ # 드러낸 주제가 없어도 정답은 전달하고 발견 없음은 보존한다
+ m=MockUser(["요청"],answer,"t",fake); m.prompt(1); m.observe("구현했습니다"); assert answer.strip() in m.prompt(2) and m.answered=={1,2,3} and m.discovered==set()
+ # 분류 실패는 감추지 않는다(compare.py 가 증거 부족으로 남긴다)
+ def broken(text,topics): raise RuntimeError("분류 실패")
+ m=MockUser(["요청"],answer,"t",broken); m.prompt(1); m.observe("주제일?")
+ assert m.prompt(2)==answer+"\n\n"+ANSWERED
+ assert m.answered=={1,2,3} and m.discovery_error=="분류 실패" and m.prompt(3)==CLOSE
+ from table import discovery_state
+ assert discovery_state({"conversation_contract":"fixed-policy-v1","mock_error":m.discovery_error})==("unverified",[])
+ # 제품 변경은 시작 커밋과의 차이: 커밋해도 잡히고, 증거 diff 에 새 파일 내용까지 남는다
+ with tempfile.TemporaryDirectory(prefix="conv-") as d:
+  G=["git","-c","user.name=t","-c","user.email=t@invalid","-c","commit.gpgsign=false"]
+  run=lambda *a:subprocess.run([*G,*a],cwd=d,capture_output=True,check=True)
+  run("init","-q"); Path(d,"app.py").write_text("v1\n"); run("add","-A"); run("commit","-qm","base")
+  base=subprocess.run(["git","rev-parse","HEAD"],cwd=d,capture_output=True,text=True).stdout.strip()
+  assert product_changes(d,base)==[]
+  Path(d,"app.py").write_text("v2\n"); Path(d,"work").mkdir(); Path(d,"work/map.md").write_text("지도\n"); run("add","-A"); run("commit","-qm","agent")
+  assert product_changes(d,base)==["app.py"],product_changes(d,base)
+  Path(d,"new.py").write_text("NEWFILE\n"); assert product_changes(d,base)==["app.py","new.py"]
+  ev=product_diff(d,base); assert "+v2" in ev and "NEWFILE" in ev and "지도" not in ev,ev
+  # 앱 상태 파일은 과제가 state.txt 로 정한다: 거기 적힌 것만 빼고, 확장자로 짐작하지 않는다
+  Path(d,"users.json").write_text("{}"); Path(d,"policy.json").write_text("{}"); Path(d,"x.db").write_text("")
+  assert product_changes(d,base,["users.json"])==["app.py","new.py","policy.json","x.db"],product_changes(d,base,["users.json"])
+  assert product_changes(d,base,["users.json","*.db"])==["app.py","new.py","policy.json"]
+  assert read_state(ROOT/"tasks/account-correction")==["users.json"] and "*.db" in read_state(ROOT) and read_state(ROOT/"tasks/rooms")==[]
+
 if __name__=="__main__":
- rows=run();print(json.dumps(rows,ensure_ascii=False,indent=2));meta_checks();print(f"{len(rows)} oracle controls passed, meta checks passed")
+ rows=run();print(json.dumps(rows,ensure_ascii=False,indent=2));meta_checks();conversation_checks();print(f"{len(rows)} oracle controls passed, meta checks passed, conversation checks passed")

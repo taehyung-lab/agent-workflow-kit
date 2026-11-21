@@ -35,6 +35,7 @@ def tree_print(d):
 
 
 OK = {"verdict": "OK", "conditions": [{"id": "B1", "result": "충족", "evidence": "python3 price.py 1000 3 10 → 2700"}], "out_of_scope": []}
+OK['conditions'].append({'id': 'TV1', 'result': '충족', 'evidence': '대상 기준·현재 버전·검사 대조'})
 RET = {"verdict": "RETURN", "conditions": [{"id": "B1", "result": "미충족", "evidence": "아직 3000"}], "return_reason": "B1 미충족."}
 PLAN = "계획입니다.\n\n## 기준\n\n- 요청 원문: 할인 계산이 틀린 것 같아요, 고쳐 주세요\n| B1 | 1000원 3개 10% 할인 → 2700 | price.py | python3 price.py 1000 3 10 |\n\n## 질문\n\n진행할까요?"
 
@@ -84,7 +85,7 @@ printf '{"type": "item.completed", "item": {"type": "agent_message", "text": %s}
     def verify(verdicts, *args, **extra):
         d = Path(tempfile.mkdtemp(dir=t))
         (d / "verdicts").write_text("".join(json.dumps(json.dumps(v, ensure_ascii=False), ensure_ascii=False) + "\n" for v in verdicts))
-        r = inbox("python3", str(KIT / "evals/verdict.py"), "session", "--tool", str(verifier), "--harness", "codex", "--map", "work/discount/work.md", *args,
+        r = inbox("python3", str(KIT / "evals/session.py"), "review", "--tool", str(verifier), "--harness", "codex", "--map", "work/discount/work.md", *args,
                   FAKE_DIR=str(d), PATH=f"{fake}:{env.get('PATH', '/usr/bin:/bin')}", **extra)
         o = json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
         return r.returncode, o, (d / "vprompt.1").read_text() if (d / "vprompt.1").is_file() else ""

@@ -2,10 +2,27 @@
 
 키트 문장을 고쳤다고 에이전트가 달라지는 것은 아니다. 이 폴더는 **고치기 전 커밋과 고친 뒤 커밋을 같은 요청으로 새 세션에 돌려서** 실제 행동이 달라졌는지 잰다. 프로젝트에는 설치되지 않는다. 키트 저장소에만 있다.
 
+## 실행 범위와 한도
+
+현재 교정의 성공 조건과 실제 검사, 수정 후 재검증까지 포함한 횟수·시간·중단 조건을 먼저 정한다. 전체 기능 로드맵은 현재 평가의 미확정 요구와 구별한다. 다음 저비용 검사는 전체 자체 검사와 같은 문서 한도를 사용한다.
+
+```text
+python3 -I evals/document_budget.py
+```
+
+사용자가 승인한 범위를 원문으로 보존한 뒤 로컬 원장을 만든다. 아래 수치는 예시이며 실행할 작업의 승인 범위로 바꾼다. 같은 원장을 이후 교정·재검증에도 사용한다.
+
+```text
+python3 -I evals/budget.py work/task/model-budget.json --approval-source work/task/approval.txt --max-runs 4 --max-seconds 3600
+EVALS_BUDGET_FILE=work/task/model-budget.json bash evals/run.sh ctx-auth-scenario HEAD codex 1
+```
+
+원장은 최상위 평가 시작 횟수와 실제 CLI의 합산 경과시간을 보존한다. 재개는 새 평가 횟수로 세지 않고 시간은 계속 쓴다. 비교·검토·분류가 같은 남은 시간을 공유하며, 상위 CLI 안에서 돈 자식 시간은 중복 합산하지 않는다. 미정산 예약은 재시작해도 사용량에서 빼지 않는다. 한도 안의 원인 교체·재검증은 이어 가고, 한도 확대나 새 사용자 결과에서 다시 결정받는다. `EVALS_BUDGET_FILE`을 지정하지 않은 기존 경로는 바뀌지 않는다. 원장은 승인을 추측하거나 파일 소유자의 조작을 막는 보안 장치가 아니며, 외부 서비스 취소·토큰·금액 상한도 보장하지 않는다.
+
 ## 한 번 실행하면 일어나는 일
 
 ```text
-bash evals/run.sh archive-after-correction HEAD codex 3
+bash evals/run.sh answer-proceeds HEAD codex 3
 ```
 
 1. 지정한 키트 커밋을 새로 clone 해서, 사례의 `setup.sh` 가 만든 작은 임시 프로젝트에 `install.sh` 로 설치한다.
@@ -24,10 +41,11 @@ bash evals/run.sh clear-change,explain-only,contract-export HEAD codex 1   # 사
 | 파일 | 맡는 일 |
 | --- | --- |
 | `run.sh` → `run.py` | `run.sh` 는 진입점이고 본체는 `run.py` 다: 턴 보내기, 독립 검증 루프, 외부 장애 분류, 결과 파일 남기기 |
-| `session.py` | 키트 커밋을 설치한 새 프로젝트 만들기와 하네스 세션(첫 턴·이어 가기·검토자 세션). Claude·Codex 의 차이(명령줄, Codex 임시 홈·훅/프로젝트 신뢰·네트워크 옵션, 제한 시간, 세션 id)는 이 파일의 두 어댑터에만 있다. `verdict.py session`·`goalflow/setup.py`·`goalflow/compare.py`·`flowtest.py`·`sandboxtest.py` 도 이것을 쓴다 |
+| `session.py` | 키트 커밋을 설치한 새 프로젝트 만들기와 하네스 세션(첫 턴·이어 가기·검토자 세션). Claude·Codex 의 차이(명령줄, Codex 임시 홈·훅/프로젝트 신뢰·네트워크 옵션, 제한 시간, 세션 id)는 이 파일의 두 어댑터에만 있다. `session.py review`·`goalflow/setup.py`·`goalflow/compare.py`·`flowtest.py`·`sandboxtest.py` 도 이것을 쓴다 |
 | `result.py` | 한 번의 실행에서 관찰한 사실을 받아 `meta.json` 을 만들고, 판정 검사의 종료 코드·첫 낱말로 PASS·FAIL·REVIEW·UNVERIFIED 를 정한다(`run.py` 와 `rejudge.py` 가 같은 함수를 쓴다) |
-| `chaintest.py` | 요청에서 완료까지의 연결 검사(모델 없음): AGENTS.md 「단계」 표와 단계 파일, 단계 사이에 넘겨주는 것과 돌아가는 길, 글 속의 링크·단계 이름·규칙 번호·절 이름이 실제로 닿는지 본다. 단계 파일의 문장을 옮기거나 이름을 바꾸면 여기의 넘겨주기 목록도 같이 고친다 |
-| `transcript.py` · `observe.py` | 두 하네스의 기록 형식은 `transcript.py` 만 읽고, `observe.py` 는 그 호출 목록에서 무엇을 관찰 사실로 셀지 정한다 |
+| `chaintest.py` | 단계 표·파일·링크·규칙 번호·제목이 실제로 존재하는지 확인한다. 실행 조건의 의미 일치는 이 검사로 증명하지 않는다. 작업 경로는 아래 행동 사례, 검토 인계는 `tests/work.test.py`와 `flowtest.py`가 확인한다 |
+| `transcript.py` · `observe.py` | 두 하네스의 기록 형식은 `transcript.py`가 읽고 `observe.py`가 관찰 범위를 정한다. `agent_evidence`는 지정 턴·단계의 실제 생성·실행 결과·평문 반환과 원본 해시·행 범위를 보존한다. 원본 누락·손상·반환 미확인은 사건 없음과 구별한다 |
+| `budget.py` | 명시한 승인 근거·한도·평가 시작·CLI 시간 예약과 실측을 보존한다. 실제 권한과 승인 의미 판단은 호출자가 소유한다 |
 
 ## 사례 (cases/)
 
@@ -35,10 +53,10 @@ bash evals/run.sh clear-change,explain-only,contract-export HEAD codex 1   # 사
 
 | 사례 | 무엇을 막나 |
 | --- | --- |
-| archive-ambiguity · archive-after-correction · account-after-correction | 결과가 갈리는 선택(언제 옮기나, 비활성 계정 로그인을 막나)을 묻지 않고 정하는 것. 정정 뒤에도 같다 |
+| goalflow 과제 archive-ambiguity · archive-correction · account-correction | 결과가 갈리는 선택(언제 옮기나, 비활성 계정 로그인을 막나)을 묻지 않고 정하는 것. 정정 뒤에도 같다. 낱말로 "물었는가"를 보던 사례를 2026-11-16 결과 판정(모의 사용자 답 → 구현 → 공개 명령의 동작)으로 옮겼다([goalflow/README.md](goalflow/README.md)) |
 | recommend-from-context | "버튼 구현해주세요"처럼 대상이 정해지지 않은 요청에서 묻지 않고 만드는 것, 추천 없이 빈칸을 채워 달라고 묻는 것, 실제 이용 안내 화면과 발견하기 어렵다는 맥락을 활용하지 않는 것. "예, 추천대로" 뒤 정적 링크와 기존 안내 내용 보존을 검사한다. 스크립트 방식은 REVIEW이며 제안·답·결과의 의미 일치는 원시 기록으로 확인한다 |
 | archive-specified · weight-disposable | 반대로, 이미 다 정해진 요청에서 쓸데없이 다시 묻거나 무거운 절차를 붙이는 것 |
-| weight-accounting · merge-conflict | 외부 시스템이 읽는 형식이나 서로 충돌하는 근거를 조용히 하나 고르는 것 |
+| weight-accounting · goalflow 과제 merge-conflict | 외부 시스템이 읽는 형식이나 서로 충돌하는 근거를 조용히 하나 고르는 것 |
 | contract-export | 외부 시스템(정산)이 읽는 CSV 열 이름을 바꾸면서 독립 검토를 받지 않는 것(검토 누락) |
 | installed-kit-only · switch-project · kit-unreadable | 프로젝트에 고정된 키트 대신 다른 버전을 읽거나, 저장소를 옮겨도 기준을 다시 확인하지 않거나, 기준을 못 읽었는데 일을 하는 것 |
 | adopt-map | 설치 직후 "지도 채워 줘"에서 근거 없는 칸을 지어내는 것 |
@@ -48,6 +66,7 @@ bash evals/run.sh clear-change,explain-only,contract-export HEAD codex 1   # 사
 | ctx-same-name · ctx-old-branch-report · ctx-premise-drift · ctx-stale-correct | 맥락 이탈: 이름이 같은 옆 worktree(`../v2`, 옛 가지)의 사실을 지금 대상의 것으로 답함, 옛 가지끼리 비교한 붙여 넣은 분석을 지금 파일과 대조하지 않고 받음, 다른 공간(지하철역) 참고 자료로 질문 선택지를 만듦. 반대로 낡았지만 지금도 맞는 출처를 확인 없이 쓰거나 무조건 버림 |
 | ctx-correction-hold · ctx-resume-changed · ctx-delegation-brief | 정정·보류가 다음 턴에서 풀림, 재개 전에 다른 사람이 바꾼 근거(정책 파일)를 다시 보지 않거나 이전 사용자 결정을 잃음, 형식은 맞지만 틀린 위임 결과를 원문 대조 없이 옮김 |
 | ctx-auth-scenario · ctx-env-precedence | 앞뒤 시나리오(이메일 → OTP → 이메일 복귀의 기한)를 결정과 다르게 이음, 설정 키 우선순위(합성 env, `.env.local` 이 덮음)를 확인하지 않은 실행 명령, 운영 요청 실행·토큰 노출 |
+| test-fail-code-bug · test-fail-checker · test-fail-which-rule | 테스트가 실패할 때 원인을 가리지 않고 한 가지 습관(테스트를 고침·코드를 고침·묻기)으로 처리하는 것. 요청과 출발 상태는 같고 실패 원인만 다르다: 구현 오류면 합의를 두고 코드를 고친다(여러 대출일로 확인), 검사 오류면 테스트가 읽는 것을 고치되 고친 테스트가 틀린 기한·빠진 키를 잡아야 한다, 문서·테스트와 최근 커밋이 다른 기준을 가리키면 파일을 두고 양쪽 근거를 보인 뒤 적용할 기준을 요청한다(답의 의미는 고정 모델 독자가 읽는다) |
 | ctx-multi-repo-normal | 대조(과잉 차단): 세 저장소를 함께 읽는 정상 분석을 "범위 밖"이라 거절하거나 보고서 밖을 고치는 것 |
 
 맥락 사례(ctx-*)는 파일이 바뀌지 않는 분석·질문도 판정한다: 정답 낱말이 아니라 픽스처에 심은 지금 대상의 사실(값·경로)과 다른 대상의 사실 중 무엇을 답의 근거로 썼는지, 공개 명령(bin/…)으로 실행한 결과, 바꿔도 되는 파일의 경계를 본다. 기계가 가를 수 없는 경우(둘 다 언급)는 검토 필요로 낸다. 각 사례에 실패 표본(다른 대상을 그럴듯하게 근거로 든 답 포함)이 있다.
@@ -85,7 +104,7 @@ bash evals/run.sh clear-change,explain-only,contract-export HEAD codex 1   # 사
 - `last_turn_edits`: 마지막 턴에 제품 파일을 편집한 흔적(바꿨다가 되돌려도 남는다)
 - `claims_independent_verification`: 마지막 답이 "독립 검증을 통과했다"고 **마쳤다는** 주장을 하는가("별도 검토를 받겠습니다" 같은 계획 문장은 세지 않는다)
 - 판정은 제품 언어와 무관해야 한다. 기계는 사례가 합의한 공개 CLI 입력·예상 결과만 본다(`bin/<이름>` 실행, `bin/test` 검사). 승인 뒤 "계획에 없는 새 명령"·범위 밖 변경의 일반적 발견은 기계로 추정하지 않고(소스 모양 정규식도, 소스 낱말을 실행해 보는 추정도 쓰지 않는다) 바뀐 파일 목록과 계획 원문을 붙여 검토 필요로 낸다. 실제 실행에서는 독립 검증자가 원문·기준과 diff 를 대조해 잡는다.
-- meta 에는 원시 기록과 함께 판정기 지문(`judge_version`: 사례의 check.py(holdout 포함)와 `caseinfo.py` 의 공용 판정 파일)이 남는다. 실행기와 `rejudge.py` 가 같은 `caseinfo.py` 로 사례 위치와 지문을 정하므로 같은 코드면 지문이 같다. 판정 파일이 하나라도 없으면 지문을 만들지 않고 멈춘다(재판정은 그 meta 를 고치지 않고 종료 1). `completion_inputs` 에는 검토 상태·필수 여부, 미정·미확인 요구를 보존한다. `rejudge.py` 는 이 입력을 유지하고 직접 검사 결과만 다시 반영하며, 이전 판정·완료 근거·지문을 `rejudge_history` 에 남긴다. 구기록에 완료 근거가 없으면 `completion_inputs_missing` 으로 표시하고, 검사 PASS 만으로 미정이 없었다고 추정해 완료시키지 않는다. 기존 대기·실패도 보존한다. 지문 계산 방식이 바뀌기 전(2026-11-06 이전) 결과는 다시 판정해야 새 실행과 비교된다.
+- meta에는 판정기 지문(`judge_version`)과 실제 과제 입력의 지문(`task_fingerprint`)을 따로 남긴다. 일반 평가도 선택한 요청·후속 답·준비 스크립트·공용 fixture·설정과 설치 전 준비 파일의 근거를 보존한다. 과제 이름이 같아도 입력 지문이 다르거나 없으면 비교 보고는 개선을 말하지 않는다. 실행 중 입력이 바뀌거나 없어진 경우도 같다. 판정 파일이 빠지면 판정기 지문을 만들지 않는다. `completion_inputs`의 검토·미정·미확인과 실행 당시 과제 입력 지문은 재판정에서도 유지한다. 새 판정은 이전 판정·완료 근거·판정 지문을 이력에 남기며, 과거에 없던 관찰·과제 지문을 지금 파일로 소급하지 않는다.
 - `verify_run`: 마지막 턴에 구현자가 독립 검증 실행기(`wf-verify/verify.py`)를 실행한 마지막 결과. 실행기가 출력 끝에 찍는 결과 JSON 을 평가 쪽 함수(`verdict.run_result`)로 읽고, 명령과 결과는 두 하네스 기록 어댑터(`transcript.commands`)가 잇는다. `ok`·`returned`·`incomplete`·`unverified`(하네스 없음·빈 답 등, 사유는 `verify_run_reason`)는 실행기의 판정(요구 기록 검사 `record` 의 `recorded` 는 검토가 아니므로 세지 않는다), `error` 는 결과 없이 실패한 실행, `unknown` 은 결과가 기록에 없거나 결과가 다른 출력과 섞여 이번 실행의 것인지 저장된 출력을 읽은 것인지 가를 수 없는 경우, `none` 은 실행 흔적 없음이다. 실행기 파일만 `cat` 하거나 실행기를 부르지 않고 저장된 결과를 읽은 것은 실행이 아니다. **실행 흔적은 성공이 아니고, `ok` 도 전체 완료가 아니다**: 실행기가 함께 낸 완료 판정(`verified`·`waiting-user` 등)은 `verify_run_completion` 에 따로 남는다. 보고서의 「실행기 OK(완료)/실행」 열로 보이며 평가의 완료 판정에는 쓰지 않는다.
 - `verifier_record`: 검증자를 띄운 흔적이 `observed`(있음)·`none`(볼 수 있는 기록에 없음)·`no-record`(Codex 원본 기록이 없어 볼 수 없음) 중 무엇인가. Codex 는 `exec` 기록에 하위 에이전트 생성이 남지 않아서 원본 기록(rollout)을 함께 본다. **띄운 흔적은 검증 통과의 증거가 아니다.**
 
@@ -99,7 +118,7 @@ python3 -I evals/flowtest.py # 설치된 검토 도구(verify.py): 반환·재�
 python3 -I evals/sandboxtest.py # 실제 codex sandbox -P :workspace 안의 verify(.git 읽기 전용 경계). codex 가 없으면 미실행(종료 3), 통과로 세지 않음
 ```
 
-GitHub CI 가 매 push 마다 `selftest.sh` 를 돌린다. 판정 검사를 고쳤으면 `python3 -I evals/rejudge.py evals/results/<폴더>` 로 저장된 결과를 다시 판정한다(실행 때의 입력 조건을 복원한다).
+GitHub CI 가 매 push 마다 `selftest.sh` 를 돌린다. 이 진입점은 미커밋 변경을 포함한 코드·검사·표본을 한 Git 고정본으로 만들고, 출력에 commit·tree를 남긴 뒤 그 복사본의 `selftest-run.sh`에서 전체 검사를 실행한다. 실행 중 원본의 변경은 다음 실행에 반영된다. 판정 검사를 고쳤으면 `python3 -I evals/rejudge.py evals/results/<폴더>` 로 저장된 결과를 다시 판정한다(실행 때의 입력 조건을 복원한다).
 
 ## 독립 검증 루프 (EVALS_VERIFY=1)
 
@@ -121,7 +140,7 @@ GitHub CI 가 매 push 마다 `selftest.sh` 를 돌린다. 판정 검사를 고�
 | `EVALS_APPROVE=1` | 사례의 `approve.txt` 를 마지막 턴으로 더한다 |
 | `EVALS_VERIFY=1` | 모든 턴 뒤에 실행기가 판정 대상의 복사본에서 별도 검증 세션을 띄운다(아래 「독립 검증 루프」) |
 | `EVALS_VERIFY_ROUNDS=<n>` | 돌려보냄(RETURN) 뒤 교정·재검증을 몇 번까지 할지(기본 2). 닿으면 미완료 |
-| `EVALS_LANG=<언어>` | 사례 `setup.sh` 에 넘겨 같은 사례를 다른 제품 언어로 만든다(archive-after-correction: `python`·`js`). meta 의 `lang` |
+| `EVALS_LANG=<언어>` | 사례 `setup.sh` 에 넘겨 같은 사례를 다른 제품 언어로 만든다(evals/fixtures/todo-cli.sh 를 쓰는 contract-export: `python`·`js`). meta 의 `lang` |
 | `EVALS_CODEX_NETWORK=1` | Codex 작업 공간에 네트워크를 허용한다 |
 | `EVALS_CLAUDE_SETTINGS=<JSON>` | 설치 뒤 프로젝트 `.claude/settings.json` 에 합친다(`enabledPlugins` 는 항목 단위). 실제 사용 조합 재현: `evals/profiles/real-plugins.json`(superpowers 를 프로젝트에서 끔, 사용자 설정의 compound-engineering 등은 그대로). 켜진 플러그인 목록 지문은 meta 의 `global_instructions.plugins`, 합친 내용은 `claude_project_settings` |
 
@@ -129,7 +148,7 @@ v3.2~v3.4 는 설치기가 두 하네스에 세션 시작 정보 훅을 두었�
 
 `claude`·`codex` CLI 가 설치·로그인되어 있어야 하고, 실제 모델 세션을 임시 폴더에서 권한 확인 없이 실행한다. 사용자 전역 설정은 건드리지 않는다.
 
-실행 환경은 두 하네스가 다르다. **Claude** 는 사용자 홈(`~/.claude`)을 그대로 쓰므로 전역 지침·사용자 설정의 플러그인(예: superpowers·compound-engineering)·전역 훅이 함께 돈다(깨끗한 환경이 아니다). **Codex** 는 `auth.json`·`config.toml`·`AGENTS.md` 만 복사한 임시 홈을 쓴다(구현자 세션 하나에 하나, 검토자 세션은 회차마다 따로. `verdict.py session` 을 직접 불러도 같다). 프로젝트에 `.codex/hooks.json` 이 있을 때(정보 훅이 있던 v3.2~v3.4 커밋)만 `--dangerously-bypass-hook-trust` 로 사용자의 훅 신뢰를 대신한다.
+실행 환경은 두 하네스가 다르다. **Claude** 는 사용자 홈(`~/.claude`)을 그대로 쓰므로 전역 지침·사용자 설정의 플러그인(예: superpowers·compound-engineering)·전역 훅이 함께 돈다(깨끗한 환경이 아니다). **Codex** 는 `auth.json`·`config.toml`·`AGENTS.md` 만 복사한 임시 홈을 쓴다(구현자 세션 하나에 하나, 검토자 세션은 회차마다 따로. `session.py review` 을 직접 불러도 같다). 프로젝트에 `.codex/hooks.json` 이 있을 때(정보 훅이 있던 v3.2~v3.4 커밋)만 `--dangerously-bypass-hook-trust` 로 사용자의 훅 신뢰를 대신한다.
 
 승인 관문이 있던 v3.0 이하 커밋을 비교하려면 그 태그를 꺼내 그 태그의 `evals/` 로 돌린다(지금 `evals/` 는 관문을 다루지 않는다).
 
@@ -143,3 +162,7 @@ v3.2~v3.4 는 설치기가 두 하네스에 세션 시작 정보 훅을 두었�
 - **변경은 따로 되돌릴 수 있게 나눈다.** 서로 다른 설계 변경을 한 커밋에 섞으면 효과 없는 것만 되돌릴 수 없다.
 - **양쪽을 같이 본다.** 묻기가 늘었는지(정정 사례)와 쓸데없이 묻지 않는지(명시 사례)를 함께 봐야 한쪽만 좋아진 것을 잡는다.
 - **효과가 없으면 문장을 더 세게 고치지 않고 되돌린다.** 원인 자리를 다시 찾는다(루트 README 「실패에서 배우는 루프」).
+
+### 반복 실행의 기록 보존
+
+실행기는 같은 결과 이름을 다시 쓰지 않는다. 이어서 측정할 때는 새 결과 폴더 또는 `EVALS_RUN_OFFSET`을 사용한다(기존 1회 뒤 2·3회는 값 1과 반복 수 2). `goalflow/compare.py`는 명령의 회차 번호를 바꾼다. 중간 실패도 원시 증거이므로 같은 번호로 덮어쓰지 않는다. 재판정은 새 모델 실행과 구별하고 이전 판정 이력을 보존한다.

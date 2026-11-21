@@ -28,7 +28,7 @@ claude = session.Claude("/nonexistent", entry=text)
 flags = claude._flags()
 check("Claude: entry 가 있으면 이 세션에서만 사용자 설정을 빼고(project,local) 그 글을 시스템 지침 끝에 넣는다",
       flags[flags.index("--setting-sources") + 1] == "project,local" and flags[flags.index("--append-system-prompt") + 1] == text)
-check("Claude: entry 가 없으면 전과 같은 옵션이다", session.Claude("/nonexistent")._flags() == session.Claude.FLAGS)
+check("Claude: entry 가 없으면 기본 옵션과 고정 모델뿐이다(사용자 설정을 막는 옵션 없음)", session.Claude("/nonexistent")._flags() == session.Claude.FLAGS + session._model_flags("claude"))
 
 home = session._codex_home(text)
 try:
@@ -46,6 +46,13 @@ finally:
 for case in ("installed-kit-only", "switch-project", "kit-unreadable"):
     check(f"{case}: 전역 진입 문장을 받는 사례로 표시돼 있다(global-entry)", (HERE / "cases" / case / "global-entry").is_file())
 check("사용자 홈의 전역 지침 파일은 바뀌지 않았다", before == [digest(p) for p in personal])
+
+# 모델 고정: Codex 의 실행기 교정 턴(from_runner)도 고정 모델로 돈다(네트워크·훅 신뢰 옵션만 빼는 턴이다)
+_cx = session.Codex.__new__(session.Codex); _cx.project, _cx.session_id, _cx.flags, _cx.home = "/nonexistent", "sid", session._model_flags("codex") + ["-c", "x=1"], None
+_cx.profile = "personal"
+_seen = []; _cx._turn = lambda cmd, out, **kw: _seen.append(cmd)
+_cx.resume("p", "/tmp/out", from_runner=True); _cx.resume("p", "/tmp/out")
+check("Codex 교정 턴과 사용자 턴 모두 고정 모델을 넘긴다", all("-m" in c for c in _seen) and "x=1" not in _seen[0])
 
 failed = [name for name, ok in checks if not ok]
 for name, ok in checks:

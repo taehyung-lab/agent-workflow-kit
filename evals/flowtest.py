@@ -28,6 +28,7 @@ def sh(*cmd, cwd=None, env=None, input=None):
 G = ["git", "-c", "user.name=t", "-c", "user.email=t@invalid", "-c", "commit.gpgsign=false"]
 OK = {"verdict": "OK", "conditions": [{"id": "B1", "result": "충족", "evidence": "bin/test 실행 결과: 로그인하기"},
                                       {"id": "E1", "result": "충족", "evidence": "영어 화면 Login 그대로"}], "out_of_scope": []}
+OK['conditions'].append({'id': 'TV1', 'result': '충족', 'evidence': '대상 기준·현재 버전·검사 대조'})
 RET = {"verdict": "RETURN", "conditions": [{"id": "B1", "result": "미충족", "evidence": "버튼 글자가 아직 로그인"}],
        "return_reason": "B1 미충족. 진행해 주세요."}
 REQ = "로그인 버튼 글자를 '로그인하기'로 바꿔 주세요"
@@ -80,6 +81,7 @@ for a in "$@"; do case "$a" in *"당신은 별도 검증자다"*) p="$a";; esac;
 [ -n "$p" ] || exit 1
 n=$(cat "$FAKE_DIR/n" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$FAKE_DIR/n"
 printf '%s' "$p" > "$FAKE_DIR/vprompt.$n"
+printf '%s\n' "$@" > "$FAKE_DIR/args.$n"
 [ -z "${{FAKE_VWRITE:-}}" ] || echo changed >> ui.txt
 [ -z "${{FAKE_TOUCH_ORIG:-}}" ] || echo changed-while-verifying >> "$FAKE_TOUCH_ORIG"
 line=$(sed -n "${{n}}p" "$FAKE_DIR/verdicts")
@@ -92,7 +94,7 @@ exit 0
     def verify(mp, verdicts, harness="claude", path=True, extra=(), **env):
         d = Path(tempfile.mkdtemp(dir=t)); (d / "verdicts").write_text("".join(json.dumps(json.dumps(v, ensure_ascii=False) if isinstance(v, dict) else v, ensure_ascii=False) + "\n" for v in verdicts))
         e = {**base_env, "FAKE_DIR": str(d), "PATH": (f"{fake}:" if path else "") + "/usr/bin:/bin", **env}
-        r = sh(sys.executable, "-I", str(KIT / "evals/verdict.py"), "session", "--tool", str(verifier), "--harness", harness, *(("--map", mp) if mp else ()), *extra, cwd=proj, env=e)
+        r = sh(sys.executable, "-I", str(KIT / "evals/session.py"), "review", "--tool", str(verifier), "--harness", harness, *(("--map", mp) if mp else ()), *extra, cwd=proj, env=e)
         out = json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
         prompt = (d / "vprompt.1").read_text() if (d / "vprompt.1").is_file() else ""
         return r.returncode, out, prompt
@@ -139,6 +141,9 @@ exit 0
           a[1].get("round") == 1 and [a[1].get("state"), b[1].get("state"), out.get("state")] == ["returned", "incomplete", "incomplete"] and prompt == "")
     check("--request 로 준 뒤 메시지도 사용자 원문으로 들어간다", "AFTER-MARKER" in a[2] and "REQ-MARKER" in a[2])
     rc, out, prompt = verify(mp, [OK], harness="codex", extra=("--request", req_file("codex 시도")))
+    import pins as _pins  # flowtest 는 evals/ 를 모듈 경로에 둔다
+    codex_args = [Path(f).read_text() for f in sorted(t.glob("tmp*/args.*")) if Path(f).read_text().startswith("exec\n")]
+    check("Codex 검토자 호출에도 고정한 모델을 넘긴다", bool(codex_args) and all("-m\n" + _pins.model("codex") + "\n" in a for a in codex_args))
     check("Codex 검토 하네스도 같은 실행기·형식으로 판정한다", rc == 6 and out.get("state") == "ok" and out.get("completion") == "unverified" and "| B1 |" in prompt)
     # 미확인
     rc, out, _ = verify(mp, [""], extra=("--request", req_file("빈 답 시도")))
@@ -198,6 +203,7 @@ exit 0
     def rec_map(name, rows):
         return write_map(name, f"- 요청 원문: {REQ}\n\n" + HEAD + rows)
     ok_r1 = {"verdict": "OK", "conditions": [{"id": "R1", "result": "충족", "evidence": "bin/test 통과"}], "out_of_scope": []}
+    ok_r1['conditions'].append({'id': 'TV1', 'result': '충족', 'evidence': '대상 기준·현재 버전·검사 대조'})
     m_open = rec_map("rec-open", "| R1 | 한국어 버튼 → 화면 → 로그인하기 | 원문 | - | bin/test | 확정 |\n| Q1 | 영어 버튼 문구 | 원문이 정하지 않음 | - | 답 뒤 | 미정 |\n")
     rd = prep("--map", m_open)
     o = json.loads(fin(rd["kept"], json.dumps(ok_r1, ensure_ascii=False), "--check", "PASS").stdout.strip().splitlines()[-1]) if rd.get("state") == "ready" else rd
@@ -279,8 +285,21 @@ exit 0
     check("빈 산출물은 입력 부족으로 unverified", rempty.get("state") == "unverified" and "비었다" in rempty.get("reason", ""))
     # 근거 불완전
     (proj / "big.txt").write_text("x" * 70000 + "\n")
-    rc, out, prompt = verify(mp, [OK], extra=("--request", req_file("큰 diff")))
-    check("diff 가 잘리면 근거 불완전으로 unverified(검토자를 띄우지 않음)", out.get("state") == "unverified" and "diff" in out.get("reason", "") and prompt == "")
+    big_request = req_file("큰 diff")
+    rc, out, prompt = verify(mp, [OK], extra=("--request", big_request))
+    big_pending = json.loads((Path(out["kept"]) / "pending.json").read_text()) if out.get("state") == "ok" else {}
+    attached = [f for f in big_pending.get("inputs", {}).get("files", []) if f["role"] == "diff"]
+    check("큰 변경은 전체 파일을 전달하고 검토 근거에 고정한다",
+          out.get("state") == "ok" and len(attached) == 1 and attached[0]["path"] in prompt
+          and "x" * 70000 in Path(attached[0]["path"]).read_text())
+    _, second, _ = verify(mp, [OK], extra=("--request", big_request))
+    _, reused, reused_prompt = verify(mp, [OK], extra=("--request", big_request))
+    check("큰 변경 검토도 근거가 같으면 한도 뒤 통과를 재사용한다",
+          second.get("state") == "ok" and reused.get("state") == "ok" and reused_prompt == "")
+    second_pending = json.loads((Path(second["kept"]) / "pending.json").read_text())
+    Path(next(f["path"] for f in second_pending["inputs"]["files"] if f["role"] == "diff")).write_text("손상")
+    _, stale_large, _ = verify(mp, [OK], extra=("--request", big_request))
+    check("전체 변경 근거가 손상되면 한도 뒤 과거 통과를 재사용하지 않는다", stale_large.get("state") != "ok")
     (proj / "big.txt").unlink()
     hooks = t / "fail-hooks"; hooks.mkdir(); (hooks / "pre-commit").write_text("#!/bin/sh\nexit 1\n"); (hooks / "pre-commit").chmod(0o755)
     rc, out, prompt = verify(mp, [OK], GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="core.hooksPath", GIT_CONFIG_VALUE_0=str(hooks), extra=("--request", req_file("고정 실패")))
@@ -295,7 +314,7 @@ exit 0
           out2.get("round") == 1 and k2 != k1 and k2.is_dir() and r1 is not None and (k1 / "result.json").read_text() == r1
           and (k1 / "diff.txt").is_file() and sh("git", "cat-file", "-e", f"{out1.get('target')}^{{commit}}", cwd=k1 / "target").returncode == 0)
     check("증거 폴더는 제품 파일 목록에 섞이지 않는다(work/ 아래)", Path(os.path.realpath(proj / "work")) in Path(os.path.realpath(k1)).parents)
-    # 평가 실행기의 검토 세션(verdict.py session --log): 회차의 원시 기록은 회차 폴더에, --log 는 최신 복사본
+    # 평가 실행기의 검토 세션(session.py review --log): 회차의 원시 기록은 회차 폴더에, --log 는 최신 복사본
     logp = t / "ev" / "x.verify1.jsonl"
     lreq = req_file("기록 위치 시도")
     (proj / "log-change.txt").write_text("검토할 변경\n")
@@ -418,7 +437,7 @@ exit 0
     check("record 결과에는 review=off 가 붙어 검토 결과와 구별된다", rec(m_done)[1].get("review") == "off")
     # 평가 관찰: 세션이 record 만 실행했으면 독립 검토를 한 것으로 세지 않는다
     sys.path.insert(0, str(KIT / "evals"))
-    import observe, verdict
+    import observe, verdict, session
     def seen(result, rc_):
         log = t / "obs.jsonl"
         log.write_text(json.dumps({"type": "item.completed", "item": {"type": "command_execution", "command": "python3 .agents/skills/wf-verify/verify.py x",
@@ -436,7 +455,7 @@ exit 0
     # 평가 실행기의 보조: 작업 시작 상태 커밋은 가지·index·작업 트리를 바꾸지 않고, 지도가 여러 개면 고르지 않는다
     (proj / "untracked-start.txt").write_text("시작 상태\n")
     head_before, status_before = sh(*G, "rev-parse", "HEAD", cwd=proj).stdout, sh(*G, "status", "--porcelain", cwd=proj).stdout
-    snap = verdict.snapshot(str(proj))
+    snap = session.snapshot(str(proj))
     check("snapshot: 추적하지 않는 새 파일까지 커밋 하나로 남기고 가지·index 는 그대로다",
           "untracked-start.txt" in sh(*G, "ls-tree", "-r", "--name-only", snap, cwd=proj).stdout
           and sh(*G, "rev-parse", "HEAD", cwd=proj).stdout == head_before and sh(*G, "status", "--porcelain", cwd=proj).stdout == status_before)
@@ -471,6 +490,119 @@ exit 0
     got = json.loads(fin(rd["kept"], json.dumps(OK), "--check", "PASS").stdout.strip().splitlines()[-1])
     check("검토자가 새 소스 파일을 바꾸면 여전히 unverified", got.get("state") == "unverified" and "추적 파일" in got.get("reason", ""))
     shutil.rmtree(cache); (proj / "extra.pyc").unlink(); (proj / "new_source.py").unlink()
+
+    # 지운 파일은 내용을 diff 에 싣지 않고 목록과 기준 사본 경로로 보인다(큰 삭제가 검토 입력 한도를 채우지 않게. 내용은 기준 사본에 그대로 있다)
+    (proj / "old-notes.txt").write_text("DELETED-CONTENT 1\n" * 50)
+    for i in range(5):
+        (proj / "old-case" / "samples" / str(i)).mkdir(parents=True, exist_ok=True); (proj / "old-case" / "samples" / str(i) / "t.txt").write_text("DELETED-CONTENT\n")
+    sh(*G, "add", "-A", cwd=proj); sh(*G, "commit", "-qm", "old notes", cwd=proj)
+    (proj / "old-notes.txt").unlink(); shutil.rmtree(proj / "old-case"); (proj / "ui.txt").write_text("button=로그인하기 DEL-CASE\nbutton_en=Login\n")
+    rd = prep("--request", req_file("삭제 표시 시도"))
+    dprompt = Path(rd["prompt_file"]).read_text() if rd.get("state") == "ready" else ""
+    check("지운 파일: 검토 입력에는 지운 파일 경로와 기준 사본 위치만 있고 내용은 없다(고친 파일의 diff 는 그대로)",
+          "old-notes.txt" in dprompt and "DELETED-CONTENT" not in dprompt and "지운 파일" in dprompt and "DEL-CASE" in dprompt
+          and (Path(rd["kept"]) / "base/old-notes.txt").is_file())
+    dchange = dprompt[dprompt.find("## 바뀐 내용"):]  # 맥락 도구 관찰(바뀐 파일 이름)은 따로 보이므로 diff 절만 본다
+    check("지운 파일: 통째로 없어진 폴더는 파일마다가 아니라 폴더 하나와 파일 수로 보인다", "old-case/ (파일 5개)" in dchange and "old-case/samples/0" not in dchange)
+    sh(*G, "checkout", "-q", "--", "old-notes.txt", "old-case", cwd=proj); (proj / "ui.txt").write_text("button=로그인\nbutton_en=Login\n")
+    sh(*G, "rm", "-rq", "old-notes.txt", "old-case", cwd=proj); sh(*G, "commit", "-qm", "drop notes", cwd=proj)
+
+    # 머리줄 없이 나오는 diff 줄(바이너리 변경, 폴더↔파일 바뀜)은 앞의 지운 파일 덩어리와 함께 버리지 않는다
+    import importlib.util as _iu
+    _spec = _iu.spec_from_file_location("installed_verify", verifier); _v = _iu.module_from_spec(_spec); _spec.loader.exec_module(_v)
+    dd = Path(tempfile.mkdtemp(dir=t)); (dd / "b").mkdir(); (dd / "g").mkdir()
+    (dd / "b/aa-gone.txt").write_text("gone\n"); (dd / "b/ab.bin").write_bytes(b"\x00\x01old"); (dd / "g/ab.bin").write_bytes(b"\x00\x02new")
+    (dd / "b/ac-gone.txt").write_text("gone\n"); (dd / "b/ad-swap").mkdir(); (dd / "b/ad-swap/in.txt").write_text("x\n"); (dd / "g/ad-swap").write_text("now a file\n")
+    (dd / "b/ae-cr.txt").write_bytes(b"old1\rold2\rSECRET-CR\r"); (dd / "b/af-ff.txt").write_bytes(b"x\x0cSECRET-FF\n")
+    dtext = _v.diff(dd / "b", dd / "g", dd / "full.txt")[0]
+    check("지운 파일 안의 \\r·폼피드로 끊긴 글도 검토 입력에 새어 나오지 않는다", "SECRET-CR" not in dtext and "SECRET-FF" not in dtext and "ae-cr.txt" in dtext)
+    (dd / "b/ag-gone.txt").write_text("gone\n"); os.symlink("x1", dd / "b/ah-link"); os.symlink("x2", dd / "g/ah-link"); os.symlink("x1", dd / "b/ai-deadlink")
+    dtext = _v.diff(dd / "b", dd / "g", dd / "full.txt")[0]
+    check("지운 파일 바로 뒤의 바뀐 심볼릭 링크 줄이 남고, 지운 링크도 지운 파일 목록에 오른다", "ah-link" in dtext and "ai-deadlink" in dtext and "ag-gone.txt" in dtext)
+    check("지운 파일 뒤의 머리줄 없는 diff 줄(바이너리 변경·폴더가 파일로 바뀜)이 검토 입력에 남는다",
+          "ab.bin" in dtext and "ad-swap" in dtext and "aa-gone.txt" in dtext and "gone\n" not in dtext.replace("aa-gone", "").replace("ac-gone", ""))
+
+    # 여러 저장소 작업: 지도 `## 맥락` 의 대상 표(대상·경로·기준 커밋)가 검토 대상을 정한다. 지도를 둔 저장소(홈)는 표에 적었을 때만 대상이다.
+    def lib(name, text):
+        d = t / name; (d / "src").mkdir(parents=True); (d / "AGENTS.md").write_text(f"# {name}\n검사: grep\n"); (d / "src/index.txt").write_text(text)
+        sh(*G, "init", "-q", cwd=d); sh(*G, "add", "-A", cwd=d); sh(*G, "commit", "-qm", "base", cwd=d)
+        return d, sh(*G, "rev-parse", "HEAD", cwd=d).stdout.strip()
+    lib_a, base_a = lib("lib-a", "export old_name\n")
+    lib_b, base_b = lib("lib-b", "use old_name\n")
+    TARGET_HEAD = "| 대상 | 경로 | 기준 커밋 |\n| --- | --- | --- |\n"
+    def multi_map(name, rows):
+        mp = proj / "work" / name / "work.md"; mp.parent.mkdir(parents=True, exist_ok=True)
+        mp.write_text(f"# {name}\n\n## 맥락\n\n{TARGET_HEAD}{rows}\n## 기준\n\n- 요청 원문: lib-a 의 이름을 바꾸고 lib-b 가 새 이름을 쓰게 해 주세요 MULTI-REQ\n\n"
+                      + HEAD + "| R1 | lib-b → src/index.txt → new_name 사용 | 원문 | - | grep | 확정 |\n")
+        return f"work/{name}/work.md"
+    rows_ok = f"| lib-a | {lib_a} | {base_a} |\n| lib-b | {lib_b} | {base_b} |\n"
+    m_multi = multi_map("multi", rows_ok)
+    (lib_b / "src/index.txt").write_text("use new_name LIB-B-CHANGE\n")
+    (proj / "home-note.txt").write_text("HOME-CHANGE\n")
+    rd = prep("--map", m_multi)
+    mprompt = Path(rd["prompt_file"]).read_text() if rd.get("state") == "ready" else ""
+    check("대상 표: 표의 저장소마다 고정본과 기준부터의 diff 가 들어간다(두 번째 저장소의 변경도 검토된다)",
+          rd.get("state") == "ready" and "LIB-B-CHANGE" in mprompt and "lib-a" in mprompt and "lib-b" in mprompt
+          and (Path(rd["target_dir"]) / "lib-b/src/index.txt").read_text() == "use new_name LIB-B-CHANGE\n")
+    check("대상 표: 표에 없는 홈(지도를 둔 저장소)의 변경은 검토 대상이 아니다", rd.get("state") == "ready" and "HOME-CHANGE" not in mprompt)
+    check("대상 표: 대상마다 맥락 도구가 본 경로가 관찰 맥락에 들어간다", str(lib_a.resolve()) in mprompt and str(lib_b.resolve()) in mprompt)
+    check("대상 표: 판정 기준은 대상별 적용 기준, 내부 검토와 저장소 연결 요구를 함께 확인한다",
+          str(verifier.parent / "SKILL.md") in mprompt and "각 대상 폴더" in mprompt and "내부 검토" in mprompt and "TV1" in mprompt and "TV2" in mprompt)
+    got = json.loads(fin(rd["kept"], json.dumps({**ok_r1, 'conditions': ok_r1['conditions'] + [{'id': rid, 'result': '충족', 'evidence': '대상 기준·현재 버전·실행 대조'} for rid in ['TV2']]}, ensure_ascii=False), "--check", "PASS").stdout.strip().splitlines()[-1]) if rd.get("state") == "ready" else {}
+    check("대상 표: 아무것도 바뀌지 않으면 검토 판정으로 완료(verified)", got.get("state") == "ok" and got.get("completion") == "verified")
+    rd = prep("--map", m_multi, "--request", req_file("lib 두 번째 시도"))
+    if rd.get("state") == "ready":
+        (lib_a / "src/index.txt").write_text("export new_name WHILE-REVIEW\n")
+    got = json.loads(fin(rd["kept"], json.dumps({**ok_r1, 'conditions': ok_r1['conditions'] + [{'id': rid, 'result': '충족', 'evidence': '대상 기준·현재 버전·실행 대조'} for rid in ['TV2']]}, ensure_ascii=False), "--check", "PASS").stdout.strip().splitlines()[-1]) if rd.get("state") == "ready" else {}
+    check("대상 표: 검토하는 동안 어느 대상이라도 바뀌면 unverified", got.get("state") == "unverified")
+    (lib_a / "src/index.txt").write_text("export old_name\n")
+    rd = prep("--map", multi_map("multi-badbase", f"| lib-a | {lib_a} | {base_a} |\n| lib-b | {lib_b} | {'0' * 40} |\n"))
+    check("대상 표: 한 대상의 기준 커밋을 꺼내지 못하면 전체가 unverified(부분 통과 없음)", rd.get("state") == "unverified" and "lib-b" in rd.get("reason", ""))
+    rd = prep("--map", multi_map("multi-gone", f"| lib-a | {lib_a} | {base_a} |\n| gone | {t / 'gone'} | {base_b} |\n"))
+    check("대상 표: 경로가 없는 대상이 있으면 전체가 unverified", rd.get("state") == "unverified" and "gone" in rd.get("reason", ""))
+    for name, rows, why in (("tbl-sub", f"| lib-a | {lib_a / 'src'} | {base_a} |\n", "최상위"),
+                            ("tbl-nobase", f"| lib-a | {lib_a} |  |\n", "기준 커밋"),
+                            ("tbl-dup", f"| lib-a | {lib_a} | {base_a} |\n| again | {lib_a}/ | {base_a} |\n", "두 번"),
+                            ("tbl-dots", f"| .. | {lib_a} | {base_a} |\n", "이름")):
+        rc, o = rec(multi_map(name, rows))
+        check(f"record: 대상 표 형식 오류({why})는 returned", rc == 3 and o.get("state") == "returned" and why in o.get("reason", ""))
+    rc, o = rec(m_multi)
+    check("record: 올바른 대상 표는 형식 문제가 아니다", rc == 0 and o.get("state") == "recorded")
+    r = sh(sys.executable, "-I", str(verifier), "prepare", "--map", m_multi, "--base", "HEAD", cwd=proj, env=base_env)
+    check("대상 표와 --base 를 함께 주면 사용 오류(기준 커밋은 표의 행이 정한다)", r.returncode == 2)
+    (lib_b / "src/index.txt").write_text("use old_name\n"); (proj / "home-note.txt").unlink()
+
+    # 검토에서 빼는 것은 키트가 설치한 파일과 하네스 설정뿐이다. 프로젝트 역할 스킬·AGENTS.md 프로젝트 절은 제품이고,
+    # 키트가 설치되지 않은 저장소(키트 저장소 자체)에서는 .agents·AGENTS.md 전부가 제품이다. 대상 표가 없어도 같다.
+    role = proj / ".agents/skills/role-x/SKILL.md"; role.parent.mkdir(parents=True, exist_ok=True); role.write_text("역할 규칙 v1\n")
+    sh(*G, "add", "-A", cwd=proj); sh(*G, "commit", "-qm", "role skill", cwd=proj)
+    agents_before, readme = (proj / "AGENTS.md").read_text(), proj / ".agents/skills/README.md"
+    readme_before = readme.read_text()
+    role.write_text("역할 규칙 v2 ROLE-CHANGE\n")
+    (proj / "AGENTS.md").write_text(agents_before + "\n- 프로젝트 약속 PROJECT-SECTION-CHANGE\n")
+    readme.write_text(readme_before + "KIT-FILE-CHANGE\n")
+    rd = prep("--request", req_file("역할 스킬 시도"))
+    sprompt = Path(rd["prompt_file"]).read_text() if rd.get("state") == "ready" else ""
+    check("키트가 설치된 저장소: 역할 스킬과 AGENTS.md 프로젝트 절의 변경은 검토되고, 키트가 설치한 파일의 변경은 빠진다",
+          "ROLE-CHANGE" in sprompt and "PROJECT-SECTION-CHANGE" in sprompt and "KIT-FILE-CHANGE" not in sprompt)
+    if rd.get("state") == "ready":
+        role.write_text("역할 규칙 v3 WHILE-REVIEW\n")
+    got = json.loads(fin(rd["kept"], json.dumps(OK), "--check", "PASS").stdout.strip().splitlines()[-1]) if rd.get("state") == "ready" else {}
+    check("키트가 설치된 저장소: 검토하는 동안 역할 스킬이 바뀌면 unverified", got.get("state") == "unverified")
+    role.write_text("역할 규칙 v1\n"); (proj / "AGENTS.md").write_text(agents_before); readme.write_text(readme_before)
+    kitlike, base_k = lib("kit-like", "kit tool\n")
+    (kitlike / ".agents/skills/x").mkdir(parents=True); (kitlike / ".agents/skills/x/SKILL.md").write_text("단계 v1\n")
+    sh(*G, "add", "-A", cwd=kitlike); sh(*G, "commit", "-qm", "skills", cwd=kitlike); base_k = sh(*G, "rev-parse", "HEAD", cwd=kitlike).stdout.strip()
+    (kitlike / ".agents/skills/x/SKILL.md").write_text("단계 v2 KIT-SKILL-CHANGE\n")
+    (kitlike / "AGENTS.md").write_text("# kit-like\nKIT-AGENTS-CHANGE\n")
+    rd = prep("--map", multi_map("multi-kitlike", f"| kit-like | {kitlike} | {base_k} |\n"))
+    kprompt = Path(rd["prompt_file"]).read_text() if rd.get("state") == "ready" else ""
+    check("키트가 설치되지 않은 대상(키트 저장소 자체): .agents/skills 와 AGENTS.md 변경이 검토된다",
+          "KIT-SKILL-CHANGE" in kprompt and "KIT-AGENTS-CHANGE" in kprompt)
+    if rd.get("state") == "ready":
+        (kitlike / ".agents/skills/x/SKILL.md").write_text("단계 v3 WHILE-REVIEW\n")
+    got = json.loads(fin(rd["kept"], json.dumps(ok_r1, ensure_ascii=False), "--check", "PASS").stdout.strip().splitlines()[-1]) if rd.get("state") == "ready" else {}
+    check("키트가 설치되지 않은 대상: 검토하는 동안 .agents 파일이 바뀌면 unverified", got.get("state") == "unverified")
 
 print(f"{ok} passed, {failed} failed")
 sys.exit(1 if failed else 0)

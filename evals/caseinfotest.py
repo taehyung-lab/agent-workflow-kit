@@ -84,6 +84,27 @@ with tempfile.TemporaryDirectory() as tmp:
           r.returncode == 0 and m["judge_version"] == hbase and [h["judge_version"] for h in m["rejudge_history"]] == ["older0000000", "old000000000"]
           and m["rejudge_history"][-1]["verdict"] == "PASS", f"rc={r.returncode} {r.stderr} {m}")
 
+# 일반 과제의 입력과 판정기의 정체성은 별개다.
+from caseinfo import case_fingerprints
+with tempfile.TemporaryDirectory() as tmp:
+    case = Path(tmp) / 'inputs'; case.mkdir()
+    for name in ('prompt.txt', 'prompt2.txt', 'approve.txt', 'setup.sh', 'after-install.sh', 'before-turn2.sh'):
+        (case / name).write_text(name)
+    turns = [case / name for name in ('prompt.txt', 'prompt2.txt', 'approve.txt')]
+    original = case_fingerprints(case, turns, {'lang':'python'})
+    for name in ('prompt.txt', 'prompt2.txt', 'approve.txt', 'setup.sh', 'after-install.sh', 'before-turn2.sh'):
+        f = case / name; old = f.read_text(); f.write_text(old + ' changed')
+        changed = case_fingerprints(case, turns, {'lang':'python'})
+        f.write_text(old)
+        check(f'일반 과제: {name} 변경은 입력 지문을 바꾼다', changed['task_fingerprint'] != original['task_fingerprint'])
+    check('일반 과제: 실행 환경 변경은 입력 지문을 바꾼다',
+          case_fingerprints(case, turns, {'lang':'other'})['task_fingerprint'] != original['task_fingerprint'])
+    check('일반 과제: 실제 출발 파일 변경은 입력 지문을 바꾼다',
+          case_fingerprints(case, turns, {'lang':'python'}, {'data.txt':'changed'})['task_fingerprint'] != original['task_fingerprint'])
+    (case / 'check.py').write_text('judge only')
+    check('일반 과제: 판정기 변경을 입력 변경으로 섞지 않는다',
+          case_fingerprints(case, turns, {'lang':'python'}) == original)
+
 # 실제 실행 결과: 실행 때 기록한 지문과 같은 코드로 재판정한 지문이 같아야 한다.
 for root in sys.argv[1:]:
     metas = sorted(Path(root).rglob("*.meta.json"))

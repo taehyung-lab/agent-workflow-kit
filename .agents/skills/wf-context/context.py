@@ -2,6 +2,9 @@
 
   python3 .agents/skills/wf-context/context.py inspect [폴더]   사람·에이전트가 직접 볼 때(기본 폴더: 지금 폴더)
   python3 .agents/skills/wf-context/context.py hook            세션 시작 훅(Claude Code SessionStart)이 부른다
+  python3 .agents/skills/wf-context/context.py commit <커밋> [폴더]  커밋 메시지 전문·작성자·날짜·바뀐 파일 이름
+
+commit 은 git 을 직접 불러 메시지 본문을 줄이지 않고 낸다(출력을 요약하는 셸 래퍼를 거치면 본문이 빠질 수 있다).
 
 내는 것: 실경로, 저장소 맨 위, 브랜치·해소한 커밋, 로컬 추적 브랜치와의 차이(마지막 fetch 기준), 작업 트리 변경(파일 이름만),
 설치된 키트·버전 기록(`*.version` 첫 줄, package.json 의 name@version), 같은 저장소의 다른 worktree(진단용), work/*/work.md 지도 제목.
@@ -191,6 +194,19 @@ def inspect(start, session_dir=None):
     return lines
 
 
+def commit(ref, start):
+    """커밋 메시지 전문과 바뀐 파일 이름(정보만, diff 내용은 내지 않는다)."""
+    root = (git(start, "rev-parse", "--show-toplevel") or "").strip() or start
+    head = git(root, "show", "-s", "--format=%H%n%an <%ae>%n%ad", "--date=iso", ref)
+    body = git(root, "log", "-1", "--format=%B", ref)
+    if head is None or body is None:
+        return [f"커밋을 찾지 못했다: {ref}"]
+    sha, author, date = (head.strip().splitlines() + ["", "", ""])[:3]
+    names = (git(root, "show", "--name-only", "--format=", ref) or "").split()
+    return [f"커밋: {sha[:12]} / 작성자: {author} / 날짜: {date}", "메시지 전문:", *("  " + l for l in body.rstrip().splitlines()),
+            "바뀐 파일: " + (", ".join(names[:LIMIT_FILES]) + (f" 외 {len(names) - LIMIT_FILES}개" if len(names) > LIMIT_FILES else "") if names else "없음")]
+
+
 def _no_git():
     from shutil import which
     return which("git") is None
@@ -225,6 +241,10 @@ def hook():
 def main(args):
     if args[:1] == ["hook"]:
         return hook()
+    if args[:1] == ["commit"] and len(args) > 1:
+        for line in commit(args[1], args[2] if len(args) > 2 else os.getcwd()):
+            print(line)
+        return 0
     if args[:1] != ["inspect"]:
         print(__doc__.strip().splitlines()[2].strip() + "\n" + __doc__.strip().splitlines()[3].strip(), file=sys.stderr)
         return 0

@@ -29,8 +29,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 KIT = HERE.parent
 sys.path.insert(0, str(HERE))
-import observe, result, session, transcript, verdict
-from caseinfo import MissingJudgeFile, case_path, judge_version
+import observe, pins, result, session, transcript, verdict
+from caseinfo import MissingJudgeFile, case_path, judge_version, case_fingerprints
 from judge import FAIL, REVIEW, UNVERIFIED
 
 # 하네스가 모델 용량·요청 한도 같은 외부 장애로 끝났는지: 기록의 오류 사건(transcript.error_lines)과 표준 오류에서만 찾는다(일반 답 속 낱말은 보지 않는다).
@@ -92,7 +92,7 @@ def plugins_fingerprint(project):
 
 
 def verify_loop(harness, project, out, turns, base_sha, case_dir, tool, t):
-    """독립 검증 루프. 검증 입력 묶기·결과 판정·재검증 한도는 설치된 검토 도구가 맡고, 검토자 세션을 띄우는 일만 verdict.py session 이 한다.
+    """독립 검증 루프. 검증 입력 묶기·결과 판정·재검증 한도는 설치된 검토 도구가 맡고, 검토자 세션을 띄우는 일만 session.py review 이 한다.
     도구는 사용자와 같은 옵션으로 부른다: 사용자 턴 전부(--request), 작업 시작 커밋(--base), 사례의 필수 조건(--conditions), 지도가 하나면 그 지도(--map, session 이 고른다).
     돌려줌: 검증 사실(state·reason·rounds·verifier_exit_code·review·baseline_changed)과, 교정 턴에서 구현자 하네스가 실패했으면 그 종료 코드(아니면 0)."""
     max_rounds = os.environ.get("EVALS_VERIFY_ROUNDS") or "2"
@@ -126,7 +126,7 @@ def verify_loop(harness, project, out, turns, base_sha, case_dir, tool, t):
         v["rounds"] += 1
         vlog = f"{out}.verify{v['rounds']}.jsonl"
         with open(f"{out}.err", "ab") as err:
-            printed = subprocess.run([sys.executable, "-I", str(HERE / "verdict.py"), "session", "--tool", str(tool), "--harness", harness.name,
+            printed = subprocess.run([sys.executable, "-I", str(HERE / "session.py"), "review", "--tool", str(tool), "--harness", harness.name,
                                       "--rounds", max_rounds, "--log", vlog, *args], cwd=project, stdout=subprocess.PIPE, stderr=err, text=True).stdout
         if os.path.isfile(vlog):
             shutil.copy(vlog, f"{out}.verify.jsonl")  # 마지막 판정 기록(이전 판정은 .verifyN.jsonl 로 남는다)
@@ -176,6 +176,9 @@ def judge(case_dir, project, work, out, rc, observed, input_kind):
     하네스가 외부 장애로 끝났으면 판정하지 않고 통과율 분모에서 뺀다(시도·사유는 남긴다)."""
     lines = transcript.error_lines(f"{out}.jsonl") + Path(f"{out}.err").read_bytes().split(b"\n")
     external = next((m.group().decode(errors="replace") for m in map(EXTERNAL.search, lines) if m), "")
+    stopped = session.runtime_stop(transcript.last_turn_log(f"{out}.jsonl"), rc)
+    if stopped:
+        external = '통제된 한도 중단 ' + stopped['reason'] + ': ' + stopped.get('detail', '')
     if rc != 0 and external:
         # 장애 전에 제품 파일을 바꿨으면(최종 파일 차이, 또는 바꿨다가 되돌린 편집 기록) 위반일 수 있으므로
         # 지우지 않고 사람이 원시 기록으로 판정한다.
@@ -217,6 +220,12 @@ def current_judge_version(case_dir, where=""):
 def run_once(case_name, case_dir, ref, commit, harness_name, i, out_root, state):
     """한 번 실행해 결과 파일을 남긴다. 돌려줌: 하네스 종료 코드."""
     lang = os.environ.get("EVALS_LANG", "")
+    name = f"{case_name}{'-' + lang if lang else ''}-{commit[:7]}-{harness_name}-{i}"
+    out = f"{out_root}/{name}"
+    try:
+        session.reserve_run(out)
+    except FileExistsError as e:
+        fail(str(e))
     settings_file = os.environ.get("EVALS_CLAUDE_SETTINGS", "")
     work = Path(tempfile.mkdtemp())
     project, kit = work / "project", work / "kit"
@@ -226,18 +235,6 @@ def run_once(case_name, case_dir, ref, commit, harness_name, i, out_root, state)
             settings = json.loads(Path(settings_file).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             fail(f"EVALS_CLAUDE_SETTINGS 를 합치지 못했다: {settings_file}")
-    setup, after = case_dir / "setup.sh", case_dir / "after-install.sh"
-    # 설치 뒤 준비(선택): 설치된 상태를 바꿔야 하는 사례(예: 키트 본문을 읽을 수 없게, 다른 저장소를 옆에 두기)가 쓴다. EVALS_KIT 는 설치에 쓴 키트 checkout 이다.
-    after_install = (lambda p: subprocess.run(["bash", str(after)], cwd=p, check=True, env={**os.environ, "EVALS_KIT": str(kit)})) if after.is_file() else None
-    try:
-        session.kit_checkout(commit, kit)
-        session.build_project(project, kit, prepare=session.case_fixture(setup if setup.is_file() else None), settings=settings, after_install=after_install)
-    except session.ProjectError as e:
-        fail({"checkout": f"키트 checkout 실패: {commit}", "prepare": "사례 준비 실패", "install": f"키트 설치 실패: {commit}",
-              "settings": f"EVALS_CLAUDE_SETTINGS 를 합치지 못했다: {settings_file}", "after-install": f"설치 뒤 준비 실패: {after}"}[e.step])
-
-    name = f"{case_name}{'-' + lang if lang else ''}-{commit[:7]}-{harness_name}-{i}"
-    out = f"{out_root}/{name}"
     # 사례의 턴: prompt.txt 가 첫 턴, prompt2.txt·prompt3.txt … 가 같은 세션을 이어 가는 다음 턴이다.
     # 턴마다 원시 기록을 .tN.jsonl 로 남기고, 판정용 .jsonl 은 모든 턴을 순서대로 이은 것이다(마지막 답 = 마지막 턴의 답).
     turns = [case_dir / "prompt.txt"] + [case_dir / f"prompt{n}.txt" for n in range(2, 10) if (case_dir / f"prompt{n}.txt").is_file()]
@@ -246,6 +243,37 @@ def run_once(case_name, case_dir, ref, commit, harness_name, i, out_root, state)
     if os.environ.get("EVALS_APPROVE") == "1" and (case_dir / "approve.txt").is_file():
         turns.append(case_dir / "approve.txt")
         input_kind = "with-approval"
+    input_environment = {"lang": lang, "approve": input_kind == "with-approval",
+                         "verify": os.environ.get("EVALS_VERIFY") == "1",
+                         "verify_rounds": os.environ.get("EVALS_VERIFY_ROUNDS") or "2",
+                         "codex_network": os.environ.get("EVALS_CODEX_NETWORK") == "1",
+                         "claude_settings_sha256": hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()}
+    input_evidence = case_fingerprints(case_dir, turns, input_environment)
+    turn_texts = [read_turn(f) for f in turns]
+    prepared_files = {}
+    def prepare(project):
+        session.case_fixture(setup if setup.is_file() else None)(project)
+        prepared_files.update({f.relative_to(project).as_posix(): hashlib.sha256(f.read_bytes()).hexdigest()
+                               for f in sorted(project.rglob('*')) if f.is_file() and '.git' not in f.relative_to(project).parts})
+    setup, after = case_dir / "setup.sh", case_dir / "after-install.sh"
+    # 설치 뒤 준비(선택): 설치된 상태를 바꿔야 하는 사례(예: 키트 본문을 읽을 수 없게, 다른 저장소를 옆에 두기)가 쓴다. EVALS_KIT 는 설치에 쓴 키트 checkout 이다.
+    after_install = (lambda p: subprocess.run(["bash", str(after)], cwd=p, check=True, env={**os.environ, "EVALS_KIT": str(kit)})) if after.is_file() else None
+    try:
+        session.kit_checkout(commit, kit)
+        session.build_project(project, kit, prepare=prepare, settings=settings, after_install=after_install)
+    except session.ProjectError as e:
+        fail({"checkout": f"키트 checkout 실패: {commit}", "prepare": "사례 준비 실패", "install": f"키트 설치 실패: {commit}",
+              "settings": f"EVALS_CLAUDE_SETTINGS 를 합치지 못했다: {settings_file}", "after-install": f"설치 뒤 준비 실패: {after}"}[e.step])
+
+    input_evidence['task_inputs']['prepared_files'] = prepared_files
+    input_evidence['task_fingerprint'] = hashlib.sha256(
+        json.dumps(input_evidence['task_inputs'], ensure_ascii=True, sort_keys=True).encode()).hexdigest()
+    # 검토에도 실제 전송한 원문을 넘긴다. 실행 중 현재 사례 파일이 바뀌어도 옛 턴을 덮지 않는다.
+    requests = work / 'requests'; requests.mkdir()
+    request_files = []
+    for n, text in enumerate(turn_texts, 1):
+        path = requests / f'prompt{n}.txt'; path.write_text(text, encoding='utf-8', errors='surrogateescape')
+        request_files.append(path)
     start, rc = int(time.time()), 0
     Path(f"{out}.jsonl").write_bytes(b"")
     Path(f"{out}.err").write_bytes(b"")
@@ -257,7 +285,7 @@ def run_once(case_name, case_dir, ref, commit, harness_name, i, out_root, state)
     t = sent = 0
     # 작업 시작 상태(첫 턴 직전)를 커밋 하나로 남긴다(가지·index 는 그대로). 검증자는 마지막 턴만이 아니라 작업 시작부터의 변경 전체를 받는다.
     try:
-        base_sha = verdict.snapshot(str(project))
+        base_sha = session.snapshot(str(project))
     except Exception:
         base_sha = ""
         append(f"{out}.err", traceback.format_exc().rstrip("\n"))
@@ -279,7 +307,7 @@ def run_once(case_name, case_dir, ref, commit, harness_name, i, out_root, state)
         shutil.rmtree(work / "before-last", ignore_errors=True)
         (work / "before-last").mkdir()
         copy_files(project, work / "before-last")
-        turn = harness.start(read_turn(turn_file), tout) if t == 1 else harness.resume(read_turn(turn_file), tout)
+        turn = harness.start(turn_texts[t - 1], tout) if t == 1 else harness.resume(turn_texts[t - 1], tout)
         append_file(f"{out}.jsonl", turn.log)
         append_file(f"{out}.err", turn.err)
         if turn.exit_code != 0:
@@ -295,7 +323,7 @@ def run_once(case_name, case_dir, ref, commit, harness_name, i, out_root, state)
         state["verifier_tool"] = str(project / ".agents/skills/wf-verify/verify.py")
         if not os.path.isfile(state["verifier_tool"]):
             state["verifier_tool"] = str(KIT / ".agents/skills/wf-verify/verify.py")
-        v, rc = verify_loop(harness, project, out, turns, base_sha, case_dir, state["verifier_tool"], t)
+        v, rc = verify_loop(harness, project, out, request_files, base_sha, case_dir, state["verifier_tool"], t)
     harness.close(rollout=transcript.rollout_log(f"{out}.jsonl"))
     seconds = int(time.time()) - start
     try:
@@ -303,6 +331,7 @@ def run_once(case_name, case_dir, ref, commit, harness_name, i, out_root, state)
         observed = json.loads(json.dumps(observe.observe(f"{out}.jsonl", names), ensure_ascii=False))
     except Exception:
         observed = {}
+    observed['runtime_stop'] = session.runtime_stop(transcript.last_turn_log(f"{out}.jsonl"), rc)
     word, text = judge(case_dir, project, work, out, rc, observed, input_kind)
     jv = current_judge_version(case_dir, f": {out}")  # 실행 중 판정 파일이 사라졌으면 멈춘다(원시 기록 .jsonl 은 남아 있다)
     # 사례가 AGENTS.md 를 읽을 수 없게 만들었으면 바이트는 설치에 쓴 키트 checkout 에서 잰다.
@@ -311,8 +340,14 @@ def run_once(case_name, case_dir, ref, commit, harness_name, i, out_root, state)
     except OSError:
         agents_bytes = len((kit / "AGENTS.md").read_bytes())
     try:
+        changed_inputs = case_fingerprints(case_dir, turns, input_environment)['task_inputs']['files'] != input_evidence['task_inputs']['files']
+    except OSError:
+        changed_inputs = True
+    if changed_inputs:
+        input_evidence['task_fingerprint'] = None  # 실행 중 바뀐 입력을 같은 조건의 증거로 쓰지 않는다.
+    try:
         facts = {
-            "case": case_name, "kit_ref": ref, "kit_commit": commit, "harness": harness_name, "run": i, "harness_version": harness.version(),
+            **input_evidence, "case": case_name, "kit_ref": ref, "kit_commit": commit, "harness": harness_name, "run": i, "harness_version": harness.version(), "model": pins.model(harness_name),
             "exit_code": rc, "seconds": seconds, "agents_md_bytes": agents_bytes, "check": word, "check_output": text,
             "input": input_kind, "user_turns": sent, "planned_turns": len(turns), "observed": observed,
             "verifier": v["state"], "verify_reason": v["reason"], "verify_rounds": v["rounds"], "verifier_exit_code": v["verifier_exit_code"],
@@ -349,7 +384,8 @@ def compare(case_name, ref, harness_name, times):
     base, target = (resolve(r) for r in (ref[:ref.index("..")], ref[ref.rindex("..") + 2:]))
     out = os.environ.get("EVALS_RESULTS") or f"{HERE}/results/{time.strftime('%Y%m%d')}"
     rc = 0
-    for i in range(1, times + 1):
+    offset = int(os.environ.get("EVALS_RUN_OFFSET") or 0)
+    for i in range(1 + offset, times + offset + 1):
         for side in (base, target):
             rc = subprocess.run([sys.executable, "-I", __file__, case_name, side, harness_name, "1"],
                                 env={**os.environ, "EVALS_RESULTS": out, "EVALS_RUN_OFFSET": str(i - 1)}).returncode or rc
@@ -392,6 +428,8 @@ def main(argv):
         fail("하네스는 claude 또는 codex")
     if not shutil.which(harness_name):
         fail(f"{harness_name} 명령이 없다")
+    if (mismatch := pins.check(harness_name)):  # 고정한 CLI 가 아니면 같은 조건의 비교가 아니다: 모델을 돌리기 전에 멈춘다
+        fail(mismatch)
     out_root = os.environ.get("EVALS_RESULTS") or f"{HERE}/results/{time.strftime('%Y%m%d')}"
     # 턴은 프로젝트 폴더로 옮겨 실행하므로 결과 폴더는 절대 경로로 바꿔 둔다(상대 경로면 턴 기록을 쓰지 못한다).
     os.makedirs(out_root, exist_ok=True)

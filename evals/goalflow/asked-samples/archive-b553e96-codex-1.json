@@ -1,0 +1,12 @@
+{
+ "task": "archive-correction",
+ "expect": [
+  1,
+  2
+ ],
+ "source": "archive-adjudication.json run archive-after-correction-b553e96-codex-1 (사람 판독 PASS, 기계 PASS)",
+ "reply": "현재는 완료 항목을 숨기기만 하고, 보관함에서 보는 기능은 없습니다.\n\n**완료 처리하면 자동으로 보관함에 옮기고, `bin/todo archive`로 확인하는 방식**으로 수정할까요? 예를 들어 ‘우유 사기’를 완료하면 일반 목록에서 사라지고 보관함에 표시됩니다.\n\n기존에 완료한 항목도 보관함에 포함하고, 항목 번호와 정산용 CSV 내용은 유지하겠습니다.\n\n[wf-ask 지침](/private/var/folders/vz/ddg_dgy17zjdcjqt1s6yqlm80000gn/T/tmpy85e30_3/project/.agents/skills/wf-ask/SKILL.md)의 “사용자가 확인하기 전에는 제품 파일을 고치지 않는다”에 따라, 보관함 동작을 확인한 뒤 수정하겠습니다.",
+ "kind": "surfaced",
+ "holdout": false,
+ "expect_none": []
+}

@@ -22,7 +22,7 @@
      python3 -I evals/report.py --compare <기준 커밋> <대상 커밋> <결과 폴더 ...>   (run.sh <사례> 기준..대상 이 끝에 부른다)
 
 --compare 는 같은 사례·언어·하네스·입력의 두 커밋 실행을 한 줄로 나란히 보인다(통과/판정, 검토 필요, 외부 장애, 답 대기, 첫 답 중앙값).
-비교 조건(하네스 버전·전역 지침 지문·판정기 버전)이 다르면 "비교 불가"와 그 항목을 적는다.
+비교 조건(하네스 버전·모델·모의 사용자 모델·전역 지침 지문·판정기 버전)이 다르면 "비교 불가"와 그 항목을 적는다.
 표시의 맨 앞은 이 줄로 무엇을 말할 수 있는가다(decide). 통과 수는 그 과제를 그 횟수만큼 돌려 본 관찰이고, 두 커밋의 차이는 따로 확인해야 하는 주장이다.
   "차이: 개선"·"차이: 퇴보"  양쪽을 2회 이상 돌렸고 한쪽은 전부 실패, 다른 쪽은 전부 통과다(전부 뒤집힌 경우만 차이로 적는다).
   "회귀 확인용"              양쪽 모두 전부 통과다. 기준이 이미 통과하는 사례라 두 커밋의 우열을 가르지 못한다.
@@ -86,16 +86,40 @@ def compare(base, target, roots):
         if not b or not t:
             marks.append("한쪽 실행 없음")
         else:
-            diff = [k for k, f in (("하네스 버전", lambda m: m.get("harness_version")),
-                                   ("전역 지침", lambda m: json.dumps(m.get("global_instructions"), sort_keys=True)), ("판정기", lambda m: m.get("judge_version")))
-                    if {f(m) for m in b} != {f(m) for m in t}]
-            if diff:
-                marks.append("비교 불가: " + "·".join(diff))
-            # 검토 필요는 통과도 실패도 아니다: 판단의 횟수에서 빼고 '사람 판독 대기'로 따로 센다.
+            fields = [("하네스 버전", "harness_version"), ("모델", "model"),
+                      ("전역 지침", "global_instructions"), ("판정기", "judge_version"),
+                      ("과제", "task_fingerprint")]
+            if any(m.get("mock_user_model") or m.get("goalflow", {}).get("mock") == "asked" for m in b + t):
+                fields += [("모의 사용자 모델", "mock_user_model")]
+            for key, label in (("conversation_contract", "대화 계약"), ("prompt_configuration", "요청 앞문장 설정")):
+                # 모드가 다르면 요구 발견을 포함한 점수와 구현만의 점수를 비교할 수 없다.
+                if any(key in m for m in b + t):
+                    fields.append((label, key))
+            differences = []
+            if any(m.get("goalflow") for m in b + t):
+                modes = {m.get("goalflow", {}).get("mock") for m in b + t}
+                if len(modes) != 1 or None in modes:
+                    differences.append("발견 측정 방식")
+            for label, key in fields:
+                values = [{json.dumps(m.get(key), sort_keys=True) for m in group} for group in (b, t)]
+                if any(m.get(key) is None or (isinstance(m.get(key), str) and not m[key].strip()) for m in b + t):
+                    differences.append(label + " 근거 없음")
+                elif values[0] != values[1] or len(values[0]) != 1:
+                    differences.append(label)
+            # 스킬은 비교의 처리 조건이다. 키트와 같을 필요는 없지만 한쪽 표본 안에서 섞이면 안 된다.
+            for group in (b, t):
+                skills = [m.get('skills_fingerprint') for m in group if m.get('goalflow', {}).get('arm') == 'skills']
+                if skills and (any(not value for value in skills) or len(set(skills)) != 1):
+                    differences.append('스킬 구성 근거 없음 또는 혼합')
             settled = lambda ms: [m for m in judged(ms) if not m.get("check_needs_review")]
             pending = sum(bool(m.get("check_needs_review")) for m in judged(b) + judged(t))
-            marks.insert(0, decide(sum(m["check_passed"] for m in settled(b)), len(settled(b)),
-                                   sum(m["check_passed"] for m in settled(t)), len(settled(t)), pending))
+            if differences:
+                marks.append("비교 불가: " + "·".join(differences))
+                if pending:
+                    marks.append(f"사람 판독 대기 {pending}")
+            else:
+                marks.append(decide(sum(m["check_passed"] for m in settled(b)), len(settled(b)),
+                                    sum(m["check_passed"] for m in settled(t)), len(settled(t)), pending))
         if any(m.get("check_unverified") for m in b + t):
             marks.append(f"외부 장애 {sum(m.get('check_unverified', False) for m in b + t)}")
         print(f"{case:<26} {lang:<4} {harness:<7} {inp:<13} {passed:>16} {review:>9} {waiting:>7} {first:>11}  {', '.join(marks)}")

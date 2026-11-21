@@ -1,0 +1,5 @@
+{
+  "claude": {"cli": "2.1.327 (Claude Code)", "model": "claude-opus-5-5"},
+  "codex": {"cli": "codex-cli 0.169.1", "model": "gpt-6.1-sol"},
+  "mock_user": "claude-sonnet-5-5"
+}

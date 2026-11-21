@@ -77,7 +77,7 @@ def initial_result(run):
     inputs = {"version": 1, "review_state": state, "review_required": run["review_required"],
               "open_decisions": evidence.get("open_decisions"), "unconfirmed": evidence.get("unconfirmed")}
     m = {"case": run["case"], "kit_ref": run["kit_ref"], "kit_commit": run["kit_commit"], "harness": run["harness"],
-         "run": run["run"], "harness_version": run["harness_version"], "exit_code": run["exit_code"], "seconds": run["seconds"],
+         "run": run["run"], "model": run.get("model"), "harness_version": run["harness_version"], "exit_code": run["exit_code"], "seconds": run["seconds"],
          "agents_md_bytes": run["agents_md_bytes"], "check_passed": run["check"] == PASS,
          "check_needs_review": run["check"] == REVIEW, "check_unverified": run["check"] == UNVERIFIED,
          "input": run["input"], "user_turns": run["user_turns"], "planned_turns": run["planned_turns"],
@@ -86,6 +86,7 @@ def initial_result(run):
          "verifier_exit_code": run["verifier_exit_code"],
          "out_of_scope": review.get("out_of_scope", []), "verifier_conditions": review.get("conditions", []),
          "lang": run["lang"] or None, "judge_version": run["judge_version"],
+         "task_fingerprint": run.get("task_fingerprint"), "task_inputs": copy.deepcopy(run.get("task_inputs")),
          "stage": "after-approval" if run["input"] == "with-approval" else "original-input",
          "review_state": state, "review_required": inputs["review_required"],
          "completion_inputs": inputs,

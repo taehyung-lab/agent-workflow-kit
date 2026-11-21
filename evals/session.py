@@ -9,6 +9,10 @@
   build_project(project, kit, prepare, settings, after_install, author, messages)
                             git init → prepare(출발 상태) → 커밋 → install.sh → 설정 합치기 → 커밋 → after_install
   case_fixture(setup)       평가 사례의 출발 상태(README 한 줄과 사례의 setup.sh)를 만드는 prepare
+EVALS_BUDGET_FILE을 명시하면 reserve_run이 최상위 횟수, 모든 세션/검토 CLI와
+분류 CLI가 합산 경과시간을 같은 로컬 원장으로 예약한다. 원장 생성은 budget.py가 맡는다.
+CLI 자식은 소유한 프로세스 그룹 안에서 정리한다. 원격 취소/금액 한도, 그룹을 벗어난
+프로세스, 운영체제의 종료 처리 지연까지 보장하는 장치는 아니다.
 세션(HARNESSES[이름](프로젝트)):
   start(prompt, out)        새 세션의 첫 턴                      ┐ 기록은 <out>.jsonl·<out>.err 에 쓰고
   resume(prompt, out)       같은 세션(session_id)을 이어 가는 턴 ┘ Turn(exit_code, log, err, session_id) 를 돌려준다
@@ -16,11 +20,19 @@
   version()                 하네스 버전 한 줄
   close(rollout)            임시 홈 정리. Codex 는 그 전에 세션 원본 기록을 rollout 에 남긴다
 """
-import fnmatch, json, os, re, shutil, subprocess, sys, tempfile
+import hashlib, fnmatch, json, os, re, shutil, signal, subprocess, sys, tempfile, time
 from collections import namedtuple
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import budget
 import transcript  # 기록 형식 읽기(세션 id). 이 모듈을 가져오는 쪽은 모두 evals/ 를 모듈 경로에 둔다
+
+
+def _model_flags(harness):
+    """세션을 띄울 때만 모델 고정값(pins.json)을 읽는다. 판정만 하는 모듈(verdict·result)은 고정값에 기대지 않는다."""
+    import pins
+    return pins.flags(harness)
 
 KIT = Path(__file__).resolve().parents[1]
 LIMIT = 1200  # 한 턴의 제한 시간(초)
@@ -110,23 +122,144 @@ def build_project(project, kit, prepare=None, settings=None, after_install=None,
             raise ProjectError("after-install", str(e))
 
 
+def reserve_run(prefix):
+    """이미 시작했거나 끝난 회차의 원시 증거를 덮어쓰지 않는다."""
+    prefix = Path(prefix)
+    prefix.parent.mkdir(parents=True, exist_ok=True)
+    if any(prefix.parent.glob(prefix.name + '.*')):
+        raise FileExistsError(f'기존 평가 기록이 있다: {prefix}. 새 회차 번호나 결과 폴더를 사용한다')
+    with Path(str(prefix) + '.started').open('x') as marker:
+        marker.write('원시 기록 보존: 이 회차 번호는 다시 쓰지 않는다\n')
+        try:
+            budget.reserve_run(prefix)
+        except budget.BudgetError as error:
+            marker.write(str(error)+'\n')
+            raise
+
+
+def stop_path(log):
+    name=str(log)
+    return Path((name[:-6] if name.endswith('.jsonl') else name)+'.stop.json')
+
+
+def runtime_stop(log, exit_code=None):
+    """CLI가 아닌 실행기가 별도 기록한 통제 중단만 읽는다. 모델 글은 읽지 않는다."""
+    try:
+        value=json.loads(stop_path(log).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    if (not isinstance(value,dict) or value.get('source')!='evaluation-runner' or value.get('version')!=1
+        or (value.get('reason'),value.get('exit_code')) not in (('budget',125),('timeout',124))
+        or (exit_code is not None and value['exit_code']!=exit_code)):
+        return None
+    return value
+
+
+def _write_stop(path,reason,exit_code,detail):
+    if path:
+        Path(path).write_text(json.dumps({'source':'evaluation-runner','version':1,'reason':reason,
+                                         'exit_code':exit_code,'detail':detail},ensure_ascii=False),encoding='utf-8')
+
+
+# Popen이 반환한 뒤 원장에 그룹을 등록하기 전에는 실제 CLI를 실행하지 않는다.
+# 자식은 같은 PID/그룹에서 exec하며, 부모가 사라져 파이프가 닫히면 실행을 거절한다.
+_BUDGET_START_GATE = """import os, sys
+fd = int(sys.argv[1])
+allowed = os.read(fd, 1)
+os.close(fd)
+if allowed != b'1':
+    sys.exit(125)
+os.execvpe(sys.argv[2], sys.argv[2:], os.environ)
+"""
+
+
+def _execute(cmd, stdout, stderr, limit, cwd=None, env=None, stdin=None, stop=None):
+    """로컬 CLI 하나를 소유한다. 시간은 공유 예약 후 시작하고 소유한 그룹을 정리한다."""
+    if stop: Path(stop).unlink(missing_ok=True)
+    environment=dict(os.environ if env is None else env)
+    lease=None
+    try:
+        lease=budget.reserve_time(float(limit),environment)
+    except budget.BudgetError as error:
+        stderr.write((str(error)+'\n').encode());stderr.flush()
+        _write_stop(stop,'budget',125,str(error))
+        return 125
+    effective=lease['seconds'] if lease else float(limit)
+    nested=bool(lease and lease['nested'])
+    if lease: environment['EVALS_BUDGET_CALL_ID']=lease['id']
+    started=time.monotonic()
+    process=None
+    gate_read=gate_write=None
+    reason='completed';rc=125
+    try:
+        launch=cmd
+        descriptors={}
+        if lease and not nested:
+            gate_read,gate_write=os.pipe()
+            launch=[sys.executable,'-I','-c',_BUDGET_START_GATE,str(gate_read),*cmd]
+            descriptors={'pass_fds':(gate_read,)}
+        process=subprocess.Popen(launch,cwd=cwd,stdin=stdin,stdout=stdout,stderr=stderr,
+                                 env=environment,start_new_session=not nested,**descriptors)
+        if gate_read is not None:
+            os.close(gate_read);gate_read=None
+        try:
+            budget.attach(lease,process.pid)
+            if time.monotonic()-started>=effective:
+                raise subprocess.TimeoutExpired(cmd,effective)
+            if gate_write is not None:
+                os.write(gate_write,b'1')
+                os.close(gate_write);gate_write=None
+            rc=process.wait(timeout=max(0,effective-(time.monotonic()-started)))
+            rc=rc if rc>=0 else 128-rc
+        except subprocess.TimeoutExpired:
+            reason='timeout';rc=124
+            _write_stop(stop,'timeout',124,f'local CLI time limit {effective:.6f}s')
+            stderr.write(f'timeout: local CLI time limit {effective:.6f}s; cleaning owned process group\n'.encode());stderr.flush()
+    except BaseException as error:
+        reason='interrupted: '+str(error)
+        stderr.write((reason+'\n').encode());stderr.flush()
+        raise
+    finally:
+        for descriptor in (gate_read,gate_write):
+            if descriptor is not None: os.close(descriptor)
+        if process:
+            try:
+                if nested:
+                    if process.poll() is None: process.kill()
+                else:
+                    os.killpg(process.pid,signal.SIGKILL)
+            except ProcessLookupError: pass
+            process.wait()
+        try:
+            budget.finish(lease,time.monotonic()-started,reason,rc)
+        except budget.BudgetError as error:
+            stderr.write((str(error)+'\n').encode());stderr.flush()
+            rc=125
+            _write_stop(stop,'budget',125,str(error))
+    return rc
+
+
 def _run(cmd, out, limit, cwd=None, env=None, stdin=None):
-    """한 턴을 제한 시간 안에서 실행하고 기록을 <out>.jsonl·<out>.err 에 쓴다. 신호로 끝나면 셸처럼 128+신호 번호를 종료 코드로 한다."""
-    with open(f"{out}.jsonl", "wb") as o, open(f"{out}.err", "wb") as e:
-        rc = subprocess.run(["perl", "-e", "alarm shift; exec @ARGV", str(limit), *cmd], cwd=cwd, stdin=stdin, stdout=o, stderr=e,
-                            env={**os.environ, **(env or {})}).returncode
-    return rc if rc >= 0 else 128 - rc
+    """한 턴의 원시 stdout/stderr를 남긴다. 시간 초과 124, 공유 예산 미확인/소진 125."""
+    with open(f"{out}.jsonl", "wb") as output, open(f"{out}.err", "wb") as error:
+        return _execute(cmd,output,error,limit,cwd=cwd,env=env,stdin=stdin,stop=stop_path(f"{out}.jsonl"))
 
 
 def _review(cmd, directory, log, env=None):
-    """검토자 세션: 구현자 세션의 표지(세션 id·발신 구분)를 물려주지 않는다. 제한 시간(AWK_VERIFY_TIMEOUT, 기본 900초)을 넘기면 124."""
-    keep = {k: v for k, v in os.environ.items() if k not in ("AWK_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")}
-    with open(log, "wb") as out, open(str(log) + ".err", "ab") as err:
-        try:
-            return subprocess.run(cmd, cwd=directory, stdout=out, stderr=err, stdin=subprocess.DEVNULL, env={**keep, **(env or {})},
-                                  timeout=int(os.environ.get("AWK_VERIFY_TIMEOUT", "900"))).returncode
-        except subprocess.TimeoutExpired:
-            return 124
+    """별도 검토도 같은 공유 시간을 사용하며 구현자 세션 표지는 물려주지 않는다."""
+    keep={k:v for k,v in os.environ.items() if k not in ('AWK_SESSION_ID','CLAUDE_CODE_SESSION_ID','CODEX_THREAD_ID')}
+    with open(log,'wb') as output, open(str(log)+'.err','ab') as error:
+        return _execute(cmd,output,error,float(os.environ.get('AWK_VERIFY_TIMEOUT','900')),
+                        cwd=directory,env={**keep,**(env or {})},stdin=subprocess.DEVNULL,stop=stop_path(log))
+
+
+def classify(cmd, directory, limit=300):
+    """모의 사용자 분류의 stdout/stderr도 같은 시간 예약과 프로세스 정리를 거친다."""
+    with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as error:
+        rc=_execute(cmd,output,error,limit,cwd=directory,stdin=subprocess.DEVNULL)
+        output.seek(0);error.seek(0)
+        return subprocess.CompletedProcess(cmd,rc,output.read().decode('utf-8',errors='replace'),
+                                           error.read().decode('utf-8',errors='replace'))
 
 
 CENTRAL_KIT = "~/.agents/kits/agent-workflow-kit"  # entry.md 의 <중앙 키트> 자리에 넣는 경로(사례의 판정 검사가 이 경로를 본다)
@@ -147,7 +280,10 @@ class Harness:
     entry: 이 세션의 전역 지침으로 쓸 글. 주면 실행한 사람의 개인 전역 지침은 이 세션에서만 빼고 이 글을 넣는다(개인 파일은 건드리지 않는다)."""
     name = ""
 
-    def __init__(self, project=None, entry=None):
+    def __init__(self, project=None, entry=None, profile="personal"):
+        if profile not in ("personal", "comparison"):
+            raise ValueError("알 수 없는 세션 구성: " + profile)
+        self.profile = profile
         self.project = project
         self.entry = entry
         self.session_id = ""
@@ -161,11 +297,26 @@ class Harness:
         return out.split("\n")[0]
 
     def _turn(self, cmd, out, limit=LIMIT, **how):
-        rc = _run(cmd, out, limit, **how)
+        environment = {**os.environ, **how.pop('env', {})}
+        if self.profile == 'comparison':
+            for key in ('CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CLAUDE_CODE_CHILD_SESSION', 'AWK_SESSION_ID'):
+                environment.pop(key, None)
+            limit = 1800
+        rc = _run(cmd, out, limit, env=environment, **how)
         # 다음 턴이 이어 갈 세션 id 를 기록에서 읽는다(찾을 때까지 턴마다).
         if not self.session_id:
             self.session_id = transcript.session_id(f"{out}.jsonl")
         return Turn(rc, f"{out}.jsonl", f"{out}.err", self.session_id)
+
+    def instruction_context(self):
+        """비교에서 실제 적용한 설정. 모르는 개인 지침을 빈 지침으로 표시하지 않는다."""
+        if self.profile != 'comparison':
+            return None
+        context = {'profile': self.profile, 'settings': 'project-only'}
+        if self.name == 'codex':
+            config = Path(self.home) / 'config.toml'
+            context['config_sha256'] = hashlib.sha256(config.read_bytes() if config.is_file() else b'').hexdigest()
+        return context
 
     def close(self, rollout=None):
         pass
@@ -178,30 +329,37 @@ class Claude(Harness):
 
     def _flags(self):
         # entry 가 있으면 사용자 설정(~/.claude 의 CLAUDE.md·플러그인)을 이 세션에서만 읽지 않게 하고 그 글을 시스템 지침 끝에 넣는다.
-        return self.FLAGS + (["--setting-sources", "project,local", "--append-system-prompt", self.entry] if self.entry else [])
+        if self.profile == 'comparison':
+            return ["--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions",
+                    "--max-turns", "80", "--setting-sources", "project", *_model_flags("claude")]
+        return self.FLAGS + _model_flags("claude") + (["--setting-sources", "project,local", "--append-system-prompt", self.entry] if self.entry else [])
 
     def start(self, prompt, out):
-        return self._turn(["claude", "-p", prompt, *self._flags()], out, cwd=self.project)
+        return self._turn(["claude", "-p", prompt, *self._flags()], out, cwd=self.project, stdin=subprocess.DEVNULL if self.profile == 'comparison' else None)
 
     def resume(self, prompt, out, from_runner=False):
         """from_runner: 사용자 턴이 아닌 실행기의 반환 턴(제한 시간이 짧다)."""
         return self._turn(["claude", "-p", prompt, "--resume", self.session_id, *self._flags()], out, limit=900 if from_runner else LIMIT,
-                          cwd=self.project)
+                          cwd=self.project, stdin=subprocess.DEVNULL if self.profile == 'comparison' else None)
 
     def review(self, directory, prompt, log):
         exe = shutil.which("claude")
-        return exe and _review([exe, "-p", prompt, "--output-format", "stream-json", "--verbose", "--allowedTools", "Read,Grep,Glob,Bash", "--max-turns", "30"],
+        return exe and _review([exe, "-p", prompt, "--output-format", "stream-json", "--verbose", "--allowedTools", "Read,Grep,Glob,Bash", "--max-turns", "30", *_model_flags("claude")],
                                directory, log)
 
 
-def _codex_home(entry=None):
+def _codex_home(entry=None, isolated=False):
     """Codex 는 전역 지침을 CODEX_HOME 에서 읽는다. 실제 설정(인증·config·AGENTS.md)만 복사한 임시 홈을 쓴다(사용자 전역 설정은 건드리지 않는다).
     entry 를 주면 임시 홈의 AGENTS.md 를 사용자의 것 대신 그 글로 쓴다."""
     home = tempfile.mkdtemp()
-    for f in ("auth.json", "config.toml") + (() if entry else ("AGENTS.md",)):
+    for f in ("auth.json", "config.toml") + (() if entry or isolated else ("AGENTS.md",)):
         src = Path.home() / ".codex" / f
         if src.is_file():
             shutil.copy(src, home)
+    if isolated:
+        config = Path(home) / 'config.toml'
+        if config.is_file():
+            config.write_text(re.split(r'^\[', config.read_text(), maxsplit=1, flags=re.M)[0])
     if entry:
         (Path(home) / "AGENTS.md").write_text(entry + "\n", encoding="utf-8")
     return home
@@ -211,23 +369,23 @@ class Codex(Harness):
     """Codex. 임시 홈을 세션이 끝날 때(close)까지 두어 같은 세션을 이어 간다."""
     name = "codex"
 
-    def __init__(self, project=None, entry=None):
-        super().__init__(project, entry)
-        self.home, self.flags = None, []
+    def __init__(self, project=None, entry=None, profile="personal"):
+        super().__init__(project, entry, profile)
+        self.home, self.flags = None, []  # 사용자 턴에만 주는 옵션(네트워크·훅 신뢰). 고정 모델은 턴마다 따로 넣는다
         if project is None:
             return
-        self.home = _codex_home(entry)
+        self.home = _codex_home(entry, isolated=profile == "comparison")
         # EVALS_CODEX_NETWORK=1 이면 작업 공간에 네트워크를 허용한다(세션 안에서 다른 세션을 띄우는 후보를 시험할 때).
-        if os.environ.get("EVALS_CODEX_NETWORK") == "1":
+        if self.profile == "personal" and os.environ.get("EVALS_CODEX_NETWORK") == "1":
             self.flags += ["-c", "sandbox_workspace_write.network_access=true"]
         # Codex 는 프로젝트 훅을 사용자가 한 번 신뢰해야 실행한다. 프로젝트에 .codex/hooks.json 이 있을 때만(정보 훅이 있던 v3.2~v3.4 커밋)
         # 그 신뢰를 대신한다.
         hooks = Path(project) / ".codex/hooks.json"
-        if hooks.is_file():
+        if self.profile == "personal" and hooks.is_file():
             self.flags.append("--dangerously-bypass-hook-trust")
         # v3.2~v3.4 의 세션 시작 정보 훅(wf-context)은 Codex 가 프로젝트를 신뢰해야(trust_level) 읽힌다. 프로젝트를 신뢰한 사용자를 재현하려고
         # 임시 홈의 config.toml 에만 이 프로젝트 신뢰를 더한다.
-        if hooks.is_file() and re.search(r"wf-context/context.py", hooks.read_text(encoding="utf-8", errors="replace")):
+        if self.profile == "personal" and hooks.is_file() and re.search(r"wf-context/context.py", hooks.read_text(encoding="utf-8", errors="replace")):
             config = Path(self.home) / "config.toml"
             for pdir in (str(project), os.path.realpath(project)):
                 entry = f'[projects."{pdir}"]'
@@ -236,15 +394,18 @@ class Codex(Harness):
                         f.write(f'\n{entry}\ntrust_level = "trusted"\n'.encode())
             self.project_trusted = True
 
+    def environment(self):
+        return {"CODEX_HOME": self.home, **({"HOME": self.home} if self.profile == "comparison" else {})}
+
     def start(self, prompt, out):
-        return self._turn(["codex", "exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", *self.flags, "-C", str(self.project), prompt],
-                          out, env={"CODEX_HOME": self.home}, stdin=subprocess.DEVNULL)
+        return self._turn(["codex", "exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", *_model_flags("codex"), *self.flags, "-C", str(self.project), prompt],
+                          out, env=self.environment(), stdin=subprocess.DEVNULL)
 
     def resume(self, prompt, out, from_runner=False):
         """from_runner: 사용자 턴이 아닌 실행기의 반환 턴(네트워크·훅 신뢰 옵션은 주지 않는다)."""
         return self._turn(["codex", "exec", "resume", "--json", "--skip-git-repo-check", "-c", 'sandbox_mode="workspace-write"',
-                           *([] if from_runner else self.flags), self.session_id, prompt], out, cwd=self.project, stdin=subprocess.DEVNULL,
-                          env={"CODEX_HOME": self.home})
+                           *_model_flags("codex"), *([] if from_runner else self.flags), self.session_id, prompt], out, cwd=self.project, stdin=subprocess.DEVNULL,
+                          env=self.environment())
 
     def review(self, directory, prompt, log):
         exe = shutil.which("codex")
@@ -252,7 +413,7 @@ class Codex(Harness):
             return None
         home = _codex_home()  # 검토자는 구현자와 홈을 나눠 쓰지 않는다
         try:
-            return _review([exe, "exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", "-C", str(directory), prompt],
+            return _review([exe, "exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", *_model_flags("codex"), "-C", str(directory), prompt],
                            directory, log, {"CODEX_HOME": home})
         finally:
             shutil.rmtree(home, ignore_errors=True)
@@ -270,3 +431,65 @@ class Codex(Harness):
 
 
 HARNESSES = {"claude": Claude, "codex": Codex}
+
+
+def review_command(args):
+    from verdict import _verify, EXIT
+    final_answer = transcript.final_answer
+    opt = lambda name: args[args.index(name) + 1] if name in args[:-1] else None
+    tool, harness, log = opt("--tool"), opt("--harness"), opt("--log")
+    rest, skip = [], {"--tool", "--harness", "--log"}
+    it = iter(args)
+    for a in it:
+        if a in skip:
+            next(it, None)
+        else:
+            rest.append(a)
+    unverified = lambda reason, **more: print(json.dumps({"state": "unverified", "reason": reason, "completion": "unverified", **more}, ensure_ascii=False)) or EXIT["unverified"]
+    if "--map" not in rest:
+        maps = sorted(str(p) for p in Path("work").glob("*/work.md") if p.is_file() and _verify.criteria_text(p.read_text(encoding="utf-8", errors="replace")))
+        if len(maps) > 1:
+            return unverified("작업 지도가 여러 개라 검토할 지도를 정할 수 없다: " + ", ".join(maps))
+        rest += ["--map", maps[0]] if maps else []
+    r = subprocess.run([sys.executable, "-I", tool, "prepare", *rest], capture_output=True, text=True)
+    sys.stderr.write(r.stderr)
+    out = json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
+    if out.get("state") != "ready":  # 한도·근거 불완전 등으로 prepare 가 최종 결과를 냈다
+        print(json.dumps(out, ensure_ascii=False)); return r.returncode
+    keep = Path(out["kept"]); vlog = keep / "verify.jsonl"
+    # 검토자 세션을 판정 대상 폴더에서 띄운다. 종료 코드, 하네스가 없으면 None.
+    rc = HARNESSES[harness]().review(out["target_dir"], Path(out["prompt_file"]).read_text(encoding="utf-8"), vlog) if harness in HARNESSES else None
+    if log:  # --log 는 최신 회차 기록의 복사본(원시 기록은 회차 폴더에 그대로 있다)
+        for src, dst in ((vlog, Path(log)), (Path(str(vlog) + ".err"), Path(log + ".err"))):
+            if src.is_file():
+                dst.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(src, dst)
+    seen = {"round": out.get("round"), "kept": str(keep), "log": str(vlog), "verifier_exit_code": rc}
+    if rc is None:
+        return unverified(f"검토 하네스({harness})를 찾지 못했다. 설치·로그인된 하네스가 있으면 다시 실행한다", **seen)
+    if rc != 0:
+        return unverified(f"검토자 하네스 종료 코드 {rc}. 재개 조건: 검토자를 띄울 수 있는 환경에서 prepare 부터 다시 실행한다", **seen)
+    f = subprocess.run([sys.executable, "-I", tool, "finish", "--round", str(keep)], input=final_answer(vlog), capture_output=True, text=True)
+    sys.stderr.write(f.stderr)
+    res = json.loads(f.stdout.strip().splitlines()[-1]) if f.stdout.strip() else {"state": "unverified", "reason": "finish 결과 없음"}
+    res.update(log=str(vlog), verifier_exit_code=rc)
+    print(json.dumps(res, ensure_ascii=False))
+    return f.returncode
+
+
+def snapshot(project):
+    """지금 작업 트리(추적 파일과 무시되지 않은 새 파일)를 가지·index 를 건드리지 않고 커밋 하나로 남긴다. 검토의 기준 커밋(--base)으로 쓴다."""
+    index = Path(tempfile.mkdtemp()) / "index"
+    env = {**os.environ, "GIT_INDEX_FILE": str(index)}
+    git = lambda *a: subprocess.run(["git", "-c", "user.name=evals", "-c", "user.email=evals@invalid", "-c", "commit.gpgsign=false", *a],
+                                    cwd=project, env=env, capture_output=True, text=True, check=True).stdout.strip()
+    try:
+        git("add", "-A")
+        return git("commit-tree", git("write-tree"), "-m", "evals: 작업 시작 상태")
+    finally:
+        shutil.rmtree(index.parent, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    if sys.argv[1:2] == ["review"]:
+        sys.exit(review_command(sys.argv[2:]))
+    raise SystemExit("사용: session.py review --tool <verify.py> --harness claude|codex <prepare 인자>")

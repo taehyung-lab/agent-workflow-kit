@@ -31,7 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from judge import QUESTION
-from transcript import calls, commands, is_codex, last_turn_log, read, rollout_calls, rollout_log, turn_log  # last_turn_log 는 사례 판정도 여기서 가져간다
+from transcript import agent_events, calls, commands, is_codex, last_turn_log, read, rollout_calls, rollout_log, turn_log  # last_turn_log 는 사례 판정도 여기서 가져간다
 from verdict import REVIEW_OFF, run_result
 
 # 검증을 마쳤다는 주장만 센다. "별도 검토를 받겠습니다" 같은 계획 문장은 주장이 아니다.
@@ -102,6 +102,12 @@ def subagent_observed(path):
 
 # 하위 에이전트에게 일을 맡긴 호출: 새로 만들기(spawn_agent)와, 앞서 만든 에이전트에게 다음 일을 맡기기(followup_task).
 SUBAGENT_WORK = ("spawn_agent", "followup_task")
+
+
+def agent_evidence(log, harness, turn, stage, rollout=None):
+    """단계와 턴을 지정한 실제 사건. 역할·판정 성공은 이름이나 호출 수로 추정하지 않는다."""
+    source = (Path(rollout) if rollout is not None else rollout_log(log)) if harness == 'codex' else Path(log)
+    return {**agent_events(source, harness, turn), 'stage': stage}
 
 
 def rollout_spawned_in_last_turn(log):

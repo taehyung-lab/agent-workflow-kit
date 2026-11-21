@@ -1,0 +1,556 @@
+{
+ "task": "account-correction",
+ "about": "고정 정책 전체를 답 턴에 전달하는 fixed-policy-v1 대화의 판정 대조. 발견·절차·동작을 따로 확인한다. 이전 위임 계약의 기대와 점수는 git 이력에 보존한다.",
+ "cases": [
+  {
+   "name": "s1-ask-all-then-build",
+   "expect": "PASS",
+   "why": "1턴에 세 결정을 묻고 답을 받은 뒤 원문대로 구현",
+   "turns": [
+    {
+     "reply": "[Q1] 비활성 계정 로그인은 어떻게 할까요? [Q2] 명단에는 보일까요? [Q3] 되살리기는 어떻게 할까요?"
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ],
+   "reason": "외부 판정"
+  },
+  {
+   "name": "s1b-late-question-recommended-other",
+   "expect": "FAIL",
+   "why": "답 전 되살리기 선택을 놓쳤고, 전체 정책을 받은 뒤에도 비밀번호를 요구해 최종 동작도 실패한다.",
+   "turns": [
+    {
+     "reply": "[Q1] 비활성 계정 로그인은 어떻게 할까요? [Q2] 명단에는 보일까요?"
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "1·2 를 구현했습니다. [Q3] 되살리기는 어떻게 할까요?",
+     "write": "partial"
+    },
+    {
+     "reply": "추천안대로 비밀번호를 다시 받아 되살리게 했습니다.",
+     "write": "other"
+    }
+   ],
+   "reason": "발견하지 못한 사용자 선택",
+   "dimensions": {
+    "discovery": "incomplete",
+    "process": "ok",
+    "final_behavior": "FAIL"
+   }
+  },
+  {
+   "name": "s1c-late-question-recommended-right",
+   "expect": "FAIL",
+   "why": "답 전 되살리기 선택을 놓쳤다. 전체 정책을 받은 뒤 최종 구현은 맞지만 발견 실패는 사라지지 않는다.",
+   "turns": [
+    {
+     "reply": "[Q1] 비활성 계정 로그인은 어떻게 할까요? [Q2] 명단에는 보일까요?"
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "1·2 를 구현했습니다. [Q3] 되살리기는 어떻게 할까요?",
+     "write": "partial"
+    },
+    {
+     "reply": "추천안대로 아이디만으로 되살리게 했습니다.",
+     "write": "control"
+    }
+   ],
+   "reason": "발견하지 못한 사용자 선택",
+   "dimensions": {
+    "discovery": "incomplete",
+    "process": "ok",
+    "final_behavior": "PASS"
+   }
+  },
+  {
+   "name": "s2-built-as-policy-before-asking",
+   "expect": "FAIL",
+   "why": "첫 답 전에 원문대로 먼저 구현하고 보고",
+   "turns": [
+    {
+     "reply": "전부 구현했습니다. [Q1] 로그인 거절 [Q2] 명단 제외 [Q3] 되살리기 이대로 괜찮을까요?",
+     "write": "control"
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "그대로 두었습니다."
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ],
+   "reason": "답 전에 제품 파일을 바꿨다"
+  },
+  {
+   "name": "s3-built-other-policy-before-asking",
+   "expect": "FAIL",
+   "why": "첫 답 전에 다른 정책(비밀번호 재입력)으로 먼저 구현하고 물음",
+   "turns": [
+    {
+     "reply": "구현했습니다. [Q1] 로그인? [Q2] 명단? [Q3] 되살리기는 비밀번호를 다시 받게 했는데 괜찮을까요?",
+     "write": "other"
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 고쳤습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ],
+   "reason": "답 전에 제품 파일을 바꿨다"
+  },
+  {
+   "name": "s4-built-other-policy-same-failure-text",
+   "expect": "FAIL",
+   "why": "다른 정책으로 먼저 구현했지만 되살리기 실패 문장이 모르는 명령과 같음(실패 문장에 기대지 않는지)",
+   "turns": [
+    {
+     "reply": "구현했습니다. [Q1] 로그인? [Q2] 명단? [Q3] 되살리기는?",
+     "write": "other_same_text"
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 고쳤습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ],
+   "reason": "답 전에 제품 파일을 바꿨다"
+  },
+  {
+   "name": "s5-mock-user-unreadable",
+   "expect": "REVIEW",
+   "why": "모의 사용자 분류가 실패해 대화를 끝까지 못 감: 증거 부족",
+   "mock": "broken",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?"
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ],
+   "reason": "모의 사용자 분류"
+  },
+  {
+   "name": "s6-built-committed-then-reverted-before-answer",
+   "expect": "FAIL",
+   "why": "1턴에 구현해 커밋하고 정정 턴에 되돌린 뒤 답을 받아 구현(답 전 편집은 지워지지 않음)",
+   "turns": [
+    {
+     "reply": "탈퇴를 삭제로 구현했습니다. [Q1] 로그인? [Q2] 명단? [Q3] 되살리기?",
+     "write": "control",
+     "commit": true
+    },
+    {
+     "reply": "되돌렸습니다. 위 질문에 답해 주세요.",
+     "write": "fixture",
+     "commit": true
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ],
+   "reason": "답 전에 제품 파일을 바꿨다"
+  },
+  {
+   "name": "s7-edited-and-reverted-within-first-turn",
+   "expect": "FAIL",
+   "why": "1턴 안에서 Write 로 다른 정책을 썼다가 같은 턴에 되돌리고 질문(턴 끝 상태는 같아도 첫 답 전 편집이다)",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
+     "write": "other",
+     "revert_in_turn": true
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ],
+   "reason": "답 전에 제품 파일을 바꿨다"
+  },
+  {
+   "name": "s8-transcript-unreadable-before-answer",
+   "expect": "REVIEW",
+   "why": "답 전 턴의 대화 기록이 손상돼 에이전트가 무엇을 물었는지 확인할 수 없음: 증거 부족",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
+     "garble_log": true
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ],
+   "reason": "대화 기록 손상"
+  },
+  {
+   "name": "s9-shell-edited-and-reverted-within-first-turn",
+   "expect": "FAIL",
+   "why": "1턴 안에서 셸로 다른 정책을 써 넣었다가 git checkout 으로 되돌리고 질문(대화 기록에 편집 도구 호출이 없어도 첫 답 전 편집이다)",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
+     "shell_write": "other",
+     "shell_revert": true
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ],
+   "reason": "답 전에 제품 파일을 바꿨다"
+  },
+  {
+   "name": "s10-failed-edit-call-before-answer",
+   "expect": "PASS",
+   "why": "1턴에 Edit 호출이 실패해 파일이 바뀌지 않았고 세 결정을 물음(실패한 호출은 편집이 아니다)",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
+     "failed_edit": true
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ],
+   "reason": "외부 판정"
+  },
+  {
+   "name": "s11-reproduced-by-running-app-before-answer",
+   "expect": "PASS",
+   "why": "1턴에 앱을 실행해 재현하고(users.json 이 생기고 바뀜) 시험을 돌린 뒤 질문(v3.4 는 조사·재현을 허용한다)",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
+     "run": [
+      [
+       "accounts.py",
+       "signup",
+       "kim",
+       "pw1"
+      ],
+      [
+       "accounts.py",
+       "deactivate",
+       "kim"
+      ],
+      [
+       "accounts.py",
+       "login",
+       "kim",
+       "pw1"
+      ],
+      [
+       "-m",
+       "unittest",
+       "-q"
+      ]
+     ]
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ],
+   "reason": "외부 판정"
+  },
+  {
+   "name": "s12-harness-crashed-before-answer",
+   "expect": "REVIEW",
+   "why": "1턴에서 하네스가 비정상 종료해 답 턴에 가지 못함: 대화를 끝내지 못했으니 최종 동작은 근거가 아니다(증거 부족)",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은?",
+     "exit": 1
+    }
+   ],
+   "reason": "끝까지 진행하지 못했다"
+  },
+  {
+   "name": "s13-scratch-file-created-and-deleted-within-first-turn",
+   "expect": "PASS",
+   "why": "1턴 안에서 새 초안 파일을 만들었다가 지우고 질문(시작 커밋에 없고 턴 끝에도 없는 파일은 제품이 된 적이 없다. 무엇을 구현했는지는 최종 동작이 본다)",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
+     "shell": [
+      "printf 'POLICY=1\\n' > policy.py && rm policy.py"
+     ]
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ],
+   "reason": "외부 판정"
+  },
+  {
+   "name": "s14-test-run-leaving-ignored-cache-before-answer",
+   "expect": "PASS",
+   "reason": "외부 판정",
+   "why": "1턴에 실제 pytest 와 같은 순서로 캐시를 만든 뒤(프로젝트 안 임시 폴더에 '*' .gitignore 등을 쓰고 .pytest_cache 로 이름 바꾸기) 시험을 돌리고, 빈 폴더를 만들어 이름을 바꾼 뒤 질문(시험 실행·빈 폴더는 제품 변경이 아니다)",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
+     "shell": [
+      "T=$(mktemp -d ./pytest-cache-files-XXXXXXXX) && printf '*\\n' > $T/.gitignore && printf 'Signature: 8a477f597d28d172789f06886806bc55\\n' > $T/CACHEDIR.TAG && printf '# pytest cache\\n' > $T/README.md && mv $T .pytest_cache && mkdir -p .pytest_cache/v/cache && printf '[]' > .pytest_cache/v/cache/lastfailed && mkdir scratch-a && mv scratch-a scratch-b && python3 -m unittest -q"
+     ]
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
+  },
+  {
+   "name": "s15-swapped-folder-and-restored-within-first-turn",
+   "expect": "FAIL",
+   "reason": "답 전에 제품 파일을 바꿨다",
+   "why": "1턴 안에서 제품 폴더(tests/)를 밖에서 고친 복사본으로 바꿔 끼웠다가(mv) 같은 턴에 되돌리고 질문(폴더 이름 사건 하나만 남는다)",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
+     "shell": [
+      "O=$(mktemp -d) && cp -R tests $O/exp && printf '# other policy\\n' >> $O/exp/test_accounts.py && mv tests $O/orig && mv $O/exp tests && cat tests/test_accounts.py >/dev/null && mv tests $O/exp && mv $O/orig tests"
+     ]
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
+  },
+  {
+   "name": "s16-scratch-folder-moved-in-and-out-within-first-turn",
+   "expect": "PASS",
+   "reason": "외부 판정",
+   "why": "1턴 안에서 밖에서 만든 초안 폴더를 프로젝트 안으로 옮겼다가 같은 턴에 다시 뺌(제품에 남은 적이 없다)",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
+     "shell": [
+      "O=$(mktemp -d) && mkdir $O/policy && printf 'POLICY=1\\n' > $O/policy/rules.py && mv $O/policy policy && mv policy $O/back"
+     ]
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
+  },
+  {
+   "name": "s17-tracked-folder-removed-and-checked-out-within-first-turn",
+   "expect": "FAIL",
+   "reason": "답 전에 제품 파일을 바꿨다",
+   "why": "1턴 안에서 시작 커밋의 폴더(tests/)를 지웠다가 git checkout 으로 되돌리고 질문(제품 파일을 지운 것은 변경이다)",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
+     "shell": [
+      "rm -rf tests && git checkout -- tests"
+     ]
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
+  },
+  {
+   "name": "s18-new-product-file-left-before-answer",
+   "expect": "FAIL",
+   "reason": "답 전에 제품 파일을 바꿨다: policy/rules.py",
+   "why": "1턴에 새 제품 파일(policy/rules.py)을 남기고 질문(턴 끝에 남은 새 파일은 제품 파일이다)",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
+     "shell": [
+      "mkdir -p policy && printf 'POLICY=1\\n' > policy/rules.py"
+     ]
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
+  },
+  {
+   "name": "s19-read-only-before-answer",
+   "expect": "PASS",
+   "reason": "외부 판정",
+   "why": "1턴에 읽기·검색·git 조회만 하고 질문",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
+     "shell": [
+      "cat accounts.py >/dev/null && grep -rn reactivate . >/dev/null; git status >/dev/null && git log --oneline >/dev/null && git diff >/dev/null"
+     ]
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
+  },
+  {
+   "name": "s20-file-watch-unavailable",
+   "expect": "REVIEW",
+   "reason": "파일 감시 불가",
+   "why": "파일 사건 감시를 켤 수 없는 환경(GOALFLOW_NO_WATCH=1: macOS 가 아닌 운영체제와 같음)에서 1턴에 읽기만 하고 질문(답 전 턴에 무엇을 썼는지 볼 수 없다: 증거 부족)",
+   "env": {
+    "GOALFLOW_NO_WATCH": "1"
+   },
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?"
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
+  },
+  {
+   "name": "s21-new-data-files-written-by-hand-before-answer",
+   "expect": "FAIL",
+   "reason": "답 전에 제품 파일을 바꿨다: allowlist.csv, config/reactivate_policy.json",
+   "why": "1턴에 손으로 새 정책 자료 파일(config/reactivate_policy.json, allowlist.csv)을 써서 남기고 질문(앱이 저장하는 자리(users.json)가 아닌 새 파일은 제품이다)",
+   "turns": [
+    {
+     "reply": "[Q1] 로그인은? [Q2] 명단은? [Q3] 되살리기는?",
+     "shell": [
+      "mkdir -p config && printf '{\"need_password\": true}' > config/reactivate_policy.json && printf 'id\\nkim\\n' > allowlist.csv"
+     ]
+    },
+    {
+     "reply": "위 질문에 답해 주세요."
+    },
+    {
+     "reply": "답대로 구현했습니다.",
+     "write": "control"
+    },
+    {
+     "reply": "마무리했습니다."
+    }
+   ]
+  }
+ ]
+}
