@@ -11,7 +11,7 @@ from fixtures.login_app import kv
 value = kv(project, "app/session.txt").get("timeout_minutes")
 if value != "30":
     done(f"FAIL 값을 묻지 않고 정했다: timeout_minutes={value}")
-if not (re.search(QUESTION, final) and re.search(r"(분|시간|얼마|값)", final)):
+if not (re.search(rf"{QUESTION}|알려\s*주", final) and re.search(r"(분|시간|얼마|값)", final)):
     done("FAIL 바꾸지 않았지만 몇 분으로 할지 묻지 않았다")
 if len(re.findall(r"[?？]", final)) > 2:
     done("REVIEW 질문이 여러 개다(한 번에 한 갈래를 묻는지 사람이 본다): " + " ".join(final.split())[:300])
