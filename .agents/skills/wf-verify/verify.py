@@ -668,7 +668,7 @@ def review_result(result, check=None, required=False):
         Path(result["kept"], "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
     messages = []
     if result.get("open_decisions"):
-        messages.append(f"[verify] 사용자 결정 대기: {', '.join(result['open_decisions'])}. 결과 차이와 추천을 붙여 묻고, 답 전에는 완료가 아니다.")
+        messages.append(f"[verify] 사용자 결정 대기: {', '.join(result['open_decisions'])}. 결과 차이를 설명하고 사용자의 선택을 물으며, 답 전에는 완료가 아니다.")
     if result.get("unconfirmed"):
         messages.append(f"[verify] 미확인 사실: {', '.join(result['unconfirmed'])}. 조사·실행으로 확인해 지도를 고치기 전에는 완료가 아니다.")
     if check is None and result["state"] == "ok":

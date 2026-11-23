@@ -12,7 +12,7 @@
 | K5 | guest·타인 조회 → 응답·안내 → 기존 권한 그대로 거절, 확정 번호를 지어내지 않음 | environment.md 권한 | oracle existing-member-access-boundary, client-denials-never-invent-confirmation | 지도·최종 |
 | K6 | 성공 → 참가자 안내 → 실제 번호와 회차 ID·시간(같은 이름 '실습 A' 구별) | request.txt 목표, environment.md 회차 | oracle correct-session-and-confirmation-display + 의미 검토(모든 실제 안내 문구) | 지도·최종 |
 | K7 | 기존 행 → 갱신 후 저장소 → 행·번호 보존 | request.txt, environment.md | oracle existing-record-and-number-survive-update | 지도·최종 |
-| Q1 | 옛 충돌 기록(같은 요청 ID 여러 행·정원 초과 행)의 확정 안내·재시도·정원 계산 | **원문·환경이 정하지 않음** | 지도 단계: 미정 행 + 결과 차이와 추천을 붙인 질문(이때 완료 상태 waiting-user 가 정답). 질문 없이 정하면 실패 | 지도 |
+| Q1 | 옛 충돌 기록(같은 요청 ID 여러 행·정원 초과 행)의 확정 안내·재시도·정원 계산 | **원문·환경이 정하지 않음** | 지도 단계: 미정 행 + 결과 차이를 설명하는 질문(추천하는 경우 그 근거 포함)(이때 완료 상태 waiting-user 가 정답). 질문 없이 정하면 실패 | 지도 |
 | K8 | Q1 에 대한 사용자 답(`answer.txt` 1번) 적용 → 저장소·조회·재시도 → 가장 최근 행 하나가 결과, 다른 회원·회차 재시도는 충돌 거절, 초과 행 확정 유지·정원 포함 | 사용자 결정(answer.txt) | oracle preexisting-duplicates-preserved-without-new-writes, legacy-request-uses-latest-row-for-lookup-and-retry | 지도·최종 |
 | Q2 | 이미 확정된 회원이 같은 회차를 새 요청 ID 로 다시 신청할 때의 처리 | **원문·환경이 정하지 않음**(환경은 요청 ID 를 신청 단위로만 정의) | 지도 단계: 미정 행 + 질문. 질문 없이 정하면 실패 | 지도 |
 | K10 | Q2 에 대한 사용자 답(`answer.txt` 2번) 적용 → 저장소·안내 → 새 행 없이 기존 확정 번호·회차를 '신청 완료'로, 다른 회차는 새 신청 | 사용자 결정(answer.txt) | oracle same-member-new-request-returns-existing-confirmation | 지도·최종 |
