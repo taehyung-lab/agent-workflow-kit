@@ -1,4 +1,4 @@
-# Agent Workflow Kit — v4.0.0
+# Agent Workflow Kit — v4.0.1
 
 요구를 이해하고, 중요한 선택만 묻고, 실제 결과로 완료를 판단하는 작업 기준이다. 문서 형식이나 단계 호출 횟수보다 원문과 결과의 일치를 확인한다. 업데이트 시 달라지는 계약은 [변경 기록](CHANGELOG.md)에, 발행 전 v3.8.0 비교는 [실측](docs/measurements.md)에 있다.
 
