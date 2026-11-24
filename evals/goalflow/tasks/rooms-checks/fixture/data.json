@@ -1,0 +1,11 @@
+{
+ "bookings": [
+  {"id": 1, "member": "민서", "room": "나무", "date": "2026-12-01", "start": "9:30", "end": "10:30", "status": "confirmed"},
+  {"id": 2, "member": "도윤", "room": "나무", "date": "2026-12-01", "start": "13:00", "end": "14:00", "status": "confirmed"},
+  {"id": 3, "member": "하린", "room": "나무", "date": "2026-12-01", "start": "15:00", "end": "16:00", "status": "held"},
+  {"id": 4, "member": "지호", "room": "나무", "date": "2026-12-01", "start": "16:30", "end": "17:30", "status": "cancelled"},
+  {"id": 5, "member": "서준", "room": "바다", "date": "2026-12-01", "start": "10:00", "end": "12:00", "status": "confirmed"},
+  {"id": 6, "member": "유나", "room": "바다", "date": "2026-12-01", "start": "11:00", "end": "12:30", "status": "confirmed"},
+  {"id": 7, "member": "예준", "room": "바다", "date": "2026-12-01", "start": "14:00", "end": "15:00", "status": "held"}
+ ]
+}
