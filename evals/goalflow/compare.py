@@ -206,5 +206,6 @@ for row in summary['turns']:
                                           stage=stage, rollout=out / f'{name}.rollout.jsonl')
 (out / f"{name}.json").write_text(json.dumps(summary, ensure_ascii=False, indent=1), encoding="utf-8")
 (out / f"{name}.meta.json").write_text(json.dumps(result_meta(summary), ensure_ascii=False, indent=1), encoding="utf-8")
-print(name, "valid=", summary["automated_valid"], "failed=", len(summary["failed"]), "/", summary["n_cases"], "seconds=", summary["seconds"],
-      "runtime_stops=", [{"turn":row["turn"], "reason":row["runtime_stop"]["reason"]} for row in summary["turns"] if row.get("runtime_stop")])
+# 첫 줄은 전체 판정이다(답 전 수정·답 전 발견·최종 동작을 함께 본 oracle_verdict). 최종 동작의 실패 수만 내면 답 전 위반이 가려진다.
+print(name, result_meta(summary)["check_output"], "| seconds=", summary["seconds"],
+      "| runtime_stops=", [{"turn":row["turn"], "reason":row["runtime_stop"]["reason"]} for row in summary["turns"] if row.get("runtime_stop")])
