@@ -426,6 +426,12 @@ class Codex(Harness):
                     for f in files:
                         if fnmatch.fnmatchcase(f, f"rollout-*{self.session_id}.jsonl"):
                             out.write((Path(root) / f).read_bytes())
+            # 하위 에이전트(독자·검토자)는 다른 세션 파일에 남는다. 그 명령을 볼 수 있게 함께 보존한다.
+            others = sorted(p for p in (Path(self.home) / "sessions").rglob("rollout-*.jsonl") if self.session_id not in p.name)
+            if others:
+                with open(str(rollout) + ".subagents", "wb") as out:
+                    for p in others:
+                        out.write(json.dumps({"subagent_rollout": p.name}).encode() + b"\n" + p.read_bytes())
         if self.home:
             shutil.rmtree(self.home, ignore_errors=True)
 

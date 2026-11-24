@@ -2,6 +2,9 @@
 
   w = Watch(root); (에이전트 실행); paths = w.stop()
 
+감시를 켜기 전에 일어난 쓰기의 사건이 표식 뒤에 도착하는 일이 있다(프로젝트를 막 만든 직후). stop() 은 사건이 온 경로 가운데
+감시 시작 뒤에 실제로 상태가 바뀐 것(또는 없어진 것)만 돌려준다.
+
 사건은 순서대로 오지만 늦게 온다. 그래서 시작과 끝에 .git 안의 표식 파일을 쓰고 그 사건이 올 때까지 기다린다:
 시작 표식이 오면 감시가 켜진 것이고, 끝 표식이 오면 그보다 먼저 일어난 사건은 모두 받은 것이다. 표식이 제한 시간 안에 오지 않거나 감시를 쓸 수 없으면(macOS 가 아님, GOALFLOW_NO_WATCH=1) OSError(관찰 불가).
 """
@@ -46,10 +49,13 @@ class Watch:
         if os.environ.get("GOALFLOW_NO_WATCH") == "1" or _LIBS is None:  # 감시를 끈 실행, CoreServices 가 없는 운영체제
             raise OSError("파일 사건 감시를 쓸 수 없다(macOS FSEvents 아님)")
         self.root, self.timeout, self.out, self.lock = os.path.realpath(root), timeout, [], threading.Lock()
+        self.timed = []  # (받은 시각, 경로, 사건 종류 비트): 무엇이 언제 어떻게 쓰였는지 명령 기록과 맞춰 보는 증거
 
         def cb(stream, info, n, paths, flags, ids):
+            now = time.time()
             with self.lock:
                 self.out.extend((paths[i].decode("utf-8", "replace"), flags[i]) for i in range(n))
+                self.timed.extend((now, paths[i].decode("utf-8", "replace"), flags[i]) for i in range(n))
         self.cb = _CB(cb)
         arr = _LIBS[1].CFArrayCreate(None, (ctypes.c_void_p * 1)(_LIBS[1].CFStringCreateWithCString(None, self.root.encode(), 0x08000100)), 1, None)
         self.stream = _LIBS[0].FSEventStreamCreate(None, self.cb, None, arr, _SINCE_NOW, 0.0, _FILE_EVENTS | _NO_DEFER)
@@ -59,6 +65,15 @@ class Watch:
         self._barrier()
         with self.lock:
             self.out.clear()
+            self.timed.clear()
+        self.started = time.time()
+
+    def events(self):
+        """stop() 뒤에 부른다: .git 밖 사건을 [{"time", "path", "flags"}] 로(받은 순서). flags 는 FSEvents 사건 종류 비트다."""
+        with self.lock:
+            rows = [(t, os.path.relpath(p, self.root), f) for t, p, f in self.timed]
+        return [{"time": round(t, 3), "path": rel, "flags": hex(f)} for t, rel, f in rows
+                if rel not in (".", ".git") and not rel.startswith(".git/")]
 
     def _barrier(self):
         # 시작 표식의 늦은 사건을 종료 표식으로 오인하지 않도록 매번 다른 경로를 쓴다.
@@ -90,6 +105,18 @@ class Watch:
         with self.lock:
             for p, flag in self.out:
                 rel = os.path.relpath(p, self.root)
-                if rel not in (".", ".git") and not rel.startswith(".git/"):
+                if rel not in (".", ".git") and not rel.startswith(".git/") and self._changed_since_start(p):
                     found[rel] = found.get(rel, False) or bool(flag & _IS_DIR)
         return found
+
+    def _changed_since_start(self, path):
+        """사건이 온 경로가 감시 시작 뒤에 실제로 바뀌었는가. 감시를 켜기 전에 만든 파일의 사건은 늦게 올 수 있다.
+        지금 있는 경로의 상태 변경 시각(쓰기·되돌리기·이름 바꾸기·권한 변경 모두 갱신)이 시작 전이면 이 턴의 쓰기가 아니다.
+        없어진 경로는 지워진 것이므로 남긴다."""
+        started = getattr(self, "started", None)
+        if started is None:
+            return True
+        try:
+            return os.lstat(path).st_ctime >= started
+        except OSError:
+            return True

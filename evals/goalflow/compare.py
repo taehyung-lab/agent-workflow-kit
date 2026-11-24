@@ -134,6 +134,8 @@ try:
         rc, log, secs = launch(n, prompt)
         try:
             touched = turn_writes(watch.stop(), proj, base, STATE, files=start_product) if watch else None  # 턴 안에서 쓰거나 만들거나 지운 제품 파일(되돌려도 남는다)
+            if hasattr(watch, "events"):  # 사건의 시각과 종류를 남긴다: 되돌린 편집이 누구의 어떤 명령이었는지 기록과 맞춰 본다
+                (out / f"{name}.t{n}.events.json").write_text(json.dumps(watch.events(), ensure_ascii=False), encoding="utf-8")
         except OSError as e:
             touched, watch_error = None, str(e)
         try:
