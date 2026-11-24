@@ -134,6 +134,8 @@ try:
         rc, log, secs = launch(n, prompt)
         try:
             touched = turn_writes(watch.stop(), proj, base, STATE, files=start_product) if watch else None  # 턴 안에서 쓰거나 만들거나 지운 제품 파일(되돌려도 남는다)
+            if hasattr(watch, "events"):  # 사건의 시각과 종류를 남긴다: 되돌린 편집이 누구의 어떤 명령이었는지 기록과 맞춰 본다
+                (out / f"{name}.t{n}.events.json").write_text(json.dumps(watch.events(), ensure_ascii=False), encoding="utf-8")
         except OSError as e:
             touched, watch_error = None, str(e)
         try:
@@ -206,5 +208,6 @@ for row in summary['turns']:
                                           stage=stage, rollout=out / f'{name}.rollout.jsonl')
 (out / f"{name}.json").write_text(json.dumps(summary, ensure_ascii=False, indent=1), encoding="utf-8")
 (out / f"{name}.meta.json").write_text(json.dumps(result_meta(summary), ensure_ascii=False, indent=1), encoding="utf-8")
-print(name, "valid=", summary["automated_valid"], "failed=", len(summary["failed"]), "/", summary["n_cases"], "seconds=", summary["seconds"],
-      "runtime_stops=", [{"turn":row["turn"], "reason":row["runtime_stop"]["reason"]} for row in summary["turns"] if row.get("runtime_stop")])
+# 첫 줄은 전체 판정이다(답 전 수정·답 전 발견·최종 동작을 함께 본 oracle_verdict). 최종 동작의 실패 수만 내면 답 전 위반이 가려진다.
+print(name, result_meta(summary)["check_output"], "| seconds=", summary["seconds"],
+      "| runtime_stops=", [{"turn":row["turn"], "reason":row["runtime_stop"]["reason"]} for row in summary["turns"] if row.get("runtime_stop")])

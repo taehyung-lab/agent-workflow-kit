@@ -8,6 +8,10 @@ import json, os, shutil, subprocess, sys, tempfile
 from pathlib import Path
 
 
+class Unobserved(Exception):
+    """제품의 통과·실패를 가릴 수 없는 상태(판정기가 관찰할 조건이 갖춰지지 않음)."""
+
+
 class Judge:
     def __init__(self, project, script, data_env):
         self.cases, self.script, self.data_env = [], script, data_env
@@ -46,6 +50,8 @@ class Judge:
             passed, detail = True, None
         except AssertionError as e:
             passed, detail = False, str(e.args[0] if e.args else "")[:400]
+        except Unobserved as e:
+            passed, detail = None, "관찰 불가: " + str(e)[:380]
         except (NameError, ImportError, SyntaxError) as e:  # 판정기 코드의 버그: 제품을 관찰하지 못한 것이지 제품 실패가 아니다
             passed, detail = None, "판정기 오류: " + repr(e)[:380]
         except Exception as e:
