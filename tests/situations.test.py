@@ -158,6 +158,47 @@ class SituationsTest(unittest.TestCase):
         self.assertEqual(self.ids(result, 'open'), ['Q1'])
         self.assertIn('chosen', result['demoted'][0]['reason'])
 
+    def test_message_must_carry_each_reader_question(self):
+        # 2026-11-25 라벨 1·3회차: 독자는 M1·m1 을 미정으로 돌려줬고 담당자가 첫 답에서 뺐다. 담당자는 같은 주제의 상황을 묶어 바꿔 써서
+        # 낱말 대조로는 가를 수 없었다 → 질문 문장은 독자가 쓰고(ask), 보낸 글에 그 문장이 그대로 있는지만 본다.
+        names = '이미 확정된 1번 시트를 열 때, 저장된 옛 이름(소나무)과 현재 이름(솔나무) 중 무엇을 보일까요?'
+        loan = '대여 중인 표본 L1이 담긴 3번 시트도 확정할 수 있게 할까요?'
+        code = 'M1(참나무)과 m1(단풍나무)을 입력하면 같은 표본으로 볼까요, 다른 표본으로 볼까요?'
+        reader = {'axes': {'states': [{'name': s, 'where': 'data.json'} for s in ('printed', 'loan', 'code')],
+                           'commands': [{'name': 'seal', 'where': 'sheets.py'}]},
+                  'situations': [
+                      {'id': 'Q16', 'cell': ['printed', 'seal'], 'expect': '1번 seal', 'results': ['옛 이름', '현재 이름'], 'source': [1], 'state': '미정', 'ask': names},
+                      {'id': 'Q19', 'cell': ['printed', 'seal'], 'expect': '1번 조회', 'results': ['옛 이름', '현재 이름'], 'source': [1], 'state': '미정', 'ask': names},
+                      {'id': 'Q28', 'cell': ['loan', 'seal'], 'expect': '3번 seal', 'results': ['허용', '거절'], 'source': [1], 'state': '미정', 'ask': loan},
+                      {'id': 'Q29', 'cell': ['code', 'seal'], 'expect': 'm1 추가', 'results': ['m1', 'M1'], 'source': [1], 'state': '미정', 'ask': code}]}
+        merged = json.loads(json.dumps(reader))
+        path = self.root / 'situations.json'; path.write_text(json.dumps(merged, ensure_ascii=False))
+        (self.root / 'reader.json').write_text(json.dumps(reader, ensure_ascii=False))
+        def check(text, code_=0):
+            (self.root / 'message.md').write_text(text)
+            r = subprocess.run([sys.executable, '-I', str(TOOL), str(path), '--request', str(self.request), '--root', str(self.root),
+                                '--reader', str(self.root / 'reader.json'), '--message', str(self.root / 'message.md')], capture_output=True, text=True)
+            self.assertEqual(r.returncode, code_, r.stdout + r.stderr)
+            return [u['id'] for u in json.loads(r.stdout)['undelivered']]
+        # 1·3회차 모양: 이름·대여만 묻고 코드는 뺐다
+        self.assertEqual(check(f'구현 전 두 가지를 정해야 합니다.\n1. {names}\n2. {loan}\n추천은 현재 이름 유지입니다.', 3), ['Q29'])
+        # 2회차 모양: 세 질문 모두(앞뒤 설명·줄바꿈이 달라도 된다)
+        self.assertEqual(check(f'세 가지가 필요합니다.\n- {names}\n- {loan}\n-  {code}'), [])
+        # 질문 번호만 있는 글은 통과하지 못한다
+        self.assertEqual(check('Q16, Q19, Q28, Q29 를 확인해 주세요.', 3), ['Q16', 'Q19', 'Q28', 'Q29'])
+        # 사용자 답(kind 답)으로 정해진 상황은 다시 보내지 않아도 된다
+        merged['situations'][3].update(state='확정', chosen='m1', source=[2], decided_by={'kind': '답', 'quote': '입력한 정확한 코드에 적용합니다'})
+        path.write_text(json.dumps(merged, ensure_ascii=False))
+        (self.root / 'answer.txt').write_text('조회, 추가, 삭제 모두 입력한 정확한 코드에 적용합니다.\n')
+        (self.root / 'message.md').write_text(f'{names}\n{loan}')
+        r = subprocess.run([sys.executable, '-I', str(TOOL), str(path), '--request', str(self.request), '--request', str(self.root / 'answer.txt'),
+                            '--root', str(self.root), '--reader', str(self.root / 'reader.json'), '--message', str(self.root / 'message.md')], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        # 독자가 ask 를 안 쓴 미정은 그 사실을 알린다
+        del reader['situations'][2]['ask']; (self.root / 'reader.json').write_text(json.dumps(reader, ensure_ascii=False))
+        merged['situations'][3].update(state='미정'); merged['situations'][3].pop('decided_by'); path.write_text(json.dumps(merged, ensure_ascii=False))
+        self.assertEqual(check(f'{names}\n{code}', 3), ['Q28'])
+
     def test_merged_record_cannot_shrink_reader_table(self):
         # 저장 실행(라벨 3회차): 독자 표에 빈 칸 26개가 나오자 주 담당자가 상태를 하나로 합쳐 빈 칸 확인을 지나갔다.
         reader = {'axes': {'states': [{'name': '빈 상자', 'where': 'app.py:new'}, {'name': '빌린 물품 상자', 'where': 'data.json:3'}],

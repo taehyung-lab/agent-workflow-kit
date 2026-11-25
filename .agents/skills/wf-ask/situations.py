@@ -111,6 +111,26 @@ def reader_kept(merged, reader):
     return problems
 
 
+def undelivered(merged, reader, message):
+    """독자가 미정으로 돌려준 상황 가운데, 사용자 답으로 정해지지 않았고 그 ask 문장이 보낸 글에 그대로 없는 것.
+    질문 문장은 독자가 쓰므로 담당자의 거르기·바꿔 쓰기와 무관하게 글자 대조로 판정한다(공백 차이만 무시)."""
+    mine = {i.get("id"): i for i in merged.get("situations") or [] if isinstance(i, dict)}
+    body = _plain(message)
+    missing = []
+    for r in reader.get("situations") or []:
+        if not isinstance(r, dict) or r.get("state") != "미정":
+            continue
+        m = mine.get(r.get("id")) or {}
+        if m.get("state") == "확정" and (m.get("decided_by") or {}).get("kind") == "답":
+            continue
+        ask = str(r.get("ask") or "").strip()
+        if not ask:
+            missing.append({"id": r.get("id"), "reason": "독자 미정에 ask 가 없다"})
+        elif _plain(ask) not in body:
+            missing.append({"id": r.get("id"), "reason": "보낸 글에 독자의 질문이 없다", "ask": ask})
+    return missing
+
+
 def classify(items, requests, roots):
     """확정 항목의 출처를 확인해 미정으로 내릴 것을 내린다. 입력은 바꾸지 않는다.
 
@@ -151,6 +171,7 @@ def main():
     parser.add_argument("--request", action="append", default=[], type=Path, help="사용자 원문 파일(순서가 원문 번호)")
     parser.add_argument("--reader", action="append", default=[], type=Path, help="독자가 반환한 표 JSON(합친 기록이 줄이지 않았는지 확인)")
     parser.add_argument("--root", action="append", default=[], type=Path, help="합의 문서를 찾을 프로젝트 폴더(기본: 현재 폴더)")
+    parser.add_argument("--message", type=Path, help="사용자에게 보낼 글. --reader 의 미정마다 ask 문장이 그대로 있는지 본다")
     args = parser.parse_args()
     try:
         requests = [path.read_text(encoding="utf-8") for path in args.request]
@@ -162,11 +183,16 @@ def main():
         if kept:
             raise ValueError("합친 기록이 독자 표를 줄였다: " + "; ".join(kept))
         result = classify(data, requests, roots)
+        if args.message:
+            if not args.reader:
+                raise ValueError("--message 는 --reader 와 함께 쓴다")
+            text = args.message.read_text(encoding="utf-8")
+            result["undelivered"] = [u for path in args.reader for u in undelivered(data, json.loads(path.read_text(encoding="utf-8")), text)]
     except (OSError, ValueError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False))
         return 3
     print(json.dumps(result, ensure_ascii=False))
-    return 3 if result["missing"] else 0
+    return 3 if result["missing"] or result.get("undelivered") else 0
 
 
 if __name__ == "__main__":
