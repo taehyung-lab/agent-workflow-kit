@@ -191,9 +191,17 @@ class SituationsTest(unittest.TestCase):
         path.write_text(json.dumps(merged, ensure_ascii=False))
         (self.root / 'answer.txt').write_text('조회, 추가, 삭제 모두 입력한 정확한 코드에 적용합니다.\n')
         (self.root / 'message.md').write_text(f'{names}\n{loan}')
-        r = subprocess.run([sys.executable, '-I', str(TOOL), str(path), '--request', str(self.request), '--request', str(self.root / 'answer.txt'),
-                            '--root', str(self.root), '--reader', str(self.root / 'reader.json'), '--message', str(self.root / 'message.md')], capture_output=True, text=True)
+        (self.root / 'sent1.md').write_text(f'세 가지가 필요합니다.\n- {names}\n- {loan}\n- {code}')
+        def answered(*sent):
+            return subprocess.run([sys.executable, '-I', str(TOOL), str(path), '--request', str(self.request), '--request', str(self.root / 'answer.txt'),
+                                   '--root', str(self.root), '--reader', str(self.root / 'reader.json'), '--message', str(self.root / 'message.md'),
+                                   *[x for f in sent for x in ('--sent', str(self.root / f))]], capture_output=True, text=True)
+        r = answered('sent1.md')
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        # 그 질문을 보낸 글이 없으면 답으로 닫지 못한다(2026-11-26 접근권한 f3: 다른 주제의 말을 답으로 인용)
+        r = answered()
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn('Q29', r.stdout)
         # 독자가 ask 를 안 쓴 미정은 그 사실을 알린다
         del reader['situations'][2]['ask']; (self.root / 'reader.json').write_text(json.dumps(reader, ensure_ascii=False))
         merged['situations'][3].update(state='미정'); merged['situations'][3].pop('decided_by'); path.write_text(json.dumps(merged, ensure_ascii=False))
