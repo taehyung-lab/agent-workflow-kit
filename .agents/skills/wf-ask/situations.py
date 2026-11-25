@@ -132,9 +132,16 @@ def undelivered(merged, reader, message):
 
 
 def compose(merged, reader):
-    """독자 미정 가운데 사용자 답으로 정해지지 않은 것의 ask 를 처음 나온 순서로, 같은 문장은 한 번만 모은 질문 목록."""
+    """첫 답에 붙일 목록. 지정 기준에서 관찰해 정한 결과(observed)를 먼저 "기준 관찰" 줄로, 이어서 독자 미정 가운데
+    사용자 답으로 정해지지 않은 것의 ask 를 처음 나온 순서로(같은 문장은 한 번) 낸다."""
     mine = {i.get("id"): i for i in merged.get("situations") or [] if isinstance(i, dict)}
     asks = []
+    for r in reader.get("situations") or []:
+        if isinstance(r, dict) and r.get("state") == "확정" and r.get("observed"):
+            seen = r["observed"]
+            if not isinstance(seen, dict) or not str(seen.get("where", "")).strip() or not str(seen.get("value", "")).strip():
+                raise ValueError(f"기준 관찰 {r.get('id')} 에 where(위치)와 value(값)가 필요하다")
+            asks.append(f"기준 관찰: {r.get('expect')} → {seen['value']} ({seen['where']})")
     for r in reader.get("situations") or []:
         if not isinstance(r, dict) or r.get("state") != "미정":
             continue

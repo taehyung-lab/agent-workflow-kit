@@ -207,6 +207,32 @@ class SituationsTest(unittest.TestCase):
         self.assertEqual(r.stdout.strip().splitlines(), [f'1. {names}', f'2. {loan}', f'3. {code}'])
         self.assertEqual(check('구현 전에 정해 주세요.\n' + r.stdout + '\n추천은 1번 현재 이름입니다.'), [])
 
+    def test_compose_puts_reference_observations_first(self):
+        # 2026-11-24 접근권한: "1.5와 같게"인데 1.5 의 저장 경로를 보지 않아 이름만 고쳐도 조회가 저장됐다.
+        # 독자가 지정 기준에서 관찰한 값(observed)은 첫 답 목록 맨 앞에 "기준 관찰" 줄로 나간다. 위치·값이 없으면 멈춘다.
+        reader = {'axes': {'states': [{'name': '등록만 저장된 권한', 'where': 'data'}], 'commands': [{'name': s, 'where': 'ui'} for s in ('열기', '이름만 저장', '등록 클릭')]},
+                  'situations': [
+                      {'id': 'Q1', 'cell': ['등록만 저장된 권한', '열기'], 'expect': '수정 화면을 연다(조회 칸)', 'results': ['켜짐', '꺼짐'], 'chosen': '켜짐',
+                       'source': [1], 'state': '확정', 'decided_by': {'kind': '요청', 'quote': '물품을 상자에 담은 뒤'},
+                       'observed': {'where': 'v1.5 permission-tree-row.tsx:73', 'value': '조회 켜짐·잠김'}},
+                      {'id': 'Q2', 'cell': ['등록만 저장된 권한', '이름만 저장'], 'expect': '이름만 고쳐 저장(전송 기능)', 'results': ['CREATE', 'CREATE·READ'], 'chosen': 'CREATE',
+                       'source': [1], 'state': '확정', 'decided_by': {'kind': '요청', 'quote': '물품을 상자에 담은 뒤'},
+                       'observed': {'where': 'v1.5 use-access-permission-form.ts:139', 'value': 'CREATE 만 전송'}},
+                      {'id': 'Q3', 'cell': ['등록만 저장된 권한', '등록 클릭'], 'expect': '등록을 누른다', 'results': ['조회 켜짐', '그대로'], 'source': [1], 'state': '미정',
+                       'ask': '블랙리스트에도 같은 규칙을 둘까요?'}]}
+        path = self.root / 'situations.json'; path.write_text(json.dumps(reader, ensure_ascii=False))
+        (self.root / 'reader.json').write_text(json.dumps(reader, ensure_ascii=False))
+        def compose(code_=0):
+            r = subprocess.run([sys.executable, '-I', str(TOOL), str(path), '--request', str(self.request), '--root', str(self.root),
+                                '--reader', str(self.root / 'reader.json'), '--compose'], capture_output=True, text=True)
+            self.assertEqual(r.returncode, code_, r.stdout + r.stderr)
+            return r.stdout.strip().splitlines()
+        self.assertEqual(compose(), ['1. 기준 관찰: 수정 화면을 연다(조회 칸) → 조회 켜짐·잠김 (v1.5 permission-tree-row.tsx:73)',
+                                     '2. 기준 관찰: 이름만 고쳐 저장(전송 기능) → CREATE 만 전송 (v1.5 use-access-permission-form.ts:139)',
+                                     '3. 블랙리스트에도 같은 규칙을 둘까요?'])
+        reader['situations'][1]['observed'] = {'where': ''}; (self.root / 'reader.json').write_text(json.dumps(reader, ensure_ascii=False))
+        self.assertIn('where', compose(3)[0])
+
     def test_merged_record_cannot_shrink_reader_table(self):
         # 저장 실행(라벨 3회차): 독자 표에 빈 칸 26개가 나오자 주 담당자가 상태를 하나로 합쳐 빈 칸 확인을 지나갔다.
         reader = {'axes': {'states': [{'name': '빈 상자', 'where': 'app.py:new'}, {'name': '빌린 물품 상자', 'where': 'data.json:3'}],
