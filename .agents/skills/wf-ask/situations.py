@@ -88,8 +88,8 @@ def _results_problem(item):
     return None
 
 
-def reader_kept(merged, reader):
-    """합친 기록이 독자 표를 줄였으면 그 사유 목록."""
+def reader_kept(merged, reader, requests=(), roots=()):
+    """합친 기록이 독자 표를 줄였거나, 독자가 정한 줄을 근거 없이 미정으로 돌렸으면 그 사유 목록."""
     problems = []
     axes = merged.get("axes") or {}
     for axis in ("states", "commands"):
@@ -108,6 +108,10 @@ def reader_kept(merged, reader):
             problems.append(f"독자 상황 {r.get('id')} 의 칸이 바뀌었다")
         elif r.get("state") != "확정" and m.get("state") == "확정" and (m.get("decided_by") or {}).get("kind") != "답":
             problems.append(f"독자가 미정으로 둔 {r.get('id')} 를 사용자 답 없이 확정했다")
+        elif r.get("state") == "확정" and m.get("state") == "미정":
+            reopen = {"decided_by": m.get("reopened_by"), "source": m.get("source")}
+            if not m.get("reopened_by") or _quote_found(reopen, list(requests), list(roots)):
+                problems.append(f"독자가 정한 {r.get('id')} 를 근거(reopened_by 인용) 없이 미정으로 돌렸다")
     return problems
 
 
@@ -131,29 +135,26 @@ def undelivered(merged, reader, message):
     return missing
 
 
-def compose(merged, reader):
-    """첫 답에 붙일 목록. 지정 기준에서 관찰해 정한 결과(observed)를 먼저 "기준 관찰" 줄로, 이어서 독자 미정 가운데
-    사용자 답으로 정해지지 않은 것의 ask 를 처음 나온 순서로(같은 문장은 한 번) 낸다."""
-    mine = {i.get("id"): i for i in merged.get("situations") or [] if isinstance(i, dict)}
-    asks = []
-    for r in reader.get("situations") or []:
-        if isinstance(r, dict) and r.get("state") == "확정" and r.get("observed"):
-            seen = r["observed"]
-            if not isinstance(seen, dict) or not str(seen.get("where", "")).strip() or not str(seen.get("value", "")).strip():
-                raise ValueError(f"기준 관찰 {r.get('id')} 에 where(위치)와 value(값)가 필요하다")
-            asks.append(f"기준 관찰: {r.get('expect')} → {seen['value']} ({seen['where']})")
-    for r in reader.get("situations") or []:
-        if not isinstance(r, dict) or r.get("state") != "미정":
+def compose(result, reader):
+    """첫 답에 붙일 목록을 분류 결과(classify 의 settled·open)에서 만든다. 지정 기준에서 관찰해 정한 결과(observed)는
+    "기준 관찰" 알림 줄로 먼저, 미정(독자·담당자 것 모두, 출처가 약해 내려간 줄 포함)은 질문 줄로 낸다.
+    질문 문장은 독자 ask → 그 줄의 ask → "실제 상황: 결과 A / 결과 B" 순으로 고르고, 같은 문장은 한 번만 낸다."""
+    asks_by_id = {r.get("id"): str(r.get("ask") or "").strip() for r in reader.get("situations") or [] if isinstance(r, dict)}
+    lines = []
+    for item in result["settled"]:
+        seen = item.get("observed")
+        if not seen:
             continue
-        m = mine.get(r.get("id")) or {}
-        if m.get("state") == "확정" and (m.get("decided_by") or {}).get("kind") == "답":
-            continue
-        ask = str(r.get("ask") or "").strip()
+        if not isinstance(seen, dict) or not str(seen.get("where", "")).strip() or not str(seen.get("value", "")).strip():
+            raise ValueError(f"기준 관찰 {item.get('id')} 에 where(위치)와 value(값)가 필요하다")
+        lines.append(f"기준 관찰: {item.get('expect')} → {seen['value']} ({seen['where']})")
+    for item in result["open"]:
+        ask = asks_by_id.get(item.get("id")) or str(item.get("ask") or "").strip()
         if not ask:
-            raise ValueError(f"독자 미정 {r.get('id')} 에 ask 가 없다")
-        if ask not in asks:
-            asks.append(ask)
-    return asks
+            ask = f"{item.get('expect')}: " + " / ".join(str(r) for r in item.get("results") or [])
+        if ask not in lines:
+            lines.append(ask)
+    return lines
 
 
 def classify(items, requests, roots):
@@ -205,14 +206,14 @@ def main():
         data = json.loads(args.situations.read_text(encoding="utf-8"))
         if not isinstance(data, dict) or "axes" not in data:
             raise ValueError("상태 × 명령 표(axes)가 없다")
-        kept = [p for path in args.reader for p in reader_kept(data, json.loads(path.read_text(encoding="utf-8")))]
+        kept = [p for path in args.reader for p in reader_kept(data, json.loads(path.read_text(encoding="utf-8")), requests, roots)]
         if kept:
             raise ValueError("합친 기록이 독자 표를 줄였다: " + "; ".join(kept))
         result = classify(data, requests, roots)
         if args.compose:
             if not args.reader:
                 raise ValueError("--compose 는 --reader 와 함께 쓴다")
-            asks = [a for path in args.reader for a in compose(data, json.loads(path.read_text(encoding="utf-8")))]
+            asks = [a for path in args.reader for a in compose(result, json.loads(path.read_text(encoding="utf-8")))]
             print("\n".join(f"{n}. {a}" for n, a in enumerate(asks, 1)))
             return 0
         if args.message:

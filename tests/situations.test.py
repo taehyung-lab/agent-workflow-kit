@@ -231,6 +231,7 @@ class SituationsTest(unittest.TestCase):
                                      '2. 기준 관찰: 이름만 고쳐 저장(전송 기능) → CREATE 만 전송 (v1.5 use-access-permission-form.ts:139)',
                                      '3. 블랙리스트에도 같은 규칙을 둘까요?'])
         reader['situations'][1]['observed'] = {'where': ''}; (self.root / 'reader.json').write_text(json.dumps(reader, ensure_ascii=False))
+        path.write_text(json.dumps(reader, ensure_ascii=False))
         self.assertIn('where', compose(3)[0])
 
     def test_merged_record_cannot_shrink_reader_table(self):
