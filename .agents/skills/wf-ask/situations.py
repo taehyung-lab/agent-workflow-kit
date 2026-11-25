@@ -131,6 +131,24 @@ def undelivered(merged, reader, message):
     return missing
 
 
+def compose(merged, reader):
+    """독자 미정 가운데 사용자 답으로 정해지지 않은 것의 ask 를 처음 나온 순서로, 같은 문장은 한 번만 모은 질문 목록."""
+    mine = {i.get("id"): i for i in merged.get("situations") or [] if isinstance(i, dict)}
+    asks = []
+    for r in reader.get("situations") or []:
+        if not isinstance(r, dict) or r.get("state") != "미정":
+            continue
+        m = mine.get(r.get("id")) or {}
+        if m.get("state") == "확정" and (m.get("decided_by") or {}).get("kind") == "답":
+            continue
+        ask = str(r.get("ask") or "").strip()
+        if not ask:
+            raise ValueError(f"독자 미정 {r.get('id')} 에 ask 가 없다")
+        if ask not in asks:
+            asks.append(ask)
+    return asks
+
+
 def classify(items, requests, roots):
     """확정 항목의 출처를 확인해 미정으로 내릴 것을 내린다. 입력은 바꾸지 않는다.
 
@@ -171,6 +189,7 @@ def main():
     parser.add_argument("--request", action="append", default=[], type=Path, help="사용자 원문 파일(순서가 원문 번호)")
     parser.add_argument("--reader", action="append", default=[], type=Path, help="독자가 반환한 표 JSON(합친 기록이 줄이지 않았는지 확인)")
     parser.add_argument("--root", action="append", default=[], type=Path, help="합의 문서를 찾을 프로젝트 폴더(기본: 현재 폴더)")
+    parser.add_argument("--compose", action="store_true", help="첫 답에 그대로 붙일 질문 목록(독자 미정의 ask)을 글로 낸다")
     parser.add_argument("--message", type=Path, help="사용자에게 보낼 글. --reader 의 미정마다 ask 문장이 그대로 있는지 본다")
     args = parser.parse_args()
     try:
@@ -183,6 +202,12 @@ def main():
         if kept:
             raise ValueError("합친 기록이 독자 표를 줄였다: " + "; ".join(kept))
         result = classify(data, requests, roots)
+        if args.compose:
+            if not args.reader:
+                raise ValueError("--compose 는 --reader 와 함께 쓴다")
+            asks = [a for path in args.reader for a in compose(data, json.loads(path.read_text(encoding="utf-8")))]
+            print("\n".join(f"{n}. {a}" for n, a in enumerate(asks, 1)))
+            return 0
         if args.message:
             if not args.reader:
                 raise ValueError("--message 는 --reader 와 함께 쓴다")

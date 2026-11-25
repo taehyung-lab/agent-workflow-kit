@@ -199,6 +199,14 @@ class SituationsTest(unittest.TestCase):
         merged['situations'][3].update(state='미정'); merged['situations'][3].pop('decided_by'); path.write_text(json.dumps(merged, ensure_ascii=False))
         self.assertEqual(check(f'{names}\n{code}', 3), ['Q28'])
 
+        # 첫 답에 붙일 질문 목록: 같은 ask 는 한 번, 순서는 처음 나온 대로. 붙인 글은 대조를 통과한다
+        reader['situations'][2]['ask'] = loan; (self.root / 'reader.json').write_text(json.dumps(reader, ensure_ascii=False))
+        r = subprocess.run([sys.executable, '-I', str(TOOL), str(path), '--request', str(self.request), '--root', str(self.root),
+                            '--reader', str(self.root / 'reader.json'), '--compose'], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.stdout.strip().splitlines(), [f'1. {names}', f'2. {loan}', f'3. {code}'])
+        self.assertEqual(check('구현 전에 정해 주세요.\n' + r.stdout + '\n추천은 1번 현재 이름입니다.'), [])
+
     def test_merged_record_cannot_shrink_reader_table(self):
         # 저장 실행(라벨 3회차): 독자 표에 빈 칸 26개가 나오자 주 담당자가 상태를 하나로 합쳐 빈 칸 확인을 지나갔다.
         reader = {'axes': {'states': [{'name': '빈 상자', 'where': 'app.py:new'}, {'name': '빌린 물품 상자', 'where': 'data.json:3'}],
