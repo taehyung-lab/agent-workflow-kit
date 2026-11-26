@@ -286,7 +286,8 @@ def context_key(events):
 def status(plan, check, events):
     # 같은 명령의 구현(검사 파일·의존 코드)은 바뀔 수 있다. 기록된 실패 이후의 성공은
     # 원래 실패와 현재 결과를 독립 대조하기 전까지 완료로 올리지 않는다.
-    needs_review = plan.get('review_required', True) or any(event.get('check') == 'FAIL' for event in events)
+    failed_before = any(item['state'] == 'FAIL' for event in events for item in event.get('results', []))
+    needs_review = plan.get('review_required', True) or failed_before
     return verify.completion('off', check, any(r['state'] == '미정' for r in plan['requirements']),
                              required=needs_review, unresolved=any(r['state'] == '미확인' for r in plan['requirements']))
 

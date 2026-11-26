@@ -117,6 +117,23 @@ sys.exit(work.main())
   _,result=self.runwork('check')
   self.assertEqual(result['check'],'PASS')
   self.assertEqual(result['completion'],'review-missing')
+ def test_unavailable_check_does_not_hide_another_failed_assertion(self):
+  self.data['review_required']=False
+  testfile=self.repo/'assertion.py'
+  testfile.write_text('from pathlib import Path\nassert Path("app.txt").read_text()=="after"')
+  command=self.data['checks'][0]
+  command['argv']=['python3',testfile.name]
+  second=self.repo/'runner'
+  self.data['checks'].append({**command,'id':'C2','argv':[str(second)]})
+  self.record()
+  _,first=self.runwork('check')
+  self.assertEqual([item['state'] for item in first['results']],['FAIL','UNVERIFIED'])
+  testfile.write_text(testfile.read_text().replace('"after"','"before"'))
+  second.write_text('#!/bin/sh\nexit 0\n')
+  second.chmod(0o755)
+  _,again=self.runwork('check')
+  self.assertEqual(again['check'],'PASS')
+  self.assertEqual(again['completion'],'review-missing')
  def test_missing_coverage(self):
   self.data['checks']=[];self.record();rc,r=self.runwork('check');self.assertEqual(r['completion'],'unverified')
  def test_waiting_never_executes(self):
