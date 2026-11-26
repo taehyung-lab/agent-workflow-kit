@@ -108,6 +108,37 @@ def reviewed_choices(work, plan, events, kept):
 
 def preserve_choices(events, plan, source_items, reviewed=()):
     requirements = {r['id']: r for r in plan['requirements']}
+    # 확정 뒤 재질문하더라도 최초 결과와 그때까지 받은 원문 수는 보존한다.
+    fixed = {}
+    changed_decisions = set()
+    count = 0
+    def outcome(row):
+        return tuple(row.get(field) for field in ('expect', 'chosen', 'cell', 'observed'))
+    for event in events:
+        count += len(event.get('sources', []))
+        for row in event.get('plan', {}).get('requirements', []) + event.get('findings', []):
+            if row['state'] == '확정' and (row['id'] not in fixed or outcome(row) != fixed[row['id']][0]):
+                if row['id'] in fixed:
+                    changed_decisions.add(row['id'])
+                fixed[row['id']] = (outcome(row), count)
+    for key, (original, at_turn) in fixed.items():
+        updated = requirements.get(key)
+        if updated is None:
+            raise ValueError(f'{key}: 최초 기대값을 삭제할 수 없다. 철회 결정도 그 줄에 남긴다')
+        if updated['state'] != '확정' or outcome(updated) == original:
+            continue
+        if not any(n > at_turn and key in source_items[n - 1].get('reply_to', []) for n in updated['source']):
+            raise ValueError(f'{key}: 확정한 기대값 변경에는 이 줄에 답한 후속 사용자 원문(--reply-to)이 필요하다')
+        changed_decisions.add(key)
+    if changed_decisions and not plan.get('review_required', True):
+        raise ValueError(f'{", ".join(sorted(changed_decisions))}: 변경한 기대값과 사용자 답의 의미를 독립 검토해야 한다')
+    if not plan.get('review_required', True):
+        targets = {t['name']: t['path'] for t in plan['targets']}
+        checks = {(targets[c['target']], tuple(c['argv']), frozenset(c['requirements'])) for c in plan['checks']}
+        for event in events:
+            for item in event.get('results', []):
+                if item['state'] == 'FAIL' and (item['cwd'], tuple(item['argv']), frozenset(item['requirements'])) not in checks:
+                    raise ValueError("실패한 검사 명령을 교체한 경우 원래 실패와 새 검사를 독립 검토해야 한다")
     for key, (original_sources, original_count) in pending_choices(events).items():
         if key not in requirements:
             raise ValueError(f'{key}: 미정인 선택을 다음 계획에서 지울 수 없다')
@@ -188,8 +219,8 @@ def record(work, args, events):
     if any(not raw.strip() for raw in incoming):
         raise ValueError('빈 원문은 기록하지 않는다')
     plan = validate(json.loads(Path(args.plan).read_text()), len(previous) + len(incoming)) if args.plan else current(events)
-    if args.reply_to and (not incoming or not set(args.reply_to) <= set(pending_choices(events))):
-        raise ValueError('--reply-to는 새 사용자 원문과 현재 미정 질문 ID가 필요하다')
+    if args.reply_to and (not incoming or not set(args.reply_to) <= {r['id'] for r in (current(events) or {}).get('requirements', [])}):
+        raise ValueError('--reply-to는 새 사용자 원문과 현재 요구 ID가 필요하다')
     if args.resolution_review and incoming:
         raise ValueError('새 원문을 먼저 기록한 뒤 현재 원문 전체로 독립 검토해야 한다')
     if args.plan:
@@ -252,9 +283,13 @@ def context_key(events):
     return digest(encoded([e for e in events if e['kind'] == 'record']))
 
 
-def status(plan, check):
+def status(plan, check, events):
+    # 같은 명령의 구현(검사 파일·의존 코드)은 바뀔 수 있다. 기록된 실패 이후의 성공은
+    # 원래 실패와 현재 결과를 독립 대조하기 전까지 완료로 올리지 않는다.
+    failed_before = any(item['state'] == 'FAIL' for event in events for item in event.get('results', []))
+    needs_review = plan.get('review_required', True) or failed_before
     return verify.completion('off', check, any(r['state'] == '미정' for r in plan['requirements']),
-                             required=plan.get('review_required', True), unresolved=any(r['state'] == '미확인' for r in plan['requirements']))
+                             required=needs_review, unresolved=any(r['state'] == '미확인' for r in plan['requirements']))
 
 
 def check(work, args, events):
@@ -262,7 +297,7 @@ def check(work, args, events):
     if not plan:
         raise ValueError('요구와 검사 계획이 없다')
     if any(r['state'] != '확정' for r in plan['requirements']):
-        return {'check': 'UNVERIFIED', 'completion': status(plan, 'UNVERIFIED')}, 6
+        return {'check': 'UNVERIFIED', 'completion': status(plan, 'UNVERIFIED', events)}, 6
     before = fingerprint(plan)
     run_dir = work / 'checks' / uuid.uuid4().hex
     run_dir.mkdir(parents=True)
@@ -291,7 +326,7 @@ def check(work, args, events):
     if before != after or covered != {r['id'] for r in plan['requirements']} or any(r['state'] == 'UNVERIFIED' for r in results):
         outcome = 'UNVERIFIED'
     event = {'kind': 'check', 'context': context_key(events), 'before': before, 'after': after,
-             'check': outcome, 'results': results, 'completion': status(plan, outcome)}
+             'check': outcome, 'results': results, 'completion': status(plan, outcome, events)}
     append(work, event)
     return event, 0 if event['completion'] == 'verified' else 6
 
@@ -324,7 +359,7 @@ def review(work, args, events):
         raise ValueError('요구 계획이 없다')
     evidence = checked(events, plan)
     if evidence['check'] != 'PASS':
-        return {'completion': status(plan, evidence['check']), 'check': evidence['check']}, 6
+        return {'completion': status(plan, evidence['check'], events), 'check': evidence['check']}, 6
     if args.answer:
         prepared = [e for e in events if e['kind'] == 'review']
         if not prepared or prepared[-1]['context'] != context_key(events) or prepared[-1].get('check') != digest(encoded(evidence)):
@@ -345,6 +380,8 @@ def review(work, args, events):
     record_path = work / 'review-input.json'
     record_path.write_bytes(encoded(plan))
     command = ['prepare', '--output', str(bundle)]
+    for tag in args.reference_tag:
+        command += ['--reference-tag', tag]
     for source in sources(events):
         command += ['--request', str(work / source['file'])]
     result, code = call_verify(command, record_path=record_path)
@@ -363,6 +400,7 @@ def main():
     parser.add_argument('--resolution-review', help='새 답 없이 잘못 표시한 미정을 정정할 독립 검토 회차 경로')
     parser.add_argument('--findings', help='독자가 반환한 상황 배열(확정은 인용 출처를 확인하고, 없으면 미정으로 기록)')
     parser.add_argument('--evidence', action='append', default=[], help='원문과 구분해 보존할 실제 검사·관찰 증거 파일')
+    parser.add_argument('--reference-tag', action='append', default=[], help='검토 복사본에 고정할 사용자 지정 Git 태그')
     parser.add_argument('--answer')
     args = parser.parse_args()
     work = args.work.resolve(); work.mkdir(parents=True, exist_ok=True)

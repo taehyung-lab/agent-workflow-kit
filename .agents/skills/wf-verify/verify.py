@@ -37,6 +37,8 @@ import hashlib, json, os, re, shutil, subprocess, sys, tempfile, time
 from collections import namedtuple
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "wf-ask"))
+
 ReviewResult = namedtuple('ReviewResult', 'result code messages', defaults=((),))
 
 RESULTS = {"충족", "미충족", "미확인"}
@@ -57,6 +59,7 @@ VERIFIER_PROMPT = """당신은 별도 검증자다. 판정 대상은 아래 「�
 - 합의 조건이나 연결된 기존 보장을 깨는 반례를 찾으면 그 조건은 미충족이다.
 - 원문의 목표에서 핵심 성공·실패 시나리오를 세우고, 원문·외부 계약을 모두 지켜도 지도의 요구·검사를 통과한 채 목표가 깨지는 입력·사건 순서를 구성해 본다. 보장에 필요한 전제를 원문·계약·실행 결과와 대조한다. 그런 반례가 있으면 관련 요구·설계·검사 조건을 미충족으로 적고, evidence에 근거 위치와 반례의 입력→행동→관찰 결과를 적어 고칠 자리를 특정한다.
 - 새 요구가 있어야 성립하는 반례(원문이 정하지 않은 동작)는 판정을 막지 않고 out_of_scope 에 적는다.
+- 사용자가 지정한 버전은 앞선 턴에서 요청한 동작까지 이어서 대조한다. 각 입력과 조작을 기준 버전과 수정본에 똑같이 적용해 결과를 확인한다. 기준 버전을 읽을 수 없거나 결과를 재구성할 수 없으면 미확인으로 남긴다.
 - 사용자 원문의 뒤 메시지가 결과·범위를 바꿨는데 작업 지도 기준에 없으면, 그 변경을 원문 조건(새 ID)으로 세워 판정한다. 원문·계획에 없는 동작(새 명령 등)이 추가됐으면 근거 없이 범위를 넓힌 것이므로 RETURN 이다.
 - 원문·계약으로 고를 수 없는데 사용자가 받는 결과(동작·데이터·범위·권한)를 구현자가 정해 버렸으면 RETURN 이다. 요구 기록 표가 있으면 행마다 출처가 그 결과 전부를 정하는지 대조한다(정하지 않은 부분은 미정 행이어야 한다).
 - 작업 맥락(대상·근거 용도·시나리오·결정)은 구현자가 적은 것, 맥락 도구 출력은 도구가 관찰한 값이다. 원문과 대조한다. 변경·산출물이 맥락의 대상이 아닌 다른 저장소·버전·과거 자료를 현재 사실로 전제했거나, 유효한 사용자 결정·앞뒤 시나리오와 어긋나면 RETURN 이다.
@@ -290,6 +293,7 @@ class ReviewInputs:
 
     def __init__(self, root, map_rel=None):
         self.cache = {}
+        self.sent_turns = {}
         self.snapshot = {"version": self.VERSION, "contract": hashlib.sha256(VERIFIER_PROMPT.encode()).hexdigest(), "files": []}
         path = Path(root, map_rel) if map_rel else None
         self.map = self.read(path, "map", definition=True) if path and path.is_file() else None
@@ -328,6 +332,10 @@ class ReviewInputs:
                 or snapshot.get("contract") != hashlib.sha256(VERIFIER_PROMPT.encode()).hexdigest()):
             return False
         try:
+            for reference in snapshot.get("references", []):
+                from situations import tag_commit
+                if tag_commit(reference["root"], reference["tag"]) != reference["commit"]:
+                    return False
             for item in snapshot["files"]:
                 if item["definition"] == 'bytes':
                     raw = Path(item["path"]).read_bytes()
@@ -724,15 +732,61 @@ def record(args):
     return record_report(result)
 
 
-def ask_table_conditions(root, inputs, used, flips):
-    """요구 확인의 독자 표(work/ask/reader.json)와 최종 표(work/ask/situations.json)를 대조해 필수 조건을 만든다.
-    독자가 정한 결과가 바뀐 줄, 독자의 미정이 사용자 답으로 정해진 줄, 지정 기준에서 관찰해 정한 줄마다 하나씩.
-    구현자가 고른 증거가 아니라 처음 정한 기대값으로 구현·검사를 대조하게 한다(구현자가 검사를 바꿔도 원래 요구가 남는다)."""
-    folder = Path(root, "work/ask")
-    if not (folder / "reader.json").is_file() or not (folder / "situations.json").is_file():
-        return []
-    reader = json.loads(inputs.read(str(folder / "reader.json"), "ask-reader"))
-    final = {i.get("id"): i for i in json.loads(inputs.read(str(folder / "situations.json"), "ask-final")).get("situations") or [] if isinstance(i, dict)}
+def ask_review_tables(root, inputs, request_paths, explicit_folder, map_request):
+    """새 인계는 이번 원문에 묶인다. 예전 공유 폴더는 인용으로 소속을 확인한다."""
+    from situations import handoff_folder, request_hash
+    requests = [inputs.cache[os.path.abspath(path)] for path in request_paths]
+    frozen = handoff_folder(Path(request_paths[0])) if request_paths else None
+    if frozen and frozen.is_dir():
+        snapshots = sorted(frozen.glob("*.json"))
+        if not snapshots:
+            raise ValueError("원문에 연결된 최초 기대값이 없다")
+        hashes = [request_hash(text) for text in requests]
+        for path in snapshots:
+            record = json.loads(inputs.read(path, "ask-handoff"))
+            for turn, message in enumerate(record.get("sent", []), 1):
+                text = inputs.read(message["path"], "ask-sent")
+                if request_hash(text) != message["sha256"] or inputs.sent_turns.setdefault(turn, text) != text:
+                    raise ValueError(f"구현 전 보존한 {turn}번 원문 뒤의 발송 내용이 달라졌다")
+            for reference in record.get("references", []):
+                pinned = inputs.snapshot.setdefault("references", [])
+                if reference not in pinned:
+                    pinned.append(reference)
+            turns = record["requests"]
+            if not turns or hashes[:len(turns)] != turns:
+                raise ValueError("구현 전 인계한 사용자 원문이 달라졌다")
+            final = json.loads(inputs.read(record["final_path"], "ask-final"))
+            for reader in record["readers"]:
+                if json.loads(inputs.read(reader["path"], "ask-reader")) != reader["table"]:
+                    raise ValueError("최초 독자 표가 변경됐다")
+                yield reader["table"], final, 0
+            yield {"situations": record["expected"]}, final, len(turns)
+        return
+    folder = Path(explicit_folder) if explicit_folder else Path(root, "work/ask")
+    paths = [folder / name for name in ("reader.json", "situations.json")]
+    available = [path for path in paths if path.is_file()]
+    if not available and not explicit_folder:
+        return
+    tables = [json.loads(path.read_text()) for path in available]
+    if not explicit_folder:
+        # 옛 표에는 작업 ID가 없다. 원문 전체 일치만 자동 연결하고, 일부만 같으면 명시적으로 선택한다.
+        first = requests[:1] + ([map_request] if map_request else [])
+        source_texts = {"".join(text.split()) for text in first}
+        origins = {"".join(row["decided_by"]["quote"].split()) for table in tables for row in table["situations"]
+                   if 1 in row.get("source", []) and row.get("decided_by", {}).get("kind") in ("요청", "기준")
+                   and row["decided_by"].get("quote")}
+        if not origins.intersection(source_texts):
+            if origins and not any(q in text for q in origins for text in source_texts):
+                return
+            raise ValueError("이전 공유 표의 요청을 식별할 수 없다. 해당 작업이면 --ask-dir 로 지정하고 다른 작업이면 표를 원래 작업 폴더에 보존한다")
+    if len(available) != 2:
+        raise ValueError("요구 확인의 독자 표 또는 최종 표가 빠졌다")
+    yield (json.loads(inputs.read(paths[0], "ask-reader")),
+           json.loads(inputs.read(paths[1], "ask-final")), 0)
+
+
+def ask_table_conditions(reader, merged, used, flips, frozen_turns):
+    final = {item["id"]: item for item in merged["situations"]}
     def said(row):
         by = (row or {}).get("decided_by") or {}
         return f"{by.get('kind', '없음')} \"{by.get('quote', '')}\"" if by else "근거 없음"
@@ -747,7 +801,13 @@ def ask_table_conditions(root, inputs, used, flips):
         changed = settled and (m.get("state") != "확정" or m.get("chosen") != r.get("chosen"))
         answered = not settled and m.get("state") == "확정"
         observed = (r.get("decided_by") or {}).get("observed") or r.get("observed")
-        if not (changed or answered or (settled and observed)):
+        if frozen_turns and any(m.get(key) != r.get(key) for key in ("expect", "cell", "observed")):
+            changed = True
+        if frozen_turns and changed:
+            by = m.get("decided_by") or {}
+            if by.get("kind") != "답" or not any(isinstance(n, int) and n > frozen_turns for n in m.get("source", [])):
+                flips.append(f"{r.get('id')} 최초 기대값 변경에 새 사용자 결정이 없다")
+        if not (frozen_turns or changed or answered or (settled and observed)):
             continue
         rid = next(f"R{n}" for n in range(1, 1000) if f"R{n}" not in used); used.add(rid)
         seen = f", 기준 관찰: {observed.get('value')} ({observed.get('where')})" if isinstance(observed, dict) else ""
@@ -757,6 +817,9 @@ def ask_table_conditions(root, inputs, used, flips):
         quote = ((m.get("decided_by") or {}).get("quote") or "")
         if changed and settled and m.get("state") == "확정" and generic(quote):
             flips.append(f"요구 표 {r.get('id')}: 독자가 정한 \"{r.get('chosen')}\" 를 일반 승인 \"{quote}\" 으로 \"{m.get('chosen')}\" 로 바꿨다(사용자가 그 결과를 직접 말해야 한다)")
+        if frozen_turns:
+            text += " 최초 상황과 기대값 원문: " + json.dumps(r, ensure_ascii=False)
+            text += " 구현과 검사가 이 기대값을 지키며, 기준을 바꿨다면 뒤 사용자 결정이 그 변경을 명시하는지 확인한다."
         if changed or answered:
             text += " 최종 결과가 독자 결과와 다르거나 사용자 답으로 정해졌으면, 인용한 사용자 말이 그 줄 질문 뒤에 그 결과를 직접 고른 답인지 사용자 원문으로 대조한다(아니면 미충족)."
         lines.append(text)
@@ -766,6 +829,7 @@ def ask_table_conditions(root, inputs, used, flips):
 def prepare_review(args, record_path=None):
     """검토 입력을 묶는다: 요청 원문·지도 기준·기준 커밋부터의 변경(diff)과 판정 대상의 고정 복사본. 검토자는 띄우지 않는다.
     한도에 닿았거나 입력·근거가 불완전하면 여기서 최종 결과를 낸다."""
+    from situations import resolve_reference, tag_commit
     asked_max = int(opt(args, "--rounds") or 2)
     root = project_root()
     problems = []
@@ -782,6 +846,7 @@ def prepare_review(args, record_path=None):
         raise ValueError("작업 지도는 해석과 설계이며 요청 원문 파일을 대신할 수 없다")
     requests = [inputs.read(f, "request") for f in opt(args, "--request", True)]
     criteria = ""
+    quoted = ""
     if map_rel:
         body = criteria_text(inputs.map) if inputs.map is not None else None
         if body is None:
@@ -835,6 +900,20 @@ def prepare_review(args, record_path=None):
         base_key = base_sha
         targets_for_print = [str(root)]
     roots = [str(t["root"]) for t in targets] if multi else targets_for_print
+    ask_tables = list(ask_review_tables(root, inputs, opt(args, "--request", True), opt(args, "--ask-dir"), quoted))
+    references = inputs.snapshot.get("references", [])
+    for reference in references:
+        if reference["root"] not in roots or tag_commit(reference["root"], reference["tag"]) != reference["commit"]:
+            problems.append(f"구현 전 지정한 기준 태그 {reference['tag']}의 대상 또는 커밋이 달라졌다")
+    for tag in dict.fromkeys(opt(args, "--reference-tag", True)):
+        try:
+            reference = resolve_reference(roots, tag)
+            if reference not in references:
+                references.append(reference)
+        except ValueError as exc:
+            problems.append(str(exc))
+    if references:
+        inputs.snapshot["references"] = references
     for target_root in map(Path, roots):
         for rel in REVIEW_RULE_FILES:
             path = target_root / rel
@@ -863,7 +942,7 @@ def prepare_review(args, record_path=None):
         previous_inputs = last.get("inputs")
         source_inputs = ({**previous_inputs, "files": [f for f in previous_inputs["files"] if f["role"] != "diff"]}
                          if isinstance(previous_inputs, dict) and isinstance(previous_inputs.get("files"), list) else None)
-        if (last.get("state") == "ok" and last.get("product") == start_print and source_inputs == inputs.snapshot
+        if (not problems and last.get("state") == "ok" and last.get("product") == start_print and source_inputs == inputs.snapshot
                 and ReviewInputs.current(previous_inputs)):
             result.update(state="ok", reason="", target=last.get("target"), reused_round=last.get("round"),
                           open_decisions=last.get("open_decisions", []), unconfirmed=last.get("unconfirmed", []))
@@ -888,6 +967,17 @@ def prepare_review(args, record_path=None):
         label = f"대상 {name}: " if multi else ""
         try:
             commit = freeze(troot, tv)
+            for reference in references:
+                if reference["root"] != str(troot):
+                    continue
+                tag = reference["tag"]
+                ref = "refs/tags/" + tag
+                fetched = run(["git", "fetch", "--quiet", "--depth=1", "--no-tags", "--no-recurse-submodules",
+                               Path(troot).resolve().as_uri(), f"{ref}:{ref}"], cwd=tv)
+                if fetched.returncode or tag_commit(tv, tag) != reference["commit"]:
+                    raise RuntimeError(f"지정 기준 태그 {tag}를 같은 커밋으로 고정하지 못했다")
+                reference_note = f"대상 {tv}에서 git show {ref}로 사용자 지정 기준을 확인한다. 커밋 {reference['commit']}"
+                envelope = "\n".join(filter(None, (envelope, reference_note)))
         except RuntimeError as e:  # 고정 대상이 없으면 검토자를 띄우지 않고 미확인(남긴 폴더에 그대로 둔다)
             commit = None
             problems.append(label + str(e))
@@ -936,12 +1026,38 @@ def prepare_review(args, record_path=None):
     # record changes where evidence lives, not which target guarantees are required.
     used = set(ids(conditions) + requirement_ids)
     internal = []
+    discovery_proof = ""
+    if len(requests) > 1 or references:
+        has_handoff = any(item["role"] == "ask-handoff" for item in inputs.snapshot["files"])
+        evidence_note = ("구현 전 고정본" if has_handoff else "기존 작업 표" if ask_tables else "전달된 표 없음")
+        envelope += f"\n요구 확인 자료: {evidence_note}. 고정된 비교 태그: {', '.join(r['tag'] for r in references) or '없음'}."
+        discovery_proof = (" 원문에서 요구 확인·기준 버전 비교가 필요했는지 직접 판단하고 필요한 근거를 짚는다. "
+                         "그 근거를 찾지 못하면 해당 동작은 미확인이다. 누락을 보고된 검사 수로 대신할 수 없다.")
     for name in [t['name'] for t in targets] if targets else ['대상']:
         number = next(n for n in range(1, 1000) if f'TV{n}' not in used)
         rid = f'TV{number}'; used.add(rid)
-        internal.append(f"{rid} 대상 {name}: 이 대상의 적용 기준으로 내부 검토를 수행하고, 별도 필수 검토가 있으면 현재 결과까지 확인했다. 근거에 적용 기준·대상 버전·실행 결과를 적는다. 누락·실패·미확인이면 충족이 아니다.")
+        internal.append(f"{rid} 대상 {name}: 이 대상의 적용 기준으로 내부 검토를 수행하고, 별도 필수 검토가 있으면 현재 결과까지 확인했다. 근거에 적용 기준·대상 버전·실행 결과를 적는다. 누락·실패·미확인이면 충족이 아니다." + discovery_proof)
+    if references:
+        for turn in range(1, len(requests) + 1):
+            number = next(n for n in range(1, 1000) if f'UR{n}' not in used)
+            rid = f'UR{number}'
+            used.add(rid)
+            internal.append(f"{rid} 사용자 원문 {turn}번에서 요청한 동작이 뒤의 기준 지정·정정 후 어디까지 유효한지 확인한다. "
+                            "유효한 동작은 지정 버전과 수정본의 같은 입력·조작·결과를 근거로 적는다. "
+                            "질문·진행 승인만 있는 턴이면 그 발언이 가리킨 내용과 근거를 적는다.")
+    if inputs.sent_turns:
+        number = next(n for n in range(1, 1000) if f'MQ{n}' not in used)
+        rid = f'MQ{number}'
+        used.add(rid)
+        internal.append(f"{rid} 각 발송 내용의 질문·추천을 그때까지의 원문과 근거로 판정한다. "
+                        "사용자 답에 따라 실제 결과가 갈렸는지, 이미 정한 동작을 다시 묻거나 다른 기본값을 권했는지, "
+                        "후속 정정이 어느 부분을 해결했는지 턴 번호와 함께 적는다.")
+        for turn, message in sorted(inputs.sent_turns.items()):
+            envelope += f"\n### {turn}번 사용자 원문 직후 실제 발송 내용 (판정 대상)\n{message or '(응답 없이 이어진 턴)'}\n"
     flips = []
-    conditions = '\n'.join([conditions, *internal, *ask_table_conditions(root, inputs, used, flips)]).strip()
+    for reader, final, turns in ask_tables:
+        internal.extend(ask_table_conditions(reader, final, used, flips, turns))
+    conditions = '\n'.join([conditions, *internal]).strip()
     required = sorted(set(ids(conditions) + requirement_ids) - set(pending + unknown))
     result.update(open_decisions=pending, unconfirmed=unknown, required=required)
     (keep / "criteria.txt").write_text(criteria, encoding="utf-8")
@@ -1020,6 +1136,12 @@ def finish_review(args, answer):
                for l in run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=d).stdout.decode().splitlines() if l and not l.startswith("??")]
     verdict = judge(answer, pd["required"])
     result.update(conditions=verdict.get("conditions", []), out_of_scope=verdict.get("out_of_scope", []), final=answer)
+    for reference in pd.get("inputs", {}).get("references", []):
+        from situations import tag_commit
+        index = pd["roots"].index(reference["root"])
+        target_dir = vdir / pd["names"][index] if pd.get("names") else vdir
+        if tag_commit(target_dir, reference["tag"]) != reference["commit"]:
+            touched.append("refs/tags/" + reference["tag"])
     if touched:
         result.update(state="unverified", reason="검토자가 판정 대상의 추적 파일을 바꿨다: " + " ".join(touched[:5]))
     elif verdict["state"] == "returned" and pd["ran_before"] + 1 >= rounds_max:

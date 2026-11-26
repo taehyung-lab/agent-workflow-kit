@@ -67,6 +67,73 @@ sys.exit(work.main())
  def test_failure(self):
   self.data['checks'][0]['argv']=['python3','-c','raise SystemExit(1)'];self.record()
   rc,r=self.runwork('check');self.assertEqual(r['completion'],'check-failed')
+ def test_check_failure_does_not_authorize_replacing_expected_result(self):
+  self.data['checks'][0]['argv']=['python3','-c','raise SystemExit(1)']
+  self.record()
+  _,result=self.runwork('check')
+  self.assertEqual(result['check'],'FAIL')
+  self.data['requirements'][0]['expect']='구현이 실제로 한 일'
+  self.plan.write_text(json.dumps(self.data))
+  code,result=self.runwork('record','--plan',str(self.plan))
+  self.assertNotEqual(code,0)
+  self.assertIn('후속 사용자 원문',result['reason'])
+ def test_unrelated_reply_does_not_change_an_approved_result(self):
+  self.record()
+  self.req.write_text('표시 이름은 한글로 해 주세요.')
+  self.runwork('record','--request',str(self.req))
+  self.data['requirements'][0].update(expect='구현이 한 일',source=[1,2])
+  self.plan.write_text(json.dumps(self.data))
+  code,result=self.runwork('record','--plan',str(self.plan))
+  self.assertNotEqual(code,0)
+  self.assertIn('--reply-to',result['reason'])
+  self.req.write_text('R1은 처음과 다른 결과로 바꿔 주세요.')
+  self.data['requirements'][0]['source']=[3]
+  self.plan.write_text(json.dumps(self.data))
+  code,result=self.runwork('record','--request',str(self.req),'--reply-to','R1','--plan',str(self.plan))
+  self.assertEqual(code,0,result)
+  self.data['review_required']=False
+  self.plan.write_text(json.dumps(self.data))
+  code,result=self.runwork('record','--plan',str(self.plan))
+  self.assertNotEqual(code,0)
+  self.assertIn('독립 검토',result['reason'])
+ def test_replacing_failed_command_cannot_skip_review(self):
+  self.data['review_required']=False
+  self.data['checks'][0]['argv']=['python3','-c','raise SystemExit(1)']
+  self.record();self.runwork('check')
+  self.data['checks'][0]['argv']=['python3','-c','print("pass")']
+  self.plan.write_text(json.dumps(self.data))
+  code,result=self.runwork('record','--plan',str(self.plan))
+  self.assertNotEqual(code,0)
+  self.assertIn('원래 실패',result['reason'])
+ def test_editing_failed_assertion_cannot_verify_unchanged_product(self):
+  self.data['review_required']=False
+  self.data['checks'][0]['argv']=['python3','test_app.py']
+  testfile=self.repo/'test_app.py'
+  testfile.write_text('from pathlib import Path\nassert Path("app.txt").read_text()=="after"')
+  self.record()
+  _,result=self.runwork('check')
+  self.assertEqual(result['completion'],'check-failed')
+  testfile.write_text(testfile.read_text().replace('"after"','"before"'))
+  _,result=self.runwork('check')
+  self.assertEqual(result['check'],'PASS')
+  self.assertEqual(result['completion'],'review-missing')
+ def test_unavailable_check_does_not_hide_another_failed_assertion(self):
+  self.data['review_required']=False
+  testfile=self.repo/'assertion.py'
+  testfile.write_text('from pathlib import Path\nassert Path("app.txt").read_text()=="after"')
+  command=self.data['checks'][0]
+  command['argv']=['python3',testfile.name]
+  second=self.repo/'runner'
+  self.data['checks'].append({**command,'id':'C2','argv':[str(second)]})
+  self.record()
+  _,first=self.runwork('check')
+  self.assertEqual([item['state'] for item in first['results']],['FAIL','UNVERIFIED'])
+  testfile.write_text(testfile.read_text().replace('"after"','"before"'))
+  second.write_text('#!/bin/sh\nexit 0\n')
+  second.chmod(0o755)
+  _,again=self.runwork('check')
+  self.assertEqual(again['check'],'PASS')
+  self.assertEqual(again['completion'],'review-missing')
  def test_missing_coverage(self):
   self.data['checks']=[];self.record();rc,r=self.runwork('check');self.assertEqual(r['completion'],'unverified')
  def test_waiting_never_executes(self):

@@ -35,11 +35,118 @@ class AskTableReviewTest(unittest.TestCase):
         self.reader = {"axes": {}, "situations": [row]}
         (self.root / "work/ask/reader.json").write_text(json.dumps(self.reader, ensure_ascii=False))
 
-    def prepare(self, final_row):
+    def prepare(self, final_row, *extra):
         (self.root / "work/ask/situations.json").write_text(json.dumps({"axes": {}, "situations": [final_row]}, ensure_ascii=False))
-        r = subprocess.run([sys.executable, str(VERIFY), "prepare", "--request", "work/req1.txt", "--request", "work/req2.txt", "--base", self.base],
+        r = subprocess.run([sys.executable, str(VERIFY), "prepare", "--request", "work/req1.txt", "--request", "work/req2.txt", "--base", self.base, *extra],
                            cwd=self.root, capture_output=True, text=True)
         return r, json.loads(r.stdout.strip().splitlines()[-1])
+
+    def test_reviewer_can_read_designated_version_and_detect_a_moved_tag(self):
+        git(self.root, "tag", "v1.5")
+        result, prepared = self.prepare(self.reader["situations"][0], "--reference-tag", "v1.5")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        prompt = Path(prepared["prompt_file"]).read_text()
+        for index in (1, 2):
+            self.assertIn(f"UR{index} 사용자 원문 {index}번", prompt)
+        target = Path(prepared["kept"]) / "target"
+        historical = subprocess.check_output(["git", "-C", target, "show", "refs/tags/v1.5:app.py"], text=True)
+        self.assertEqual(historical, "SAVE = ['CREATE']\n")
+        self.assertNotEqual(historical, (target / "app.py").read_text())
+        git(target, "tag", "-f", "v1.5", "HEAD")
+        finish = subprocess.run([sys.executable, str(VERIFY), "finish", "--round", prepared["kept"], "--check", "PASS"],
+                                input="", cwd=self.root, capture_output=True, text=True)
+        self.assertIn("refs/tags/v1.5", json.loads(finish.stdout)["reason"])
+
+    def test_multiturn_review_identifies_missing_discovery_evidence(self):
+        (self.root / "work/ask/reader.json").unlink()
+        run = subprocess.run([sys.executable, str(VERIFY), "prepare", "--request", "work/req1.txt",
+                              "--request", "work/req2.txt", "--base", self.base],
+                             cwd=self.root, capture_output=True, text=True, check=True)
+        prompt = Path(json.loads(run.stdout)["prompt_file"]).read_text()
+        self.assertIn("전달된 표 없음", prompt)
+        self.assertIn("고정된 비교 태그: 없음", prompt)
+        self.assertIn("근거를 찾지 못하면 해당 동작은 미확인", prompt)
+
+    def test_missing_designated_version_stops_review(self):
+        _, prepared = self.prepare(self.reader["situations"][0], "--reference-tag", "v1.5")
+        self.assertEqual(prepared["state"], "unverified")
+
+    def test_unrelated_request_does_not_inherit_permissions(self):
+        self.prepare(self.reader["situations"][0])
+        (self.root / "work/ping.txt").write_text("화면 활동의 연장도 복구해 주세요.")
+        run = subprocess.run([sys.executable, str(VERIFY), "prepare", "--request", "work/ping.txt", "--base", self.base],
+                             cwd=self.root, capture_output=True, text=True, check=True)
+        prompt = Path(json.loads(run.stdout)["prompt_file"]).read_text()
+        self.assertNotIn('독자 결과 "등록만"', prompt)
+
+    def test_missing_final_table_of_matching_request_blocks_review(self):
+        run = subprocess.run([sys.executable, str(VERIFY), "prepare", "--request", "work/req1.txt", "--base", self.base],
+                             cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(json.loads(run.stdout)["state"], "unverified")
+
+    def test_handoff_keeps_initial_expectation_when_both_working_tables_change(self):
+        reader = self.reader
+        row = reader["situations"][0]
+        row["observed"] = row["decided_by"]["observed"]
+        reader["axes"] = {"states": [{"name": row["cell"][0], "where": "fixture"}],
+                          "commands": [{"name": row["cell"][1], "where": "save"}]}
+        folder = self.root / "work/ask"
+        for name in ("reader", "situations"):
+            (folder / (name + ".json")).write_text(json.dumps(reader))
+        ask = VERIFY.parents[1] / "wf-ask/situations.py"
+        cmd = [sys.executable, str(ask), "work/ask/situations.json", "--reader", "work/ask/reader.json",
+               "--request", "work/req1.txt", "--handoff", "--base", self.base]
+        git(self.root, "tag", "v1.5")
+        cmd.extend(["--reference-tag", "v1.5"])
+        subprocess.run(cmd, cwd=self.root, capture_output=True, check=True)
+        _, prepared = self.prepare(row)
+        target = Path(prepared["kept"]) / "target"
+        self.assertEqual(subprocess.check_output(["git", "-C", target, "rev-parse", "v1.5"], text=True).strip(), self.base)
+        git(self.root, "tag", "-d", "v1.5")
+        _, missing = self.prepare(row)
+        self.assertEqual(missing["state"], "unverified")
+        git(self.root, "tag", "v1.5", self.base)
+        message = self.root / "work/reply.txt"
+        message.write_text("승인된 작업 전에 서버 소스 경로를 알려주세요.")
+        (folder / "situations.json").write_text(json.dumps(reader))
+        followed = cmd + ["--request", "work/req2.txt"]
+        missing_reply = subprocess.run(followed, cwd=self.root, capture_output=True)
+        self.assertNotEqual(missing_reply.returncode, 0)
+        subprocess.run(followed + ["--sent", str(message)], cwd=self.root, capture_output=True, check=True)
+        _, prepared = self.prepare(row)
+        prompt = Path(prepared["prompt_file"]).read_text()
+        self.assertIn(message.read_text(), prompt)
+        self.assertIn("MQ1", prompt)
+        message.write_text("알려주신 대로 구현했습니다.")
+        _, changed_message = self.prepare(row)
+        self.assertEqual(changed_message["state"], "unverified")
+        message.write_text("승인된 작업 전에 서버 소스 경로를 알려주세요.")
+        row["chosen"] = "등록과 조회"
+        for name in ("reader", "situations"):
+            (folder / (name + ".json")).write_text(json.dumps(reader))
+        retry = subprocess.run(cmd, cwd=self.root, capture_output=True)
+        self.assertNotEqual(retry.returncode, 0)
+        _, result = self.prepare(row)
+        self.assertEqual(result["state"], "unverified")
+        self.assertIn("최초 독자 표", result["reason"])
+
+    def test_legacy_map_owns_its_quoted_request(self):
+        self.prepare(self.reader["situations"][0])
+        request = (self.root / "work/req1.txt").read_text().strip()
+        (self.root / "map.md").write_text(f"## 기준\n요청 원문: {request}\n")
+        run = subprocess.run([sys.executable, str(VERIFY), "prepare", "--map", "map.md", "--base", self.base],
+                             cwd=self.root, capture_output=True, text=True)
+        result = json.loads(run.stdout)
+        if result["state"] != "ready":
+            self.fail(result)
+        self.assertIn('독자 결과 "등록만"', Path(result["prompt_file"]).read_text())
+
+    def test_short_reference_quote_is_not_a_task_identifier(self):
+        self.reader["situations"][0]["decided_by"]["quote"] = "1.5와 같게"
+        (self.root / "work/ask/reader.json").write_text(json.dumps(self.reader))
+        (self.root / "work/req1.txt").write_text("날짜 표시도 1.5와 같게 만들어 주세요.")
+        _,result=self.prepare(self.reader["situations"][0])
+        self.assertEqual(result["state"], "unverified")
 
     def test_generic_approval_flip_is_returned_before_review(self):
         flipped = dict(self.reader["situations"][0], chosen="등록과 조회", source=[2], decided_by={"kind": "답", "quote": "진행해주세요"})
