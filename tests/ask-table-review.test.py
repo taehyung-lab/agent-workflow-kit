@@ -96,6 +96,21 @@ class AskTableReviewTest(unittest.TestCase):
         _, missing = self.prepare(row)
         self.assertEqual(missing["state"], "unverified")
         git(self.root, "tag", "v1.5", self.base)
+        message = self.root / "work/reply.txt"
+        message.write_text("승인된 작업 전에 서버 소스 경로를 알려주세요.")
+        (folder / "situations.json").write_text(json.dumps(reader))
+        followed = cmd + ["--request", "work/req2.txt"]
+        missing_reply = subprocess.run(followed, cwd=self.root, capture_output=True)
+        self.assertNotEqual(missing_reply.returncode, 0)
+        subprocess.run(followed + ["--sent", str(message)], cwd=self.root, capture_output=True, check=True)
+        _, prepared = self.prepare(row)
+        prompt = Path(prepared["prompt_file"]).read_text()
+        self.assertIn(message.read_text(), prompt)
+        self.assertIn("MQ1", prompt)
+        message.write_text("알려주신 대로 구현했습니다.")
+        _, changed_message = self.prepare(row)
+        self.assertEqual(changed_message["state"], "unverified")
+        message.write_text("승인된 작업 전에 서버 소스 경로를 알려주세요.")
         row["chosen"] = "등록과 조회"
         for name in ("reader", "situations"):
             (folder / (name + ".json")).write_text(json.dumps(reader))

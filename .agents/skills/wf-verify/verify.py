@@ -293,6 +293,7 @@ class ReviewInputs:
 
     def __init__(self, root, map_rel=None):
         self.cache = {}
+        self.sent_turns = {}
         self.snapshot = {"version": self.VERSION, "contract": hashlib.sha256(VERIFIER_PROMPT.encode()).hexdigest(), "files": []}
         path = Path(root, map_rel) if map_rel else None
         self.map = self.read(path, "map", definition=True) if path and path.is_file() else None
@@ -743,6 +744,10 @@ def ask_review_tables(root, inputs, request_paths, explicit_folder, map_request)
         hashes = [request_hash(text) for text in requests]
         for path in snapshots:
             record = json.loads(inputs.read(path, "ask-handoff"))
+            for turn, message in enumerate(record.get("sent", []), 1):
+                text = inputs.read(message["path"], "ask-sent")
+                if request_hash(text) != message["sha256"] or inputs.sent_turns.setdefault(turn, text) != text:
+                    raise ValueError(f"구현 전 보존한 {turn}번 원문 뒤의 발송 내용이 달라졌다")
             for reference in record.get("references", []):
                 pinned = inputs.snapshot.setdefault("references", [])
                 if reference not in pinned:
@@ -1033,6 +1038,15 @@ def prepare_review(args, record_path=None):
             internal.append(f"{rid} 사용자 원문 {turn}번에서 요청한 동작이 뒤의 기준 지정·정정 후 어디까지 유효한지 확인한다. "
                             "유효한 동작은 지정 버전과 수정본의 같은 입력·조작·결과를 근거로 적는다. "
                             "질문·진행 승인만 있는 턴이면 그 발언이 가리킨 내용과 근거를 적는다.")
+    if inputs.sent_turns:
+        number = next(n for n in range(1, 1000) if f'MQ{n}' not in used)
+        rid = f'MQ{number}'
+        used.add(rid)
+        internal.append(f"{rid} 각 발송 내용의 질문·추천을 그때까지의 원문과 근거로 판정한다. "
+                        "사용자 답에 따라 실제 결과가 갈렸는지, 이미 정한 동작을 다시 묻거나 다른 기본값을 권했는지, "
+                        "후속 정정이 어느 부분을 해결했는지 턴 번호와 함께 적는다.")
+        for turn, message in sorted(inputs.sent_turns.items()):
+            envelope += f"\n### {turn}번 사용자 원문 직후 실제 발송 내용 (판정 대상)\n{message or '(응답 없이 이어진 턴)'}\n"
     flips = []
     for reader, final, turns in ask_tables:
         internal.extend(ask_table_conditions(reader, final, used, flips, turns))

@@ -285,7 +285,7 @@ def resolve_reference(roots, tag):
     return {"root": root, "tag": tag, "commit": sha}
 
 
-def save_handoff(request_paths, requests, result, final_path, reader_paths, readers, references=()):
+def save_handoff(request_paths, requests, result, final_path, reader_paths, readers, references=(), sent_paths=(), sent=()):
     """구현 전 근거를 원문 옆에 턴별로 한 번만 게시한다. 재실행이나 경쟁 쓰기가 덮어쓰지 않는다."""
     if not requests or result["open"] or result["missing"]:
         raise ValueError("원문과 확정된 모든 상황이 있어야 구현으로 인계한다")
@@ -296,6 +296,11 @@ def save_handoff(request_paths, requests, result, final_path, reader_paths, read
                 "expected": result["settled"], "final_path": str(final_path.resolve()),
                 "readers": [{"path": str(path.resolve()), "table": table}
                             for path, table in zip(reader_paths, readers)]}
+    if not len(requests) - 1 <= len(sent) <= len(requests):
+        raise ValueError("여러 턴을 인계할 때는 앞선 각 사용자 원문 뒤의 보낸 글을 --sent로 연결한다. 응답 없이 이어진 턴은 빈 파일로 표시한다")
+    if sent:
+        snapshot["sent"] = [{"path": str(path.resolve()), "sha256": request_hash(text)}
+                            for path, text in zip(sent_paths, sent)]
     if references:
         snapshot["references"] = list(references)
     with tempfile.NamedTemporaryFile(dir=folder, delete=False) as stream:
@@ -336,8 +341,8 @@ def main():
         kept = [p for reader in readers for p in reader_kept(data, reader, requests, roots)]
         if kept:
             raise ValueError("합친 기록이 독자 표를 줄였다: " + "; ".join(kept))
-        if readers or args.sent:
-            sent = [path.read_text(encoding="utf-8") for path in args.sent]
+        sent = [path.read_text(encoding="utf-8") for path in args.sent]
+        if readers or sent:
             unbound = [p for reader in (readers or [{}]) for p in answers_unbound(data, reader, sent)]
             if unbound:
                 raise ValueError("그 줄을 물은 글 뒤의 답이 아니다: " + "; ".join(unbound))
@@ -346,7 +351,7 @@ def main():
             if args.compose or args.message:
                 raise ValueError("안내 작성과 구현 인계는 다른 시점이다")
             references = [resolve_reference(roots, tag) for tag in dict.fromkeys(args.reference_tag)]
-            save_handoff(args.request, requests, result, args.situations, args.reader, readers, references)
+            save_handoff(args.request, requests, result, args.situations, args.reader, readers, references, args.sent, sent)
         if args.compose:
             if not args.reader:
                 raise ValueError("--compose 는 --reader 와 함께 쓴다")
