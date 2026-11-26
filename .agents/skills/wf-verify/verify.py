@@ -38,7 +38,6 @@ from collections import namedtuple
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "wf-ask"))
-from situations import handoff_folder, request_hash, resolve_reference, tag_commit
 
 ReviewResult = namedtuple('ReviewResult', 'result code messages', defaults=((),))
 
@@ -333,6 +332,7 @@ class ReviewInputs:
             return False
         try:
             for reference in snapshot.get("references", []):
+                from situations import tag_commit
                 if tag_commit(reference["root"], reference["tag"]) != reference["commit"]:
                     return False
             for item in snapshot["files"]:
@@ -733,6 +733,7 @@ def record(args):
 
 def ask_review_tables(root, inputs, request_paths, explicit_folder, map_request):
     """새 인계는 이번 원문에 묶인다. 예전 공유 폴더는 인용으로 소속을 확인한다."""
+    from situations import handoff_folder, request_hash
     requests = [inputs.cache[os.path.abspath(path)] for path in request_paths]
     frozen = handoff_folder(Path(request_paths[0])) if request_paths else None
     if frozen and frozen.is_dir():
@@ -823,6 +824,7 @@ def ask_table_conditions(reader, merged, used, flips, frozen_turns):
 def prepare_review(args, record_path=None):
     """검토 입력을 묶는다: 요청 원문·지도 기준·기준 커밋부터의 변경(diff)과 판정 대상의 고정 복사본. 검토자는 띄우지 않는다.
     한도에 닿았거나 입력·근거가 불완전하면 여기서 최종 결과를 낸다."""
+    from situations import resolve_reference, tag_commit
     asked_max = int(opt(args, "--rounds") or 2)
     root = project_root()
     problems = []
@@ -1106,6 +1108,7 @@ def finish_review(args, answer):
     verdict = judge(answer, pd["required"])
     result.update(conditions=verdict.get("conditions", []), out_of_scope=verdict.get("out_of_scope", []), final=answer)
     for reference in pd.get("inputs", {}).get("references", []):
+        from situations import tag_commit
         index = pd["roots"].index(reference["root"])
         target_dir = vdir / pd["names"][index] if pd.get("names") else vdir
         if tag_commit(target_dir, reference["tag"]) != reference["commit"]:
