@@ -77,6 +77,20 @@ sys.exit(work.main())
   code,result=self.runwork('record','--plan',str(self.plan))
   self.assertNotEqual(code,0)
   self.assertIn('후속 사용자 원문',result['reason'])
+ def test_unrelated_reply_does_not_change_an_approved_result(self):
+  self.record()
+  self.req.write_text('표시 이름은 한글로 해 주세요.')
+  self.runwork('record','--request',str(self.req))
+  self.data['requirements'][0].update(expect='구현이 한 일',source=[1,2])
+  self.plan.write_text(json.dumps(self.data))
+  code,result=self.runwork('record','--plan',str(self.plan))
+  self.assertNotEqual(code,0)
+  self.assertIn('--reply-to',result['reason'])
+  self.req.write_text('R1은 처음과 다른 결과로 바꿔 주세요.')
+  self.data['requirements'][0]['source']=[3]
+  self.plan.write_text(json.dumps(self.data))
+  code,result=self.runwork('record','--request',str(self.req),'--reply-to','R1','--plan',str(self.plan))
+  self.assertEqual(code,0,result)
  def test_missing_coverage(self):
   self.data['checks']=[];self.record();rc,r=self.runwork('check');self.assertEqual(r['completion'],'unverified')
  def test_waiting_never_executes(self):

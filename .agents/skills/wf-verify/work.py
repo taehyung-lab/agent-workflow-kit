@@ -108,21 +108,26 @@ def reviewed_choices(work, plan, events, kept):
 
 def preserve_choices(events, plan, source_items, reviewed=()):
     requirements = {r['id']: r for r in plan['requirements']}
-    last_plan = current(events)
-    if last_plan:
-        for original in last_plan['requirements']:
-            if original['state'] != '확정':
-                continue
-            key = original['id']
-            updated = requirements.get(key)
-            if updated is None:
-                raise ValueError(f'{key}: 최초 기대값을 삭제할 수 없다. 철회 결정도 그 줄에 남긴다')
-            if all(updated.get(field) == original.get(field) for field in ('expect', 'chosen', 'cell')):
-                continue
-            known = {item['sha256'] for item in sources(events)[:max(original['source'])]}
-            if not any(source_items[n - 1]['sha256'] not in known and n > max(original['source'])
-                       for n in updated['source']):
-                raise ValueError(f'{key}: 확정한 기대값 변경에는 후속 사용자 원문이 필요하다')
+    # 확정 뒤 재질문하더라도 최초 결과와 그때까지 받은 원문 수는 보존한다.
+    fixed = {}
+    count = 0
+    def outcome(row):
+        return tuple(row.get(field) for field in ('expect', 'chosen', 'cell', 'observed'))
+    for event in events:
+        count += len(event.get('sources', []))
+        for row in event.get('plan', {}).get('requirements', []) + event.get('findings', []):
+            if row['state'] == '확정' and (row['id'] not in fixed or outcome(row) != fixed[row['id']][0]):
+                fixed[row['id']] = (outcome(row), count)
+    for key, (original, at_turn) in fixed.items():
+        updated = requirements.get(key)
+        if updated is None:
+            raise ValueError(f'{key}: 최초 기대값을 삭제할 수 없다. 철회 결정도 그 줄에 남긴다')
+        if updated['state'] != '확정' or outcome(updated) == original:
+            continue
+        if not any(n > at_turn and key in source_items[n - 1].get('reply_to', []) for n in updated['source']):
+            raise ValueError(f'{key}: 확정한 기대값 변경에는 이 줄에 답한 후속 사용자 원문(--reply-to)이 필요하다')
+        if not plan.get('review_required', True):
+            raise ValueError(f'{key}: 변경한 기대값과 사용자 답의 의미를 독립 검토해야 한다')
     for key, (original_sources, original_count) in pending_choices(events).items():
         if key not in requirements:
             raise ValueError(f'{key}: 미정인 선택을 다음 계획에서 지울 수 없다')
@@ -203,8 +208,8 @@ def record(work, args, events):
     if any(not raw.strip() for raw in incoming):
         raise ValueError('빈 원문은 기록하지 않는다')
     plan = validate(json.loads(Path(args.plan).read_text()), len(previous) + len(incoming)) if args.plan else current(events)
-    if args.reply_to and (not incoming or not set(args.reply_to) <= set(pending_choices(events))):
-        raise ValueError('--reply-to는 새 사용자 원문과 현재 미정 질문 ID가 필요하다')
+    if args.reply_to and (not incoming or not set(args.reply_to) <= {r['id'] for r in (current(events) or {}).get('requirements', [])}):
+        raise ValueError('--reply-to는 새 사용자 원문과 현재 요구 ID가 필요하다')
     if args.resolution_review and incoming:
         raise ValueError('새 원문을 먼저 기록한 뒤 현재 원문 전체로 독립 검토해야 한다')
     if args.plan:
