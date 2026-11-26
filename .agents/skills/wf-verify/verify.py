@@ -1026,17 +1026,17 @@ def prepare_review(args, record_path=None):
     # record changes where evidence lives, not which target guarantees are required.
     used = set(ids(conditions) + requirement_ids)
     internal = []
-    for name in [t['name'] for t in targets] if targets else ['대상']:
-        number = next(n for n in range(1, 1000) if f'TV{n}' not in used)
-        rid = f'TV{number}'; used.add(rid)
-        internal.append(f"{rid} 대상 {name}: 이 대상의 적용 기준으로 내부 검토를 수행하고, 별도 필수 검토가 있으면 현재 결과까지 확인했다. 근거에 적용 기준·대상 버전·실행 결과를 적는다. 누락·실패·미확인이면 충족이 아니다.")
+    discovery_proof = ""
     if len(requests) > 1 or references:
         has_handoff = any(item["role"] == "ask-handoff" for item in inputs.snapshot["files"])
         evidence_note = ("구현 전 고정본" if has_handoff else "기존 작업 표" if ask_tables else "전달된 표 없음")
         envelope += f"\n요구 확인 자료: {evidence_note}. 고정된 비교 태그: {', '.join(r['tag'] for r in references) or '없음'}."
-        if internal:
-            internal[-1] += (" 원문에서 요구 확인·기준 버전 비교가 필요했는지 직접 판단하고 필요한 근거를 짚는다. "
+        discovery_proof = (" 원문에서 요구 확인·기준 버전 비교가 필요했는지 직접 판단하고 필요한 근거를 짚는다. "
                          "그 근거를 찾지 못하면 해당 동작은 미확인이다. 누락을 보고된 검사 수로 대신할 수 없다.")
+    for name in [t['name'] for t in targets] if targets else ['대상']:
+        number = next(n for n in range(1, 1000) if f'TV{n}' not in used)
+        rid = f'TV{number}'; used.add(rid)
+        internal.append(f"{rid} 대상 {name}: 이 대상의 적용 기준으로 내부 검토를 수행하고, 별도 필수 검토가 있으면 현재 결과까지 확인했다. 근거에 적용 기준·대상 버전·실행 결과를 적는다. 누락·실패·미확인이면 충족이 아니다." + discovery_proof)
     if references:
         for turn in range(1, len(requests) + 1):
             number = next(n for n in range(1, 1000) if f'UR{n}' not in used)
