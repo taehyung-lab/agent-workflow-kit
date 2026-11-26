@@ -130,6 +130,80 @@ class AskTableReviewTest(unittest.TestCase):
         self.assertEqual(result["state"], "unverified")
         self.assertIn("최초 독자 표", result["reason"])
 
+    def handoff(self, rows, turns, *extra):
+        first = self.reader["situations"][0]
+        axes = {"states": [{"name": first["cell"][0], "where": "fixture"}],
+                "commands": [{"name": first["cell"][1], "where": "save"}]}
+        table = self.root / "work/ask/situations.json"
+        table.write_text(json.dumps({"axes": axes, "situations": rows}))
+        command = [sys.executable, str(VERIFY.parents[1] / "wf-ask/situations.py"), str(table), "--handoff"]
+        for turn in range(1, turns + 1):
+            command.extend(["--request", f"work/req{turn}.txt"])
+            if turn < turns:
+                message = self.root / f"work/sent{turn}.txt"
+                message.touch()
+                command.extend(["--sent", str(message)])
+        return subprocess.run([*command, *extra], cwd=self.root, capture_output=True, text=True)
+
+    def test_next_handoff_keeps_previously_settled_row(self):
+        row = self.reader["situations"][0]
+        row["observed"] = row["decided_by"]["observed"]
+        first = self.handoff([row], 1)
+        self.assertEqual(first.returncode, 0, first.stdout)
+        missing = self.handoff([dict(row, id="Q11")], 2)
+        self.assertEqual(missing.returncode, 3, missing.stdout)
+        self.assertIn("Q10", missing.stdout)
+        flipped = self.handoff([dict(row, chosen="등록과 조회")], 2)
+        self.assertEqual(flipped.returncode, 3, flipped.stdout)
+        self.assertFalse((self.root / "work/req1.txt.expectations/0002.json").exists())
+        preserved = self.handoff([row, dict(row, id="Q11")], 2)
+        self.assertEqual(preserved.returncode, 0, preserved.stdout)
+
+    def test_new_handoff_uses_original_requests_and_unique_row_ids(self):
+        row = self.reader["situations"][0]
+        row["observed"] = row["decided_by"]["observed"]
+        duplicate = self.handoff([row, row], 1)
+        self.assertEqual(duplicate.returncode, 3, duplicate.stdout)
+        first = self.handoff([row], 1)
+        self.assertEqual(first.returncode, 0, first.stdout)
+        with (self.root / "work/req1.txt").open("a") as stream:
+            stream.write("이 문장은 뒤에서 보탰습니다.")
+        changed = self.handoff([row], 2)
+        self.assertEqual(changed.returncode, 3, changed.stdout)
+        self.assertIn("원문", changed.stdout)
+
+    def test_explicit_cancellation_keeps_original_row_in_next_handoff(self):
+        row = self.reader["situations"][0]
+        row["observed"] = row["decided_by"]["observed"]
+        first = self.handoff([row], 1)
+        self.assertEqual(first.returncode, 0, first.stdout)
+        quote = "이름만 고쳐 저장하는 변경 요청은 취소해 주세요."
+        (self.root / "work/req2.txt").write_text(quote)
+        corrected = dict(row, chosen="변경 요청 취소", results=[*row["results"], "변경 요청 취소"],
+                         source=[2], decided_by={"kind": "정정", "quote": quote})
+        reader = self.root / "work/ask/correction-reader.json"
+        reader.write_text(json.dumps({"axes": {}, "situations": [corrected]}))
+        accepted = self.handoff([corrected], 2, "--reader", str(reader))
+        self.assertEqual(accepted.returncode, 0, accepted.stdout)
+        snapshot = json.loads((self.root / "work/req1.txt.expectations/0002.json").read_text())
+        self.assertEqual(snapshot["expected"][0]["chosen"], "변경 요청 취소")
+
+    def test_reader_agreement_cannot_turn_unsolicited_input_into_an_answer(self):
+        row = self.reader["situations"][0]
+        row["observed"] = row["decided_by"]["observed"]
+        self.assertEqual(self.handoff([row], 1).returncode, 0)
+        quote = "등록과 조회를 모두 저장해 주세요."
+        (self.root / "work/req2.txt").write_text(quote)
+        changed = dict(row, chosen="등록과 조회", ask="조회도 저장할까요?", source=[2],
+                       decided_by={"kind": "답", "quote": quote})
+        reader = self.root / "work/ask/second-reader.json"
+        reader.write_text(json.dumps({"axes": {}, "situations": [changed]}))
+        before_question = self.handoff([changed], 2, "--reader", str(reader))
+        self.assertEqual(before_question.returncode, 3, before_question.stdout)
+        (self.root / "work/sent1.txt").write_text(changed["ask"])
+        after_question = self.handoff([changed], 2, "--reader", str(reader))
+        self.assertEqual(after_question.returncode, 0, after_question.stdout)
+
     def test_legacy_map_owns_its_quoted_request(self):
         self.prepare(self.reader["situations"][0])
         request = (self.root / "work/req1.txt").read_text().strip()

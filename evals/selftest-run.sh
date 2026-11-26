@@ -461,6 +461,9 @@ else
   cat "$entry_log"
 fi
 rm -f "$entry_log"
+for suite in situations ask-table-review correction-review; do
+  python3 -I "$here/../tests/$suite.test.py" && ok "$suite" || ng "$suite"
+done
 python3 -I "$here/../tests/decision-turns.test.py" && ok "결정 대기 턴 판정" || ng "결정 대기 턴 판정"
 python3 -I "$here/../tests/work.test.py" && ok "대표 작업 기록 공개 명령" || ng "대표 작업 기록 공개 명령"
 python3 -I "$here/../tests/evaluation-contract.test.py" && ok "평가 정책·비교 계약" || ng "평가 정책·비교 계약"

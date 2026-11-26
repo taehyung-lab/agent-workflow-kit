@@ -11,7 +11,7 @@ missing 에 칸을 내보낸다(그 칸의 상황을 만들어 다시 확인한�
 항목:
   {"id": "Q1", "cell": ["상태", "명령"], "expect": "실제 상황(자료 위치)", "results": ["사용자가 볼 결과 A", "결과 B"],
    "source": [1], "state": "확정" 또는 "미정", "chosen": "확정이면 인용이 고른 결과(results 중 하나)",
-   "decided_by": {"kind": "요청" | "합의" | "답" | "기준", "file": "합의일 때 프로젝트 기준 경로", "quote": "글자 그대로"},
+   "decided_by": {"kind": "요청" | "합의" | "답" | "정정" | "기준", "file": "합의일 때 프로젝트 기준 경로", "quote": "글자 그대로"},
    "observed": {"where", "value"} (기준일 때: 지정한 기준에서 관찰한 위치·값),
    "default": "미정이면 기본값(results 중 하나)", "default_by": "기본값을 고른 근거 인용 또는 '추천: 이유'",
    "facts": "지금 동작·금지 문장 없음·요청 범위 같은 사실(출처가 아님)"}
@@ -19,7 +19,7 @@ missing 에 칸을 내보낸다(그 칸의 상황을 만들어 다시 확인한�
 chosen 으로 적는다. 결과가 하나뿐인 상황은 형식 오류다(종료 코드 3). 확정인데 chosen 이 results 에 없으면 미정으로 내린다.
 
 --reader 로 독자가 반환한 표를 주면, 합친 기록이 그 표를 줄이지 않았는지 본다: 독자 표의 상태·명령 이름이 모두 남고,
-독자 상황이 같은 id·칸으로 남으며, 독자가 미정으로 둔 상황은 사용자 답(kind 답)의 인용 없이 확정이 되지 않는다.
+독자 상황이 같은 id·칸으로 남으며, 독자가 미정으로 둔 상황을 확정하려면 사용자 답이나 독립 독자가 확인한 후속 정정이 필요하다.
 어기면 종료 코드 3 이다.
 
 확정 항목은 decided_by 가 필요하다. 요청·답·기준은 source 번호의 원문 파일(--request 순서가 원문 번호)에,
@@ -36,6 +36,7 @@ chosen 으로 적는다. 결과가 하나뿐인 상황은 형식 오류다(종�
 출력은 JSON 한 줄: {"settled": [...], "open": [...], "demoted": [{"id", "reason"}], "missing": [["상태", "명령"], ...]}.
 """
 import argparse
+import fcntl
 import hashlib
 import os
 import tempfile
@@ -45,7 +46,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-KINDS = ("요청", "합의", "답", "기준")
+KINDS = ("요청", "합의", "답", "기준", "정정")
 MIN_QUOTE = 6
 
 
@@ -64,6 +65,8 @@ def _quote_found(item, requests, roots, base=None):
     if not isinstance(by, dict) or by.get("kind") not in KINDS:
         return "결정 출처(요청·합의·답·기준 인용)가 없다"
     quote = _plain(str(by.get("quote", "")))
+    if by["kind"] == "정정":
+        return correction_problem(item, requests)
     if len(quote) < MIN_QUOTE:
         return "결정 출처의 인용 문장이 없다"
     if by["kind"] == "기준":
@@ -133,7 +136,7 @@ def reader_kept(merged, reader, requests=(), roots=()):
             problems.append(f"독자 상황 {r.get('id')} 가 빠졌다")
         elif m.get("cell") != r.get("cell"):
             problems.append(f"독자 상황 {r.get('id')} 의 칸이 바뀌었다")
-        elif r.get("state") != "확정" and m.get("state") == "확정" and (m.get("decided_by") or {}).get("kind") != "답":
+        elif r.get("state") != "확정" and m.get("state") == "확정" and (m.get("decided_by") or {}).get("kind") not in ("답", "정정"):
             problems.append(f"독자가 미정으로 둔 {r.get('id')} 를 사용자 답 없이 확정했다")
         elif r.get("state") == "확정" and m.get("state") == "미정":
             reopen = {"decided_by": m.get("reopened_by"), "source": m.get("source")}
@@ -152,7 +155,7 @@ def undelivered(merged, reader, message):
         if not isinstance(r, dict) or r.get("state") != "미정":
             continue
         m = mine.get(r.get("id")) or {}
-        if m.get("state") == "확정" and (m.get("decided_by") or {}).get("kind") == "답":
+        if m.get("state") == "확정" and (m.get("decided_by") or {}).get("kind") in ("답", "정정"):
             continue
         ask = str(r.get("ask") or "").strip()
         if not ask:
@@ -177,8 +180,36 @@ def _generic(quote):
     return len(GENERIC.sub("", str(quote))) < 4
 
 
+def correction_problem(item, requests, after=1):
+    turns = item.get("source")
+    if not isinstance(turns, list) or len(turns) != 1 or type(turns[0]) is not int or not after < turns[0] <= len(requests):
+        return "정정에는 앞선 결정 이후의 사용자 원문 번호 하나가 필요하다"
+    quote = (item.get("decided_by") or {}).get("quote")
+    if not isinstance(quote, str) or not quote.strip() or _plain(quote) not in _plain(requests[turns[0] - 1]):
+        return "정정 인용을 해당 사용자 원문에서 찾지 못했다"
+    if not GENERIC.sub("", quote).strip():
+        return "일반 승인만으로 기존 결과를 정정할 수 없다"
+    return None
+
+
+def check_correction_readers(table, readers, requests):
+    rows = table.get("situations") or []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if (row.get("decided_by") or {}).get("kind") != "정정":
+            continue
+        problem = correction_problem(row, requests)
+        if problem:
+            raise ValueError(f"{row['id']}: {problem}")
+        keys = ("id", "cell", "state", "chosen", "source", "decided_by")
+        if not any(all(row.get(k) == reading.get(k) for k in keys)
+                   for reader in readers for reading in reader.get("situations", []) if isinstance(reading, dict)):
+            raise ValueError(f"{row['id']} 정정의 대상·결과·사용자 인용을 확인한 후속 독자 표가 필요하다")
+
+
 def answers_unbound(merged, reader, sent):
-    """사용자 답으로 확정한 줄과 독자가 확정한 결과를 바꾼 줄 가운데, 그 줄을 물은 글 뒤의 답이 아닌 것."""
+    """사용자 답으로 확정한 줄과 독자가 확정한 결과를 바꾼 줄 가운데, 질문에 앞선 답이나 이전 결정에 앞선 정정."""
     theirs = {r.get("id"): r for r in reader.get("situations") or [] if isinstance(r, dict)}
     problems = []
     for m in merged.get("situations") or []:
@@ -187,6 +218,10 @@ def answers_unbound(merged, reader, sent):
         r = theirs.get(m.get("id")) or {}
         kept = r.get("state") == "확정" and r.get("chosen") == m.get("chosen")
         kind = (m.get("decided_by") or {}).get("kind")
+        if kind == "정정":
+            if not kept and r.get("source") and max(r["source"]) >= m["source"][0]:
+                problems.append(f"{m['id']} 정정이 앞선 결정 이후의 발언이 아니다")
+            continue
         if kept or (kind != "답" and r.get("state") != "확정"):
             continue
         if kind != "답":
@@ -198,21 +233,36 @@ def answers_unbound(merged, reader, sent):
     return problems
 
 
-def compose(result, reader):
+def compose(result, readers):
     """첫 답에 붙일 목록을 분류 결과(classify 의 settled·open)에서 만든다. 지정 기준에서 관찰해 정한 결과(observed)는
     "기준 관찰" 알림 줄로 먼저, 미정(독자·담당자 것 모두, 출처가 약해 내려간 줄 포함)은 질문 줄로 낸다.
     질문 문장은 독자 ask → 그 줄의 ask → "실제 상황: 결과 A / 결과 B" 순으로 고르고, 같은 문장은 한 번만 낸다."""
-    theirs = {r.get("id"): r for r in reader.get("situations") or [] if isinstance(r, dict)}
+    readings = {}
+    for reader in readers:
+        for row in reader["situations"]:
+            readings.setdefault(row["id"], []).append(row)
     lines = []
     for item in result["settled"]:
         seen = item.get("observed")
         if not seen:
+            by = item["decided_by"]
+            source = by.get("file") or f"{by['kind']}: {by['quote']}"
+            lines.append(f"{item['expect']} → {item['chosen']} ({source})")
             continue
         if not isinstance(seen, dict) or not str(seen.get("where", "")).strip() or not str(seen.get("value", "")).strip():
             raise ValueError(f"기준 관찰 {item.get('id')} 에 where(위치)와 value(값)가 필요하다")
-        lines.append(f"기준 관찰: {item.get('expect')} → {seen['value']} ({seen['where']})")
+        value = str(seen["value"])
+        shown = value if str(item["chosen"]) in value else item["chosen"]
+        lines.append(f"기준 관찰: {item.get('expect')} → {shown} ({seen['where']})")
     for item in result["open"]:
-        r = theirs.get(item.get("id")) or {}
+        matches = readings.get(item["id"], [])
+        defaults = {row["default"] for row in [*matches, item] if row.get("default")}
+        if len(defaults) > 1:
+            choices = " / ".join(str(value) for value in item["results"])
+            questions = dict.fromkeys(row["ask"] for row in matches if row.get("ask"))
+            lines.append(f"{' '.join(questions) or item['expect']} ({choices} 중 선택)")
+            continue
+        r = next((row for row in reversed(matches) if row.get("default")), matches[-1] if matches else {})
         ask = str(r.get("ask") or item.get("ask") or "").strip()
         if not ask:
             ask = f"{item.get('expect')}: " + " / ".join(str(x) for x in item.get("results") or [])
@@ -285,6 +335,62 @@ def resolve_reference(roots, tag):
     return {"root": root, "tag": tag, "commit": sha}
 
 
+def check_handoff_rows(previous, snapshot, requests, sent):
+    """이전 턴에 정한 결과를 유지하거나, 그 뒤의 사용자 결정에 연결한다."""
+    rows = {}
+    for row in snapshot["expected"]:
+        if row["id"] in rows:
+            raise ValueError(f"인계할 상황 {row['id']}가 중복됐다")
+        rows[row["id"]] = row
+    if previous is None:
+        return
+    earlier = previous["requests"]
+    if snapshot["requests"][:len(earlier)] != earlier:
+        raise ValueError("앞서 인계한 사용자 원문이나 순서가 달라졌다")
+    messages = previous.get("sent", [])
+    if [m["sha256"] for m in snapshot.get("sent", [])[:len(messages)]] != [m["sha256"] for m in messages]:
+        raise ValueError("앞서 인계한 발송 내용이나 순서가 달라졌다")
+    for old in previous["expected"]:
+        ident = old["id"]
+        new = rows.get(ident)
+        if new is None:
+            raise ValueError(f"앞서 확정한 {ident}가 빠졌다. 취소도 같은 상황의 사용자 결정으로 남긴다")
+        if all(old.get(key) == new.get(key) for key in ("cell", "expect", "chosen", "observed", "decided_by", "source")):
+            continue
+        by = new.get("decided_by") or {}
+        if by.get("kind") == "정정":
+            problem = correction_problem(new, requests, after=len(earlier))
+            if problem:
+                raise ValueError(f"{ident}: {problem}")
+            continue
+        quote = _plain(by.get("quote", ""))
+        answer_turns = [n for n in new.get("source", []) if type(n) is int and len(earlier) < n <= len(requests)
+                        and quote in _plain(requests[n - 1])]
+        if by.get("kind") != "답" or _generic(quote) or not answer_turns:
+            raise ValueError(f"앞서 확정한 {ident}를 바꾼 새 사용자 결정의 인용이 없다")
+        asks = [old.get("ask"), new.get("ask")]
+        asks.extend(row.get("ask") for reader in snapshot["readers"] for row in reader["table"]["situations"]
+                    if row["id"] == ident)
+        if not any(_asked_before({"source": answer_turns}, ask, sent) for ask in asks if ask):
+            raise ValueError(f"{ident}의 새 사용자 답 앞에 이 줄의 질문을 보낸 기록이 없다")
+
+
+def implementation_brief(axes, rows):
+    states = {axis["name"]: axis["where"] for axis in axes["states"]}
+    commands = {axis["name"]: axis["where"] for axis in axes["commands"]}
+    instructions = []
+    for row in rows:
+        cell = row.get("cell")
+        if not isinstance(cell, list) or len(cell) != 2:
+            raise ValueError(f"{row['id']} 인계에 시작 상태와 조작이 필요하다")
+        state, command = cell
+        by = row["decided_by"]
+        authority = by.get("file") or f"사용자 원문 {row['source']}"
+        instructions.append(f"{state} ({states[state]}) · {command} ({commands[command]})"
+                            f" — {row['expect']} → {row['chosen']} · {authority} “{by['quote']}”")
+    return instructions
+
+
 def save_handoff(request_paths, requests, result, final_path, reader_paths, readers, references=(), sent_paths=(), sent=()):
     """구현 전 근거를 원문 옆에 턴별로 한 번만 게시한다. 재실행이나 경쟁 쓰기가 덮어쓰지 않는다."""
     if not requests or result["open"] or result["missing"]:
@@ -301,8 +407,24 @@ def save_handoff(request_paths, requests, result, final_path, reader_paths, read
     if sent:
         snapshot["sent"] = [{"path": str(path.resolve()), "sha256": request_hash(text)}
                             for path, text in zip(sent_paths, sent)]
+    if "implementation" in result:
+        snapshot["implementation"] = result["implementation"]
     if references:
         snapshot["references"] = list(references)
+    # 서로 다른 턴이 동시에 시작해도 앞선 기록 확인과 게시가 한 차례씩 이뤄진다.
+    with (folder / ".handoff.lock").open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        publish_handoff(folder, target, snapshot, requests, sent)
+
+
+def publish_handoff(folder, target, snapshot, requests, sent):
+    records = sorted((path for path in folder.glob("*.json") if path.stem.isdecimal()),
+                     key=lambda path: int(path.stem))
+    older = [path for path in records if int(path.stem) < len(requests)]
+    if target not in records and any(int(path.stem) > len(requests) for path in records):
+        raise ValueError("나중 턴을 인계한 뒤 이전 턴의 최초 기대값을 추가할 수 없다")
+    previous = json.loads(older[-1].read_text()) if older else None
+    check_handoff_rows(previous, snapshot, requests, sent)
     with tempfile.NamedTemporaryFile(dir=folder, delete=False) as stream:
         temporary = Path(stream.name)
         try:
@@ -312,7 +434,10 @@ def save_handoff(request_paths, requests, result, final_path, reader_paths, read
             try:
                 os.link(temporary, target)
             except FileExistsError:
-                if json.loads(target.read_text()) != snapshot:
+                stored = json.loads(target.read_text())
+                # 이전 버전은 같은 행을 보존하지만 읽기용 인계문은 저장하지 않았다.
+                compared = snapshot if "implementation" in stored else {k: v for k, v in snapshot.items() if k != "implementation"}
+                if stored != compared:
                     raise ValueError("같은 사용자 원문의 최초 기대값을 바꿀 수 없다")
         finally:
             temporary.unlink(missing_ok=True)
@@ -324,7 +449,7 @@ def main():
     parser.add_argument("--request", action="append", default=[], type=Path, help="사용자 원문 파일(순서가 원문 번호)")
     parser.add_argument("--reader", action="append", default=[], type=Path, help="독자가 반환한 표 JSON(합친 기록이 줄이지 않았는지 확인)")
     parser.add_argument("--root", action="append", default=[], type=Path, help="합의 문서를 찾을 프로젝트 폴더(기본: 현재 폴더)")
-    parser.add_argument("--compose", action="store_true", help="첫 답에 그대로 붙일 질문 목록(독자 미정의 ask)을 글로 낸다")
+    parser.add_argument("--compose", action="store_true", help="첫 답에 넣을 확정 결과·근거와 남은 질문을 출력한다")
     parser.add_argument("--message", type=Path, help="사용자에게 보낼 글. --reader 의 미정마다 ask 문장이 그대로 있는지 본다")
     parser.add_argument("--sent", action="append", default=[], type=Path, help="사용자 턴마다 그 뒤에 보낸 글(순서가 원문 번호)")
     parser.add_argument("--base", help="작업 시작 커밋. 합의 인용을 이 판의 문서에서 찾는다")
@@ -338,6 +463,7 @@ def main():
         if not isinstance(data, dict) or "axes" not in data:
             raise ValueError("상태 × 명령 표(axes)가 없다")
         readers = [json.loads(path.read_text(encoding="utf-8")) for path in args.reader]
+        check_correction_readers(data, readers, requests)
         kept = [p for reader in readers for p in reader_kept(data, reader, requests, roots)]
         if kept:
             raise ValueError("합친 기록이 독자 표를 줄였다: " + "; ".join(kept))
@@ -351,11 +477,12 @@ def main():
             if args.compose or args.message:
                 raise ValueError("안내 작성과 구현 인계는 다른 시점이다")
             references = [resolve_reference(roots, tag) for tag in dict.fromkeys(args.reference_tag)]
+            result["implementation"] = implementation_brief(data["axes"], result["settled"])
             save_handoff(args.request, requests, result, args.situations, args.reader, readers, references, args.sent, sent)
         if args.compose:
             if not args.reader:
                 raise ValueError("--compose 는 --reader 와 함께 쓴다")
-            asks = [a for path in args.reader for a in compose(result, json.loads(path.read_text(encoding="utf-8")))]
+            asks = dict.fromkeys(compose(result, readers))
             print("\n".join(f"{n}. {a}" for n, a in enumerate(asks, 1)))
             return 0
         if args.message:

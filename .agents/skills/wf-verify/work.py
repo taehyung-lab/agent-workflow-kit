@@ -106,7 +106,7 @@ def reviewed_choices(work, plan, events, kept):
     return {c['id'] for c in result['conditions'] if c['result'] == '충족'}
 
 
-def preserve_choices(events, plan, source_items, reviewed=()):
+def preserve_choices(events, plan, source_items, texts, reviewed=()):
     requirements = {r['id']: r for r in plan['requirements']}
     # 확정 뒤 재질문하더라도 최초 결과와 그때까지 받은 원문 수는 보존한다.
     fixed = {}
@@ -117,15 +117,27 @@ def preserve_choices(events, plan, source_items, reviewed=()):
     for event in events:
         count += len(event.get('sources', []))
         for row in event.get('plan', {}).get('requirements', []) + event.get('findings', []):
+            if (row.get('decided_by') or {}).get('kind') == '정정':
+                changed_decisions.add(row['id'])
             if row['state'] == '확정' and (row['id'] not in fixed or outcome(row) != fixed[row['id']][0]):
                 if row['id'] in fixed:
                     changed_decisions.add(row['id'])
                 fixed[row['id']] = (outcome(row), count)
+    for key, row in requirements.items():
+        if (row.get('decided_by') or {}).get('kind') == '정정':
+            earlier = fixed.get(key)
+            after = earlier[1] if earlier and outcome(row) != earlier[0] else 1
+            problem = situations.correction_problem(row, texts, after=after)
+            if problem:
+                raise ValueError(f'{key}: {problem}')
+            changed_decisions.add(key)
     for key, (original, at_turn) in fixed.items():
         updated = requirements.get(key)
         if updated is None:
             raise ValueError(f'{key}: 최초 기대값을 삭제할 수 없다. 철회 결정도 그 줄에 남긴다')
         if updated['state'] != '확정' or outcome(updated) == original:
+            continue
+        if (updated.get('decided_by') or {}).get('kind') == '정정':
             continue
         if not any(n > at_turn and key in source_items[n - 1].get('reply_to', []) for n in updated['source']):
             raise ValueError(f'{key}: 확정한 기대값 변경에는 이 줄에 답한 후속 사용자 원문(--reply-to)이 필요하다')
@@ -223,9 +235,10 @@ def record(work, args, events):
         raise ValueError('--reply-to는 새 사용자 원문과 현재 요구 ID가 필요하다')
     if args.resolution_review and incoming:
         raise ValueError('새 원문을 먼저 기록한 뒤 현재 원문 전체로 독립 검토해야 한다')
+    texts = [(work / s['file']).read_text(encoding='utf-8') for s in previous] + [raw.decode('utf-8') for raw in incoming]
     if args.plan:
         reviewed = reviewed_choices(work, plan, events, args.resolution_review)
-        preserve_choices(events, plan, previous + [{'sha256': digest(raw), 'reply_to': args.reply_to} for raw in incoming], reviewed)
+        preserve_choices(events, plan, previous + [{'sha256': digest(raw), 'reply_to': args.reply_to} for raw in incoming], texts, reviewed)
     elif args.resolution_review:
         raise ValueError('독립 검토로 미정을 정정할 계획이 필요하다')
     findings = json.loads(Path(args.findings).read_text()) if args.findings else []
@@ -235,12 +248,13 @@ def record(work, args, events):
         if not plan:
             raise ValueError('독자 발견을 더할 현재 계획이 필요하다')
         # 독자는 찾은 상황을 모두 넘긴다. 확정은 그 결과를 말하는 인용이 원문·합의 문서에 있을 때만 남고, 아니면 미정이 된다.
-        texts = [(work / s['file']).read_text(encoding='utf-8') for s in previous] + [raw.decode('utf-8') for raw in incoming]
         sorted_out = situations.classify(findings, texts, [Path(t['path']) for t in plan['targets']])
         if sorted_out['missing']:
             raise ValueError(f"상태 × 명령 표에 상황이 없는 칸이 있다: {sorted_out['missing']}")
         findings = sorted_out['settled'] + sorted_out['open']
         validate({'targets': plan['targets'], 'requirements': findings, 'checks': []}, len(previous) + len(incoming))
+        if not plan.get('review_required', True) and any((r.get('decided_by') or {}).get('kind') == '정정' for r in findings):
+            raise ValueError('정정의 의미를 독립 검토해야 한다')
         existing = {r['id'] for r in plan['requirements']}
         if any(r['id'] in existing for r in findings):
             raise ValueError('독자 발견은 현재 요구와 겹치지 않는 새 ID여야 한다')
