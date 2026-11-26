@@ -880,7 +880,7 @@ def prepare_review(args, record_path=None):
         quoted = quoted_request(body or "")
         # 첫 원문 파일에 묶인 인계가 있으면 그 파일의 턴 번호를 그대로 쓴다.
         request_paths = opt(args, "--request", True)
-        same_first = (request_paths and handoff_folder(Path(request_paths[0])).is_dir()
+        same_first = (quoted and request_paths and handoff_folder(Path(request_paths[0])).is_dir()
                       and requests[0].strip() == quoted.strip())
         if quoted and not same_first:
             requests = [f"(작업 지도 `## 기준` 에 옮겨 둔 요청 원문)\n{quoted}"] + requests

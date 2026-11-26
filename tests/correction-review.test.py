@@ -110,11 +110,12 @@ class CorrectionReview(unittest.TestCase):
         self.assert_correction_condition(prepared)
 
         manual_map = self.root / "card.md"
-        manual_map.write_text("## 기준\n요청 원문: " + first.read_text() + "\n")
-        mapped = self.cli("verify.py", "prepare", "--map", manual_map, "--request", first,
-                          "--request", self.file, "--output", self.file)
-        self.assertEqual(mapped["state"], "ready", mapped)
-        self.assert_correction_condition(mapped)
+        for criteria in ("요청 원문: " + first.read_text(), "등록 권한을 확인한다."):
+            manual_map.write_text("## 기준\n" + criteria + "\n")
+            mapped = self.cli("verify.py", "prepare", "--map", manual_map, "--request", first,
+                              "--request", self.file, "--output", self.file)
+            self.assertEqual(mapped["state"], "ready", mapped)
+            self.assert_correction_condition(mapped)
 
     def assert_correction_condition(self, prepared):
         prompt = Path(prepared["prompt_file"]).read_text()
