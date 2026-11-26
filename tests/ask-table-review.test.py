@@ -45,6 +45,9 @@ class AskTableReviewTest(unittest.TestCase):
         git(self.root, "tag", "v1.5")
         result, prepared = self.prepare(self.reader["situations"][0], "--reference-tag", "v1.5")
         self.assertEqual(result.returncode, 0, result.stdout)
+        prompt = Path(prepared["prompt_file"]).read_text()
+        for index in (1, 2):
+            self.assertIn(f"UR{index} 사용자 원문 {index}번", prompt)
         target = Path(prepared["kept"]) / "target"
         historical = subprocess.check_output(["git", "-C", target, "show", "refs/tags/v1.5:app.py"], text=True)
         self.assertEqual(historical, "SAVE = ['CREATE']\n")

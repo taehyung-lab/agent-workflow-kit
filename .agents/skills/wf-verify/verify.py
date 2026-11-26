@@ -1025,6 +1025,14 @@ def prepare_review(args, record_path=None):
         number = next(n for n in range(1, 1000) if f'TV{n}' not in used)
         rid = f'TV{number}'; used.add(rid)
         internal.append(f"{rid} 대상 {name}: 이 대상의 적용 기준으로 내부 검토를 수행하고, 별도 필수 검토가 있으면 현재 결과까지 확인했다. 근거에 적용 기준·대상 버전·실행 결과를 적는다. 누락·실패·미확인이면 충족이 아니다.")
+    if references:
+        for turn in range(1, len(requests) + 1):
+            number = next(n for n in range(1, 1000) if f'UR{n}' not in used)
+            rid = f'UR{number}'
+            used.add(rid)
+            internal.append(f"{rid} 사용자 원문 {turn}번에서 요청한 동작이 뒤의 기준 지정·정정 후 어디까지 유효한지 확인한다. "
+                            "유효한 동작은 지정 버전과 수정본의 같은 입력·조작·결과를 근거로 적는다. "
+                            "질문·진행 승인만 있는 턴이면 그 발언이 가리킨 내용과 근거를 적는다.")
     flips = []
     for reader, final, turns in ask_tables:
         internal.extend(ask_table_conditions(reader, final, used, flips, turns))
