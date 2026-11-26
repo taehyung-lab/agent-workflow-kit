@@ -96,6 +96,15 @@ sys.exit(work.main())
   code,result=self.runwork('record','--plan',str(self.plan))
   self.assertNotEqual(code,0)
   self.assertIn('독립 검토',result['reason'])
+ def test_replacing_failed_command_cannot_skip_review(self):
+  self.data['review_required']=False
+  self.data['checks'][0]['argv']=['python3','-c','raise SystemExit(1)']
+  self.record();self.runwork('check')
+  self.data['checks'][0]['argv']=['python3','-c','print("pass")']
+  self.plan.write_text(json.dumps(self.data))
+  code,result=self.runwork('record','--plan',str(self.plan))
+  self.assertNotEqual(code,0)
+  self.assertIn('원래 실패',result['reason'])
  def test_missing_coverage(self):
   self.data['checks']=[];self.record();rc,r=self.runwork('check');self.assertEqual(r['completion'],'unverified')
  def test_waiting_never_executes(self):

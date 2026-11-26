@@ -728,7 +728,7 @@ def ask_review_tables(root, inputs, request_paths, explicit_folder):
     """새 인계는 이번 원문에 묶인다. 예전 공유 폴더는 인용으로 소속을 확인한다."""
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "wf-ask"))
     from situations import handoff_folder, request_hash
-    requests = [Path(path).read_text() for path in request_paths]
+    requests = [inputs.cache[os.path.abspath(path)] for path in request_paths]
     frozen = handoff_folder(Path(request_paths[0])) if request_paths else None
     if frozen and frozen.is_dir():
         snapshots = sorted(frozen.glob("*.json"))

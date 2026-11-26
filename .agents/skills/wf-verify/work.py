@@ -132,6 +132,13 @@ def preserve_choices(events, plan, source_items, reviewed=()):
         changed_decisions.add(key)
     if changed_decisions and not plan.get('review_required', True):
         raise ValueError(f'{", ".join(sorted(changed_decisions))}: 변경한 기대값과 사용자 답의 의미를 독립 검토해야 한다')
+    if not plan.get('review_required', True):
+        targets = {t['name']: t['path'] for t in plan['targets']}
+        checks = {(targets[c['target']], tuple(c['argv']), frozenset(c['requirements'])) for c in plan['checks']}
+        for event in events:
+            for item in event.get('results', []):
+                if item['state'] == 'FAIL' and (item['cwd'], tuple(item['argv']), frozenset(item['requirements'])) not in checks:
+                    raise ValueError("실패한 검사 명령을 교체한 경우 원래 실패와 새 검사를 독립 검토해야 한다")
     for key, (original_sources, original_count) in pending_choices(events).items():
         if key not in requirements:
             raise ValueError(f'{key}: 미정인 선택을 다음 계획에서 지울 수 없다')
