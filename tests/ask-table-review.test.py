@@ -83,7 +83,16 @@ class AskTableReviewTest(unittest.TestCase):
         ask = VERIFY.parents[1] / "wf-ask/situations.py"
         cmd = [sys.executable, str(ask), "work/ask/situations.json", "--reader", "work/ask/reader.json",
                "--request", "work/req1.txt", "--handoff", "--base", self.base]
+        git(self.root, "tag", "v1.5")
+        cmd.extend(["--reference-tag", "v1.5"])
         subprocess.run(cmd, cwd=self.root, capture_output=True, check=True)
+        _, prepared = self.prepare(row)
+        target = Path(prepared["kept"]) / "target"
+        self.assertEqual(subprocess.check_output(["git", "-C", target, "rev-parse", "v1.5"], text=True).strip(), self.base)
+        git(self.root, "tag", "-d", "v1.5")
+        _, missing = self.prepare(row)
+        self.assertEqual(missing["state"], "unverified")
+        git(self.root, "tag", "v1.5", self.base)
         row["chosen"] = "등록과 조회"
         for name in ("reader", "situations"):
             (folder / (name + ".json")).write_text(json.dumps(reader))

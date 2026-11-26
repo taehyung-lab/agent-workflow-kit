@@ -268,7 +268,24 @@ def request_hash(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def save_handoff(request_paths, requests, result, final_path, reader_paths, readers):
+def tag_commit(root, tag):
+    ref = "refs/tags/" + tag
+    if subprocess.run(["git", "check-ref-format", ref], cwd=root, capture_output=True).returncode:
+        return None
+    result = subprocess.run(["git", "rev-parse", "--verify", "--quiet", ref + "^{commit}"],
+                            cwd=root, capture_output=True, text=True)
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def resolve_reference(roots, tag):
+    matches = [(str(root), sha) for root in roots if (sha := tag_commit(root, tag))]
+    if len(matches) != 1:
+        raise ValueError(f"지정 기준 태그 {tag}의 대상이 {len(matches)}개다. 대상 저장소와 기준 버전을 확인한다")
+    root, sha = matches[0]
+    return {"root": root, "tag": tag, "commit": sha}
+
+
+def save_handoff(request_paths, requests, result, final_path, reader_paths, readers, references=()):
     """구현 전 근거를 원문 옆에 턴별로 한 번만 게시한다. 재실행이나 경쟁 쓰기가 덮어쓰지 않는다."""
     if not requests or result["open"] or result["missing"]:
         raise ValueError("원문과 확정된 모든 상황이 있어야 구현으로 인계한다")
@@ -279,6 +296,8 @@ def save_handoff(request_paths, requests, result, final_path, reader_paths, read
                 "expected": result["settled"], "final_path": str(final_path.resolve()),
                 "readers": [{"path": str(path.resolve()), "table": table}
                             for path, table in zip(reader_paths, readers)]}
+    if references:
+        snapshot["references"] = list(references)
     with tempfile.NamedTemporaryFile(dir=folder, delete=False) as stream:
         temporary = Path(stream.name)
         try:
@@ -304,6 +323,7 @@ def main():
     parser.add_argument("--message", type=Path, help="사용자에게 보낼 글. --reader 의 미정마다 ask 문장이 그대로 있는지 본다")
     parser.add_argument("--sent", action="append", default=[], type=Path, help="사용자 턴마다 그 뒤에 보낸 글(순서가 원문 번호)")
     parser.add_argument("--base", help="작업 시작 커밋. 합의 인용을 이 판의 문서에서 찾는다")
+    parser.add_argument("--reference-tag", action="append", default=[], help="구현 전에 사용자 지정 기준 태그와 커밋을 보존한다")
     parser.add_argument("--handoff", action="store_true", help="구현 전 확정 결과를 첫 원문 옆에 보존한다")
     args = parser.parse_args()
     try:
@@ -325,7 +345,8 @@ def main():
         if args.handoff:
             if args.compose or args.message:
                 raise ValueError("안내 작성과 구현 인계는 다른 시점이다")
-            save_handoff(args.request, requests, result, args.situations, args.reader, readers)
+            references = [resolve_reference(roots, tag) for tag in dict.fromkeys(args.reference_tag)]
+            save_handoff(args.request, requests, result, args.situations, args.reader, readers, references)
         if args.compose:
             if not args.reader:
                 raise ValueError("--compose 는 --reader 와 함께 쓴다")

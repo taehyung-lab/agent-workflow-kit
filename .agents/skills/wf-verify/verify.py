@@ -37,6 +37,9 @@ import hashlib, json, os, re, shutil, subprocess, sys, tempfile, time
 from collections import namedtuple
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "wf-ask"))
+from situations import handoff_folder, request_hash, resolve_reference, tag_commit
+
 ReviewResult = namedtuple('ReviewResult', 'result code messages', defaults=((),))
 
 RESULTS = {"충족", "미충족", "미확인"}
@@ -458,14 +461,6 @@ def products_print(roots, multi):
     return h.hexdigest()
 
 
-def tag_commit(root, tag):
-    ref = "refs/tags/" + tag
-    if run(["git", "check-ref-format", ref], cwd=root).returncode:
-        return None
-    result = run(["git", "rev-parse", "--verify", "--quiet", ref + "^{commit}"], cwd=root)
-    return result.stdout.decode().strip() if result.returncode == 0 else None
-
-
 def freeze(root, dest):
     """판정 대상 버전을 복사본으로 고정하고 커밋한다. 적용 기준 파일은 Git 무시 여부와 관계없이 보존하고, 무시된 빌드 산출물 등은 복사하지 않는다."""
     dest.mkdir(parents=True)
@@ -738,8 +733,6 @@ def record(args):
 
 def ask_review_tables(root, inputs, request_paths, explicit_folder, map_request):
     """새 인계는 이번 원문에 묶인다. 예전 공유 폴더는 인용으로 소속을 확인한다."""
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "wf-ask"))
-    from situations import handoff_folder, request_hash
     requests = [inputs.cache[os.path.abspath(path)] for path in request_paths]
     frozen = handoff_folder(Path(request_paths[0])) if request_paths else None
     if frozen and frozen.is_dir():
@@ -749,6 +742,10 @@ def ask_review_tables(root, inputs, request_paths, explicit_folder, map_request)
         hashes = [request_hash(text) for text in requests]
         for path in snapshots:
             record = json.loads(inputs.read(path, "ask-handoff"))
+            for reference in record.get("references", []):
+                pinned = inputs.snapshot.setdefault("references", [])
+                if reference not in pinned:
+                    pinned.append(reference)
             turns = record["requests"]
             if not turns or hashes[:len(turns)] != turns:
                 raise ValueError("구현 전 인계한 사용자 원문이 달라졌다")
@@ -896,14 +893,18 @@ def prepare_review(args, record_path=None):
         base_key = base_sha
         targets_for_print = [str(root)]
     roots = [str(t["root"]) for t in targets] if multi else targets_for_print
-    references = []
+    ask_tables = list(ask_review_tables(root, inputs, opt(args, "--request", True), opt(args, "--ask-dir"), quoted))
+    references = inputs.snapshot.get("references", [])
+    for reference in references:
+        if reference["root"] not in roots or tag_commit(reference["root"], reference["tag"]) != reference["commit"]:
+            problems.append(f"구현 전 지정한 기준 태그 {reference['tag']}의 대상 또는 커밋이 달라졌다")
     for tag in dict.fromkeys(opt(args, "--reference-tag", True)):
-        matches = [(r, sha) for r in roots if (sha := tag_commit(r, tag))]
-        if len(matches) != 1:
-            problems.append(f"지정 기준 태그 {tag}의 대상이 {len(matches)}개다. 대상 저장소와 기준 버전을 확인한다")
-            continue
-        path, sha = matches[0]
-        references.append({"root": path, "tag": tag, "commit": sha})
+        try:
+            reference = resolve_reference(roots, tag)
+            if reference not in references:
+                references.append(reference)
+        except ValueError as exc:
+            problems.append(str(exc))
     if references:
         inputs.snapshot["references"] = references
     for target_root in map(Path, roots):
@@ -926,7 +927,6 @@ def prepare_review(args, record_path=None):
     result = {"round": n, "max_rounds": rounds_max}
     if asked_max != rounds_max:
         result["note"] = f"재검토 한도는 이 시도의 첫 회차에 정한 {rounds_max} 회다(--rounds {asked_max} 는 쓰지 않았다)"
-    ask_tables = list(ask_review_tables(root, inputs, opt(args, "--request", True), opt(args, "--ask-dir"), quoted))
     start_print = products_print(roots, multi)
     first_criteria = vstate.get("first_criteria", criteria)
     if len(ran) >= rounds_max:
