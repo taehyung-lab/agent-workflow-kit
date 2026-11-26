@@ -724,6 +724,45 @@ def record(args):
     return record_report(result)
 
 
+def ask_table_conditions(root, inputs, used, flips):
+    """요구 확인의 독자 표(work/ask/reader.json)와 최종 표(work/ask/situations.json)를 대조해 필수 조건을 만든다.
+    독자가 정한 결과가 바뀐 줄, 독자의 미정이 사용자 답으로 정해진 줄, 지정 기준에서 관찰해 정한 줄마다 하나씩.
+    구현자가 고른 증거가 아니라 처음 정한 기대값으로 구현·검사를 대조하게 한다(구현자가 검사를 바꿔도 원래 요구가 남는다)."""
+    folder = Path(root, "work/ask")
+    if not (folder / "reader.json").is_file() or not (folder / "situations.json").is_file():
+        return []
+    reader = json.loads(inputs.read(str(folder / "reader.json"), "ask-reader"))
+    final = {i.get("id"): i for i in json.loads(inputs.read(str(folder / "situations.json"), "ask-final")).get("situations") or [] if isinstance(i, dict)}
+    def said(row):
+        by = (row or {}).get("decided_by") or {}
+        return f"{by.get('kind', '없음')} \"{by.get('quote', '')}\"" if by else "근거 없음"
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "wf-ask"))
+    from situations import _generic as generic
+    lines = []
+    for r in reader.get("situations") or []:
+        if not isinstance(r, dict):
+            continue
+        m = final.get(r.get("id")) or {}
+        settled = r.get("state") == "확정"
+        changed = settled and (m.get("state") != "확정" or m.get("chosen") != r.get("chosen"))
+        answered = not settled and m.get("state") == "확정"
+        observed = (r.get("decided_by") or {}).get("observed") or r.get("observed")
+        if not (changed or answered or (settled and observed)):
+            continue
+        rid = next(f"R{n}" for n in range(1, 1000) if f"R{n}" not in used); used.add(rid)
+        seen = f", 기준 관찰: {observed.get('value')} ({observed.get('where')})" if isinstance(observed, dict) else ""
+        text = (f"{rid} 요구 표 {r.get('id')} {r.get('cell')} {r.get('expect')}: 독자 결과 \"{r.get('chosen') or '미정'}\" (근거 {said(r)}{seen})"
+                f" → 최종 표 \"{m.get('chosen') or '미정'}\" (근거 {said(m)}, 그 줄 질문 \"{r.get('ask') or m.get('ask') or '없음'}\")."
+                " 구현의 실제 동작과 검사가 최종 결과를 지키는가.")
+        quote = ((m.get("decided_by") or {}).get("quote") or "")
+        if changed and settled and m.get("state") == "확정" and generic(quote):
+            flips.append(f"요구 표 {r.get('id')}: 독자가 정한 \"{r.get('chosen')}\" 를 일반 승인 \"{quote}\" 으로 \"{m.get('chosen')}\" 로 바꿨다(사용자가 그 결과를 직접 말해야 한다)")
+        if changed or answered:
+            text += " 최종 결과가 독자 결과와 다르거나 사용자 답으로 정해졌으면, 인용한 사용자 말이 그 줄 질문 뒤에 그 결과를 직접 고른 답인지 사용자 원문으로 대조한다(아니면 미충족)."
+        lines.append(text)
+    return lines
+
+
 def prepare_review(args, record_path=None):
     """검토 입력을 묶는다: 요청 원문·지도 기준·기준 커밋부터의 변경(diff)과 판정 대상의 고정 복사본. 검토자는 띄우지 않는다.
     한도에 닿았거나 입력·근거가 불완전하면 여기서 최종 결과를 낸다."""
@@ -901,7 +940,8 @@ def prepare_review(args, record_path=None):
         number = next(n for n in range(1, 1000) if f'TV{n}' not in used)
         rid = f'TV{number}'; used.add(rid)
         internal.append(f"{rid} 대상 {name}: 이 대상의 적용 기준으로 내부 검토를 수행하고, 별도 필수 검토가 있으면 현재 결과까지 확인했다. 근거에 적용 기준·대상 버전·실행 결과를 적는다. 누락·실패·미확인이면 충족이 아니다.")
-    conditions = '\n'.join([conditions, *internal]).strip()
+    flips = []
+    conditions = '\n'.join([conditions, *internal, *ask_table_conditions(root, inputs, used, flips)]).strip()
     required = sorted(set(ids(conditions) + requirement_ids) - set(pending + unknown))
     result.update(open_decisions=pending, unconfirmed=unknown, required=required)
     (keep / "criteria.txt").write_text(criteria, encoding="utf-8")
@@ -912,6 +952,10 @@ def prepare_review(args, record_path=None):
     if record_problems:
         # 형식이 틀린 표의 미정·미확인 목록은 믿을 수 없다: 표를 고치는 것이 먼저다(완료 판정도 returned)
         result.update(state="returned", reason="작업 지도 요구 기록 형식: " + " / ".join(record_problems), open_decisions=[], unconfirmed=[])
+        return finalize(result, rounds, {"ran": False, "target": target}, rounds_max, state_file, attempt, first_criteria)
+    if flips:
+        # 독자가 정한 기대값을 '진행' 같은 일반 승인으로 바꾼 줄: 의미 판단 없이 돌려보낸다(그 결과는 사용자가 직접 말해야 한다)
+        result.update(state="returned", reason="요구 표 대조: " + " / ".join(flips))
         return finalize(result, rounds, {"ran": False, "target": target}, rounds_max, state_file, attempt, first_criteria)
     observed = "\n".join(f"### 대상 {t['name']}\n{observed_context(t['root'])}" for t in targets) if multi else observed_context(root)
     prompt = prompt_text(requests, conditions, required, criteria, note, target, change, vdir, base_rev, envelope, observed, output, targets if multi else None)
