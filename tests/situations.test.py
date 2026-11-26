@@ -225,7 +225,8 @@ class SituationsTest(unittest.TestCase):
         record = json.loads(table.read_text())
         updated = record['situations'][0]
         change = '빈 상자도 봉인할 수 있게 해 주세요.'
-        updated.update(chosen='허용', source=[2], decided_by={'kind': '정정', 'quote': change})
+        updated.update(chosen='허용', source=[2], decided_by={'kind': '정정', 'quote': change},
+                       observed={'where': '기존 동작', 'value': '거절'})
         table.write_text(json.dumps(record))
         later = self.root / 'turn2'
         later.write_text(change)
@@ -238,6 +239,9 @@ class SituationsTest(unittest.TestCase):
         accepted = run('--reader', str(independent))
         self.assertEqual(accepted.returncode, 0, accepted.stdout)
         self.assertEqual(json.loads(accepted.stdout)['settled'][0]['chosen'], '허용')
+        notice = run('--reader', str(independent), '--compose').stdout
+        self.assertIn(change, notice)
+        self.assertIn('거절 (기존 동작)', notice)
         self.assertNotEqual(run().returncode, 0)
         later.write_text('그대로 진행해 주세요.')
         updated['decided_by']['quote'] = later.read_text()

@@ -251,9 +251,12 @@ def compose(result, readers):
             continue
         if not isinstance(seen, dict) or not str(seen.get("where", "")).strip() or not str(seen.get("value", "")).strip():
             raise ValueError(f"기준 관찰 {item.get('id')} 에 where(위치)와 value(값)가 필요하다")
-        value = str(seen["value"])
-        shown = value if str(item["chosen"]) in value else item["chosen"]
-        lines.append(f"기준 관찰: {item.get('expect')} → {shown} ({seen['where']})")
+        observation = f"{seen['value']} ({seen['where']})"
+        if item["decided_by"]["kind"] == "정정" or str(item["chosen"]) not in str(seen["value"]):
+            lines.append(f"{item['expect']} → {item['chosen']} ({item['decided_by']['kind']}: {item['decided_by']['quote']})"
+                         f" · 기준 관찰: {observation}")
+        else:
+            lines.append(f"기준 관찰: {item['expect']} → {observation}")
     for item in result["open"]:
         matches = readings.get(item["id"], [])
         defaults = {row["default"] for row in [*matches, item] if row.get("default")}
