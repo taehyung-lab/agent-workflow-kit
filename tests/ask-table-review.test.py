@@ -57,6 +57,16 @@ class AskTableReviewTest(unittest.TestCase):
                                 input="", cwd=self.root, capture_output=True, text=True)
         self.assertIn("refs/tags/v1.5", json.loads(finish.stdout)["reason"])
 
+    def test_multiturn_review_identifies_missing_discovery_evidence(self):
+        (self.root / "work/ask/reader.json").unlink()
+        run = subprocess.run([sys.executable, str(VERIFY), "prepare", "--request", "work/req1.txt",
+                              "--request", "work/req2.txt", "--base", self.base],
+                             cwd=self.root, capture_output=True, text=True, check=True)
+        prompt = Path(json.loads(run.stdout)["prompt_file"]).read_text()
+        self.assertIn("전달된 표 없음", prompt)
+        self.assertIn("고정된 비교 태그: 없음", prompt)
+        self.assertIn("근거를 찾지 못하면 해당 동작은 미확인", prompt)
+
     def test_missing_designated_version_stops_review(self):
         _, prepared = self.prepare(self.reader["situations"][0], "--reference-tag", "v1.5")
         self.assertEqual(prepared["state"], "unverified")
