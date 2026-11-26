@@ -264,5 +264,19 @@ class SituationsTest(unittest.TestCase):
         self.assertEqual(self.ids(result, 'open'), ['Q2'])
 
 
+    def test_generic_approval_cannot_flip_reader_result(self):
+        # 2026-11-26 접근권한 k1: 독자가 1.5 로 정한 저장 줄을 담당자가 자기 질문으로 다시 열고 반대를 추천,
+        # "진행해주세요"를 그 승인으로 받았다 → 독자가 정한 결과는 일반 승인으로 바뀌지 않는다.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('situations', TOOL); mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+        ask = '등록만 저장된 권한을 그대로 저장하면 조회도 함께 저장할까요?'
+        reader = {'situations': [{'id': 'Q10', 'state': '확정', 'chosen': '등록만', 'results': ['등록만', '조회도']}]}
+        merged = {'situations': [{'id': 'Q10', 'state': '확정', 'chosen': '조회도', 'results': ['등록만', '조회도'], 'source': [2], 'ask': ask,
+                                  'decided_by': {'kind': '답', 'quote': '진행해주세요'}}]}
+        self.assertIn('일반 승인', ' '.join(mod.answers_unbound(merged, reader, [f'1. {ask} (추천: 조회도)'])))
+        merged['situations'][0]['decided_by']['quote'] = '조회도 함께 저장해 주세요'
+        self.assertEqual(mod.answers_unbound(merged, reader, [f'1. {ask}']), [])
+
+
 if __name__ == '__main__':
     unittest.main()

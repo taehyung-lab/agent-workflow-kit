@@ -10,6 +10,7 @@
 막을 때는 종료 코드 2 와 이유(stderr)를 낸다. 훅이 고장 나면 막지 않는다(종료 0).
 """
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -67,7 +68,8 @@ def _renumber(table, users):
 def check(event):
     if event.get("tool_name") not in EDIT_TOOLS:
         return None
-    root = Path(event.get("cwd") or ".").resolve()
+    # 셸에서 cd 하면 cwd 가 바뀌므로, 저장소 위치는 Claude 가 주는 프로젝트 경로로 정한다
+    root = Path(os.environ.get("CLAUDE_PROJECT_DIR") or event.get("cwd") or ".").resolve()
     target = Path((event.get("tool_input") or {}).get("file_path") or (event.get("tool_input") or {}).get("notebook_path") or "")
     target = (root / target).resolve() if not target.is_absolute() else target.resolve()
     try:

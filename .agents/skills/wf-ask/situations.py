@@ -30,7 +30,7 @@ chosen 으로 적는다. 결과가 하나뿐인 상황은 형식 오류다(종�
 답은 그 줄의 질문(독자 ask 또는 그 줄의 ask)을 실제로 보낸 글 뒤의 사용자 턴에서만 인용한다. --sent 는 사용자 턴마다
 그 뒤에 보낸 글이다(N 번째 --sent 는 N 번째 원문 뒤). --reader 나 --sent 를 주면, 사용자 답으로 확정한 줄과 독자가
 확정한 결과를 바꾼 줄마다 그 질문이 답 턴보다 앞선 보낸 글에 그대로 있는지 본다. 없으면 종료 코드 3 이다(그 줄은
-미정으로 두고 질문을 보낸다). 출력의 ready 는 미정·빈 칸·미전달이 없어 구현으로 넘길 수 있는지다.
+미정으로 두고 질문을 보낸다). 독자가 정한 결과는 '진행'·'추천대로' 같은 일반 승인으로 바뀌지 않는다. 출력의 ready 는 미정·빈 칸·미전달이 없어 구현으로 넘길 수 있는지다.
 인용한 문장이 그 상황의 결과를 정말 말하는지는 이 도구가 판단하지 못한다. 그래서 확정 목록을 인용과 함께 내보내
 사용자에게 보내는 글에 그대로 보이게 한다. 미정 목록은 질문 대상이다.
 출력은 JSON 한 줄: {"settled": [...], "open": [...], "demoted": [{"id", "reason"}], "missing": [["상태", "명령"], ...]}.
@@ -166,6 +166,14 @@ def _asked_before(item, ask, sent):
     return bool(question and turns) and any(question in _plain(sent[k - 1]) for k in range(1, min(turns)) if k <= len(sent))
 
 
+GENERIC = re.compile(r"(진행|그렇게|그대로|추천대로|추천안|추천|기본값대로|네|예|좋아요|좋습니다|맞아요|맞습니다|해\s*주세요|해주세요|하세요|합시다|ok|okay|yes|go|[\s.,!~。…]+)", re.I)
+
+
+def _generic(quote):
+    """'진행해주세요'·'추천대로' 같은 일반 승인: 결과를 직접 말하지 않는다."""
+    return len(GENERIC.sub("", str(quote))) < 4
+
+
 def answers_unbound(merged, reader, sent):
     """사용자 답으로 확정한 줄과 독자가 확정한 결과를 바꾼 줄 가운데, 그 줄을 물은 글 뒤의 답이 아닌 것."""
     theirs = {r.get("id"): r for r in reader.get("situations") or [] if isinstance(r, dict)}
@@ -180,6 +188,8 @@ def answers_unbound(merged, reader, sent):
             continue
         if kind != "답":
             problems.append(f"독자가 정한 {m.get('id')} 의 결과를 사용자 답 없이 바꿨다")
+        elif r.get("state") == "확정" and _generic((m.get("decided_by") or {}).get("quote", "")):
+            problems.append(f"독자가 정한 {m.get('id')} 의 결과는 일반 승인('진행' 등)으로 바뀌지 않는다: 사용자가 다른 결과를 직접 말해야 한다")
         elif not _asked_before(m, r.get("ask") or m.get("ask") or "", sent):
             problems.append(f"{m.get('id')} 의 답 인용이 그 줄의 질문(ask)을 보낸 글 뒤의 사용자 턴이 아니다")
     return problems
