@@ -217,7 +217,11 @@ def render(work, events):
         by = req.get('decided_by')
         if by:
             refs += f" — {by['kind']}{' ' + by['file'] if by.get('file') else ''} “{by['quote']}”"
-        lines.append(f"| {req['id']} | {cell(req['expect'])} | {refs} | | {commands} | {req['state']} |")
+        description = req['expect']
+        chosen = req.get('chosen')
+        if req['state'] == '확정' and chosen and chosen != description:
+            description = f"{description} → {chosen}"
+        lines.append(f"| {req['id']} | {cell(description)} | {cell(refs)} | | {commands} | {req['state']} |")
     (work / 'resolution-context.md').write_text(resolution_context(plan))
     (work / 'work.md').write_text('\n'.join(lines) + '\n')
 

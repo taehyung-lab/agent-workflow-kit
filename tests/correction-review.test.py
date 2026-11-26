@@ -55,6 +55,17 @@ class CorrectionReview(unittest.TestCase):
         self.assertEqual(prepared["state"], "ready", prepared)
         self.assert_correction_condition(prepared)
 
+    def test_multiline_user_decision_stays_in_one_handoff_row(self):
+        self.record()
+        self.correct("등록만 있던 카드도 바꿉니다.\n등록 | 조회를 함께 보내 주세요.")
+        self.assertEqual(self.record()["state"], "recorded")
+        line = next(line for line in (self.work / "work.md").read_text().splitlines()
+                    if line.startswith("| Q1 "))
+        self.assertIn(AFTER, line)
+        self.assertIn("등록 &#124; 조회", line)
+        self.assertTrue(line.endswith("| 확정 |"))
+        self.assertEqual((self.work / "sources/0002.txt").read_text(), self.file.read_text())
+
     def test_plan_with_only_expect_shows_both_result_sentences(self):
         self.row.pop("chosen")
         self.row["expect"] = SCENE + " 시 " + BEFORE
