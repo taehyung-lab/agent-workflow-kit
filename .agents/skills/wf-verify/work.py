@@ -379,6 +379,8 @@ def review(work, args, events):
     record_path = work / 'review-input.json'
     record_path.write_bytes(encoded(plan))
     command = ['prepare', '--output', str(bundle)]
+    for tag in args.reference_tag:
+        command += ['--reference-tag', tag]
     for source in sources(events):
         command += ['--request', str(work / source['file'])]
     result, code = call_verify(command, record_path=record_path)
@@ -397,6 +399,7 @@ def main():
     parser.add_argument('--resolution-review', help='새 답 없이 잘못 표시한 미정을 정정할 독립 검토 회차 경로')
     parser.add_argument('--findings', help='독자가 반환한 상황 배열(확정은 인용 출처를 확인하고, 없으면 미정으로 기록)')
     parser.add_argument('--evidence', action='append', default=[], help='원문과 구분해 보존할 실제 검사·관찰 증거 파일')
+    parser.add_argument('--reference-tag', action='append', default=[], help='검토 복사본에 고정할 사용자 지정 Git 태그')
     parser.add_argument('--answer')
     args = parser.parse_args()
     work = args.work.resolve(); work.mkdir(parents=True, exist_ok=True)

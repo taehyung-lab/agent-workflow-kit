@@ -35,11 +35,28 @@ class AskTableReviewTest(unittest.TestCase):
         self.reader = {"axes": {}, "situations": [row]}
         (self.root / "work/ask/reader.json").write_text(json.dumps(self.reader, ensure_ascii=False))
 
-    def prepare(self, final_row):
+    def prepare(self, final_row, *extra):
         (self.root / "work/ask/situations.json").write_text(json.dumps({"axes": {}, "situations": [final_row]}, ensure_ascii=False))
-        r = subprocess.run([sys.executable, str(VERIFY), "prepare", "--request", "work/req1.txt", "--request", "work/req2.txt", "--base", self.base],
+        r = subprocess.run([sys.executable, str(VERIFY), "prepare", "--request", "work/req1.txt", "--request", "work/req2.txt", "--base", self.base, *extra],
                            cwd=self.root, capture_output=True, text=True)
         return r, json.loads(r.stdout.strip().splitlines()[-1])
+
+    def test_reviewer_can_read_designated_version_and_detect_a_moved_tag(self):
+        git(self.root, "tag", "v1.5")
+        result, prepared = self.prepare(self.reader["situations"][0], "--reference-tag", "v1.5")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        target = Path(prepared["kept"]) / "target"
+        historical = subprocess.check_output(["git", "-C", target, "show", "refs/tags/v1.5:app.py"], text=True)
+        self.assertEqual(historical, "SAVE = ['CREATE']\n")
+        self.assertNotEqual(historical, (target / "app.py").read_text())
+        git(target, "tag", "-f", "v1.5", "HEAD")
+        finish = subprocess.run([sys.executable, str(VERIFY), "finish", "--round", prepared["kept"], "--check", "PASS"],
+                                input="", cwd=self.root, capture_output=True, text=True)
+        self.assertIn("refs/tags/v1.5", json.loads(finish.stdout)["reason"])
+
+    def test_missing_designated_version_stops_review(self):
+        _, prepared = self.prepare(self.reader["situations"][0], "--reference-tag", "v1.5")
+        self.assertEqual(prepared["state"], "unverified")
 
     def test_unrelated_request_does_not_inherit_permissions(self):
         self.prepare(self.reader["situations"][0])

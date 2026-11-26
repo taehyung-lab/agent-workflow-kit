@@ -57,6 +57,7 @@ VERIFIER_PROMPT = """당신은 별도 검증자다. 판정 대상은 아래 「�
 - 합의 조건이나 연결된 기존 보장을 깨는 반례를 찾으면 그 조건은 미충족이다.
 - 원문의 목표에서 핵심 성공·실패 시나리오를 세우고, 원문·외부 계약을 모두 지켜도 지도의 요구·검사를 통과한 채 목표가 깨지는 입력·사건 순서를 구성해 본다. 보장에 필요한 전제를 원문·계약·실행 결과와 대조한다. 그런 반례가 있으면 관련 요구·설계·검사 조건을 미충족으로 적고, evidence에 근거 위치와 반례의 입력→행동→관찰 결과를 적어 고칠 자리를 특정한다.
 - 새 요구가 있어야 성립하는 반례(원문이 정하지 않은 동작)는 판정을 막지 않고 out_of_scope 에 적는다.
+- 사용자가 지정한 버전은 앞선 턴에서 요청한 동작까지 이어서 대조한다. 각 입력과 조작을 기준 버전과 수정본에 똑같이 적용해 결과를 확인한다. 기준 버전을 읽을 수 없거나 결과를 재구성할 수 없으면 미확인으로 남긴다.
 - 사용자 원문의 뒤 메시지가 결과·범위를 바꿨는데 작업 지도 기준에 없으면, 그 변경을 원문 조건(새 ID)으로 세워 판정한다. 원문·계획에 없는 동작(새 명령 등)이 추가됐으면 근거 없이 범위를 넓힌 것이므로 RETURN 이다.
 - 원문·계약으로 고를 수 없는데 사용자가 받는 결과(동작·데이터·범위·권한)를 구현자가 정해 버렸으면 RETURN 이다. 요구 기록 표가 있으면 행마다 출처가 그 결과 전부를 정하는지 대조한다(정하지 않은 부분은 미정 행이어야 한다).
 - 작업 맥락(대상·근거 용도·시나리오·결정)은 구현자가 적은 것, 맥락 도구 출력은 도구가 관찰한 값이다. 원문과 대조한다. 변경·산출물이 맥락의 대상이 아닌 다른 저장소·버전·과거 자료를 현재 사실로 전제했거나, 유효한 사용자 결정·앞뒤 시나리오와 어긋나면 RETURN 이다.
@@ -328,6 +329,9 @@ class ReviewInputs:
                 or snapshot.get("contract") != hashlib.sha256(VERIFIER_PROMPT.encode()).hexdigest()):
             return False
         try:
+            for reference in snapshot.get("references", []):
+                if tag_commit(reference["root"], reference["tag"]) != reference["commit"]:
+                    return False
             for item in snapshot["files"]:
                 if item["definition"] == 'bytes':
                     raw = Path(item["path"]).read_bytes()
@@ -452,6 +456,14 @@ def products_print(roots, multi):
     for r in roots:
         h.update(r.encode() + b"\0" + product_print(Path(r)).encode())
     return h.hexdigest()
+
+
+def tag_commit(root, tag):
+    ref = "refs/tags/" + tag
+    if run(["git", "check-ref-format", ref], cwd=root).returncode:
+        return None
+    result = run(["git", "rev-parse", "--verify", "--quiet", ref + "^{commit}"], cwd=root)
+    return result.stdout.decode().strip() if result.returncode == 0 else None
 
 
 def freeze(root, dest):
@@ -884,6 +896,16 @@ def prepare_review(args, record_path=None):
         base_key = base_sha
         targets_for_print = [str(root)]
     roots = [str(t["root"]) for t in targets] if multi else targets_for_print
+    references = []
+    for tag in dict.fromkeys(opt(args, "--reference-tag", True)):
+        matches = [(r, sha) for r in roots if (sha := tag_commit(r, tag))]
+        if len(matches) != 1:
+            problems.append(f"지정 기준 태그 {tag}의 대상이 {len(matches)}개다. 대상 저장소와 기준 버전을 확인한다")
+            continue
+        path, sha = matches[0]
+        references.append({"root": path, "tag": tag, "commit": sha})
+    if references:
+        inputs.snapshot["references"] = references
     for target_root in map(Path, roots):
         for rel in REVIEW_RULE_FILES:
             path = target_root / rel
@@ -913,7 +935,7 @@ def prepare_review(args, record_path=None):
         previous_inputs = last.get("inputs")
         source_inputs = ({**previous_inputs, "files": [f for f in previous_inputs["files"] if f["role"] != "diff"]}
                          if isinstance(previous_inputs, dict) and isinstance(previous_inputs.get("files"), list) else None)
-        if (last.get("state") == "ok" and last.get("product") == start_print and source_inputs == inputs.snapshot
+        if (not problems and last.get("state") == "ok" and last.get("product") == start_print and source_inputs == inputs.snapshot
                 and ReviewInputs.current(previous_inputs)):
             result.update(state="ok", reason="", target=last.get("target"), reused_round=last.get("round"),
                           open_decisions=last.get("open_decisions", []), unconfirmed=last.get("unconfirmed", []))
@@ -938,6 +960,17 @@ def prepare_review(args, record_path=None):
         label = f"대상 {name}: " if multi else ""
         try:
             commit = freeze(troot, tv)
+            for reference in references:
+                if reference["root"] != str(troot):
+                    continue
+                tag = reference["tag"]
+                ref = "refs/tags/" + tag
+                fetched = run(["git", "fetch", "--quiet", "--depth=1", "--no-tags", "--no-recurse-submodules",
+                               Path(troot).resolve().as_uri(), f"{ref}:{ref}"], cwd=tv)
+                if fetched.returncode or tag_commit(tv, tag) != reference["commit"]:
+                    raise RuntimeError(f"지정 기준 태그 {tag}를 같은 커밋으로 고정하지 못했다")
+                reference_note = f"대상 {tv}에서 git show {ref}로 사용자 지정 기준을 확인한다. 커밋 {reference['commit']}"
+                envelope = "\n".join(filter(None, (envelope, reference_note)))
         except RuntimeError as e:  # 고정 대상이 없으면 검토자를 띄우지 않고 미확인(남긴 폴더에 그대로 둔다)
             commit = None
             problems.append(label + str(e))
@@ -1072,6 +1105,11 @@ def finish_review(args, answer):
                for l in run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=d).stdout.decode().splitlines() if l and not l.startswith("??")]
     verdict = judge(answer, pd["required"])
     result.update(conditions=verdict.get("conditions", []), out_of_scope=verdict.get("out_of_scope", []), final=answer)
+    for reference in pd.get("inputs", {}).get("references", []):
+        index = pd["roots"].index(reference["root"])
+        target_dir = vdir / pd["names"][index] if pd.get("names") else vdir
+        if tag_commit(target_dir, reference["tag"]) != reference["commit"]:
+            touched.append("refs/tags/" + reference["tag"])
     if touched:
         result.update(state="unverified", reason="검토자가 판정 대상의 추적 파일을 바꿨다: " + " ".join(touched[:5]))
     elif verdict["state"] == "returned" and pd["ran_before"] + 1 >= rounds_max:
