@@ -110,6 +110,7 @@ def preserve_choices(events, plan, source_items, reviewed=()):
     requirements = {r['id']: r for r in plan['requirements']}
     # 확정 뒤 재질문하더라도 최초 결과와 그때까지 받은 원문 수는 보존한다.
     fixed = {}
+    changed_decisions = set()
     count = 0
     def outcome(row):
         return tuple(row.get(field) for field in ('expect', 'chosen', 'cell', 'observed'))
@@ -117,6 +118,8 @@ def preserve_choices(events, plan, source_items, reviewed=()):
         count += len(event.get('sources', []))
         for row in event.get('plan', {}).get('requirements', []) + event.get('findings', []):
             if row['state'] == '확정' and (row['id'] not in fixed or outcome(row) != fixed[row['id']][0]):
+                if row['id'] in fixed:
+                    changed_decisions.add(row['id'])
                 fixed[row['id']] = (outcome(row), count)
     for key, (original, at_turn) in fixed.items():
         updated = requirements.get(key)
@@ -126,8 +129,9 @@ def preserve_choices(events, plan, source_items, reviewed=()):
             continue
         if not any(n > at_turn and key in source_items[n - 1].get('reply_to', []) for n in updated['source']):
             raise ValueError(f'{key}: 확정한 기대값 변경에는 이 줄에 답한 후속 사용자 원문(--reply-to)이 필요하다')
-        if not plan.get('review_required', True):
-            raise ValueError(f'{key}: 변경한 기대값과 사용자 답의 의미를 독립 검토해야 한다')
+        changed_decisions.add(key)
+    if changed_decisions and not plan.get('review_required', True):
+        raise ValueError(f'{", ".join(sorted(changed_decisions))}: 변경한 기대값과 사용자 답의 의미를 독립 검토해야 한다')
     for key, (original_sources, original_count) in pending_choices(events).items():
         if key not in requirements:
             raise ValueError(f'{key}: 미정인 선택을 다음 계획에서 지울 수 없다')

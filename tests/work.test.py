@@ -91,6 +91,11 @@ sys.exit(work.main())
   self.plan.write_text(json.dumps(self.data))
   code,result=self.runwork('record','--request',str(self.req),'--reply-to','R1','--plan',str(self.plan))
   self.assertEqual(code,0,result)
+  self.data['review_required']=False
+  self.plan.write_text(json.dumps(self.data))
+  code,result=self.runwork('record','--plan',str(self.plan))
+  self.assertNotEqual(code,0)
+  self.assertIn('독립 검토',result['reason'])
  def test_missing_coverage(self):
   self.data['checks']=[];self.record();rc,r=self.runwork('check');self.assertEqual(r['completion'],'unverified')
  def test_waiting_never_executes(self):
