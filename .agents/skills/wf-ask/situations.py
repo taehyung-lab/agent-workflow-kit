@@ -195,6 +195,23 @@ def answers_unbound(merged, reader, sent):
     return problems
 
 
+DRAFT_PROMPT = """당신은 사용자에게 보낼 글을 확인하는 별도 검토자다. 파일을 고치지 않는다. 아래 요구 표(독자 원본)와 사용자 말만 기준으로,
+작업자가 보내려는 글이 다음을 어기는지 판정한다.
+(a) 표에서 확정이거나 사용자 말이 이미 정한 줄을 다시 묻는다(알리기는 괜찮다)
+(b) 미정 줄의 기본값·추천을 표의 default 와 다른 결과로 낸다
+(c) 표가 정한 결과와 반대 동작을 기본·추천으로 낸다
+반대 의견을 '다른 선택'으로 함께 보이는 것, 표에 없는 새 질문은 위반이 아니다.
+마지막 줄에 JSON 하나: {"ok": true 또는 false, "violations": [{"id": "줄 ID", "kind": "a|b|c", "why": "한 문장"}]}"""
+
+
+def draft_prompt(reader, requests, draft):
+    """첫 안내 초안을 별도 검토자에게 넘길 지시문(표·사용자 말·초안을 붙인다)."""
+    rows = [{k: r.get(k) for k in ("id", "expect", "results", "state", "chosen", "default", "default_by")}
+            for r in reader.get("situations") or [] if isinstance(r, dict)]
+    users = "\n".join(f"{n}. {t.strip()}" for n, t in enumerate(requests, 1))
+    return f"{DRAFT_PROMPT}\n\n## 사용자 말(순서대로)\n{users}\n\n## 요구 표\n{json.dumps(rows, ensure_ascii=False)}\n\n## 보내려는 글\n{draft}"
+
+
 def compose(result, reader):
     """첫 답에 붙일 목록을 분류 결과(classify 의 settled·open)에서 만든다. 지정 기준에서 관찰해 정한 결과(observed)는
     "기준 관찰" 알림 줄로 먼저, 미정(독자·담당자 것 모두, 출처가 약해 내려간 줄 포함)은 질문 줄로 낸다.
@@ -267,6 +284,7 @@ def main():
     parser.add_argument("--message", type=Path, help="사용자에게 보낼 글. --reader 의 미정마다 ask 문장이 그대로 있는지 본다")
     parser.add_argument("--sent", action="append", default=[], type=Path, help="사용자 턴마다 그 뒤에 보낸 글(순서가 원문 번호)")
     parser.add_argument("--base", help="작업 시작 커밋. 합의 인용을 이 판의 문서에서 찾는다")
+    parser.add_argument("--draft", type=Path, help="보내려는 첫 안내 초안. 별도 검토자에게 넘길 지시문을 낸다(--reader 필요)")
     args = parser.parse_args()
     try:
         requests = [path.read_text(encoding="utf-8") for path in args.request]
@@ -275,6 +293,11 @@ def main():
         if not isinstance(data, dict) or "axes" not in data:
             raise ValueError("상태 × 명령 표(axes)가 없다")
         readers = [json.loads(path.read_text(encoding="utf-8")) for path in args.reader]
+        if args.draft:
+            if not readers:
+                raise ValueError("--draft 는 --reader 와 함께 쓴다")
+            print(draft_prompt(readers[0], requests, args.draft.read_text(encoding="utf-8")))
+            return 0
         kept = [p for reader in readers for p in reader_kept(data, reader, requests, roots)]
         if kept:
             raise ValueError("합친 기록이 독자 표를 줄였다: " + "; ".join(kept))
