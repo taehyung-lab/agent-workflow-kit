@@ -283,9 +283,12 @@ def context_key(events):
     return digest(encoded([e for e in events if e['kind'] == 'record']))
 
 
-def status(plan, check):
+def status(plan, check, events):
+    # 같은 명령의 구현(검사 파일·의존 코드)은 바뀔 수 있다. 기록된 실패 이후의 성공은
+    # 원래 실패와 현재 결과를 독립 대조하기 전까지 완료로 올리지 않는다.
+    needs_review = plan.get('review_required', True) or any(event.get('check') == 'FAIL' for event in events)
     return verify.completion('off', check, any(r['state'] == '미정' for r in plan['requirements']),
-                             required=plan.get('review_required', True), unresolved=any(r['state'] == '미확인' for r in plan['requirements']))
+                             required=needs_review, unresolved=any(r['state'] == '미확인' for r in plan['requirements']))
 
 
 def check(work, args, events):
@@ -293,7 +296,7 @@ def check(work, args, events):
     if not plan:
         raise ValueError('요구와 검사 계획이 없다')
     if any(r['state'] != '확정' for r in plan['requirements']):
-        return {'check': 'UNVERIFIED', 'completion': status(plan, 'UNVERIFIED')}, 6
+        return {'check': 'UNVERIFIED', 'completion': status(plan, 'UNVERIFIED', events)}, 6
     before = fingerprint(plan)
     run_dir = work / 'checks' / uuid.uuid4().hex
     run_dir.mkdir(parents=True)
@@ -322,7 +325,7 @@ def check(work, args, events):
     if before != after or covered != {r['id'] for r in plan['requirements']} or any(r['state'] == 'UNVERIFIED' for r in results):
         outcome = 'UNVERIFIED'
     event = {'kind': 'check', 'context': context_key(events), 'before': before, 'after': after,
-             'check': outcome, 'results': results, 'completion': status(plan, outcome)}
+             'check': outcome, 'results': results, 'completion': status(plan, outcome, events)}
     append(work, event)
     return event, 0 if event['completion'] == 'verified' else 6
 
@@ -355,7 +358,7 @@ def review(work, args, events):
         raise ValueError('요구 계획이 없다')
     evidence = checked(events, plan)
     if evidence['check'] != 'PASS':
-        return {'completion': status(plan, evidence['check']), 'check': evidence['check']}, 6
+        return {'completion': status(plan, evidence['check'], events), 'check': evidence['check']}, 6
     if args.answer:
         prepared = [e for e in events if e['kind'] == 'review']
         if not prepared or prepared[-1]['context'] != context_key(events) or prepared[-1].get('check') != digest(encoded(evidence)):

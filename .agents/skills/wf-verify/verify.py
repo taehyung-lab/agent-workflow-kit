@@ -724,7 +724,7 @@ def record(args):
     return record_report(result)
 
 
-def ask_review_tables(root, inputs, request_paths, explicit_folder):
+def ask_review_tables(root, inputs, request_paths, explicit_folder, map_request):
     """새 인계는 이번 원문에 묶인다. 예전 공유 폴더는 인용으로 소속을 확인한다."""
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "wf-ask"))
     from situations import handoff_folder, request_hash
@@ -754,11 +754,15 @@ def ask_review_tables(root, inputs, request_paths, explicit_folder):
         return
     tables = [json.loads(path.read_text()) for path in available]
     if not explicit_folder:
-        origins = [row["decided_by"]["quote"] for table in tables for row in table["situations"]
-                   if row.get("decided_by", {}).get("kind") in ("요청", "기준") and row["decided_by"].get("quote")]
-        if origins and not any("".join(q.split()) in "".join(text.split()) for q in origins for text in requests):
-            return
-        if not origins:
+        # 옛 표에는 작업 ID가 없다. 원문 전체 일치만 자동 연결하고, 일부만 같으면 명시적으로 선택한다.
+        first = requests[:1] + ([map_request] if map_request else [])
+        source_texts = {"".join(text.split()) for text in first}
+        origins = {"".join(row["decided_by"]["quote"].split()) for table in tables for row in table["situations"]
+                   if 1 in row.get("source", []) and row.get("decided_by", {}).get("kind") in ("요청", "기준")
+                   and row["decided_by"].get("quote")}
+        if not origins.intersection(source_texts):
+            if origins and not any(q in text for q in origins for text in source_texts):
+                return
             raise ValueError("이전 공유 표의 요청을 식별할 수 없다. 해당 작업이면 --ask-dir 로 지정하고 다른 작업이면 표를 원래 작업 폴더에 보존한다")
     if len(available) != 2:
         raise ValueError("요구 확인의 독자 표 또는 최종 표가 빠졌다")
@@ -826,6 +830,7 @@ def prepare_review(args, record_path=None):
         raise ValueError("작업 지도는 해석과 설계이며 요청 원문 파일을 대신할 수 없다")
     requests = [inputs.read(f, "request") for f in opt(args, "--request", True)]
     criteria = ""
+    quoted = ""
     if map_rel:
         body = criteria_text(inputs.map) if inputs.map is not None else None
         if body is None:
@@ -899,7 +904,7 @@ def prepare_review(args, record_path=None):
     result = {"round": n, "max_rounds": rounds_max}
     if asked_max != rounds_max:
         result["note"] = f"재검토 한도는 이 시도의 첫 회차에 정한 {rounds_max} 회다(--rounds {asked_max} 는 쓰지 않았다)"
-    ask_tables = list(ask_review_tables(root, inputs, opt(args, "--request", True), opt(args, "--ask-dir")))
+    ask_tables = list(ask_review_tables(root, inputs, opt(args, "--request", True), opt(args, "--ask-dir"), quoted))
     start_print = products_print(roots, multi)
     first_criteria = vstate.get("first_criteria", criteria)
     if len(ran) >= rounds_max:

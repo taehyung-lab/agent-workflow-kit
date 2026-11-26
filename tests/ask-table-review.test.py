@@ -76,6 +76,24 @@ class AskTableReviewTest(unittest.TestCase):
         self.assertEqual(result["state"], "unverified")
         self.assertIn("최초 독자 표", result["reason"])
 
+    def test_legacy_map_owns_its_quoted_request(self):
+        self.prepare(self.reader["situations"][0])
+        request = (self.root / "work/req1.txt").read_text().strip()
+        (self.root / "map.md").write_text(f"## 기준\n요청 원문: {request}\n")
+        run = subprocess.run([sys.executable, str(VERIFY), "prepare", "--map", "map.md", "--base", self.base],
+                             cwd=self.root, capture_output=True, text=True)
+        result = json.loads(run.stdout)
+        if result["state"] != "ready":
+            self.fail(result)
+        self.assertIn('독자 결과 "등록만"', Path(result["prompt_file"]).read_text())
+
+    def test_short_reference_quote_is_not_a_task_identifier(self):
+        self.reader["situations"][0]["decided_by"]["quote"] = "1.5와 같게"
+        (self.root / "work/ask/reader.json").write_text(json.dumps(self.reader))
+        (self.root / "work/req1.txt").write_text("날짜 표시도 1.5와 같게 만들어 주세요.")
+        _,result=self.prepare(self.reader["situations"][0])
+        self.assertEqual(result["state"], "unverified")
+
     def test_generic_approval_flip_is_returned_before_review(self):
         flipped = dict(self.reader["situations"][0], chosen="등록과 조회", source=[2], decided_by={"kind": "답", "quote": "진행해주세요"})
         r, result = self.prepare(flipped)

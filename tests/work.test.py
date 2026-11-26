@@ -105,6 +105,18 @@ sys.exit(work.main())
   code,result=self.runwork('record','--plan',str(self.plan))
   self.assertNotEqual(code,0)
   self.assertIn('원래 실패',result['reason'])
+ def test_editing_failed_assertion_cannot_verify_unchanged_product(self):
+  self.data['review_required']=False
+  self.data['checks'][0]['argv']=['python3','test_app.py']
+  testfile=self.repo/'test_app.py'
+  testfile.write_text('from pathlib import Path\nassert Path("app.txt").read_text()=="after"')
+  self.record()
+  _,result=self.runwork('check')
+  self.assertEqual(result['completion'],'check-failed')
+  testfile.write_text(testfile.read_text().replace('"after"','"before"'))
+  _,result=self.runwork('check')
+  self.assertEqual(result['check'],'PASS')
+  self.assertEqual(result['completion'],'review-missing')
  def test_missing_coverage(self):
   self.data['checks']=[];self.record();rc,r=self.runwork('check');self.assertEqual(r['completion'],'unverified')
  def test_waiting_never_executes(self):
