@@ -215,6 +215,23 @@ class SituationsTest(unittest.TestCase):
         self.assertEqual(r.stdout.strip().splitlines(), [f'1. {names}', f'2. {loan}', f'3. {code}'])
         self.assertEqual(check('구현 전에 정해 주세요.\n' + r.stdout + '\n추천은 1번 현재 이름입니다.'), [])
 
+    def test_composed_notice_can_be_sent_with_two_independent_readers(self):
+        first = {'id': 'Q1', 'expect': '빈 상자 봉인', 'source': [1], 'state': '미정',
+                 'ask': '빈 상자도 봉인할까요?', 'default': '거절', 'default_by': '운영 기록'}
+        self.run_tool([first])
+        table = self.root / 'situations.json'
+        other = self.root / 'reader2.json'
+        record = json.loads(table.read_text())
+        record['situations'][0]['ask'] = '내용물이 없을 때도 봉인할까요?'
+        other.write_text(json.dumps(record))
+        cmd = [sys.executable, str(TOOL), str(table), '--request', str(self.request),
+               '--reader', str(table), '--reader', str(other)]
+        message = self.root / 'notice.txt'
+        message.write_text(subprocess.check_output([*cmd, '--compose'], text=True))
+        reply = subprocess.run([*cmd, '--message', str(message)], text=True, capture_output=True)
+        self.assertEqual(reply.returncode, 0, reply.stdout)
+        self.assertEqual(message.read_text().count('기본값'), 1)
+
     def test_unsolicited_correction_needs_a_matching_reader_and_later_user_turn(self):
         before = {'id': 'Q1', 'expect': '빈 상자 봉인', 'source': [1], 'state': '확정',
                   'chosen': '거절', 'decided_by': {'kind': '요청', 'quote': '빈 상자는 봉인할 수 없습니다.'}}

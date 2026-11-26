@@ -260,13 +260,13 @@ def compose(result, readers):
     for item in result["open"]:
         matches = readings.get(item["id"], [])
         defaults = {row["default"] for row in [*matches, item] if row.get("default")}
+        questions = dict.fromkeys(row["ask"].strip() for row in matches if row.get("ask"))
         if len(defaults) > 1:
             choices = " / ".join(str(value) for value in item["results"])
-            questions = dict.fromkeys(row["ask"] for row in matches if row.get("ask"))
             lines.append(f"{' '.join(questions) or item['expect']} ({choices} 중 선택)")
             continue
         r = next((row for row in reversed(matches) if row.get("default")), matches[-1] if matches else {})
-        ask = str(r.get("ask") or item.get("ask") or "").strip()
+        ask = " ".join(questions) or str(item.get("ask") or "").strip()
         if not ask:
             ask = f"{item.get('expect')}: " + " / ".join(str(x) for x in item.get("results") or [])
         default, why = r.get("default") or item.get("default"), r.get("default_by") or item.get("default_by")
