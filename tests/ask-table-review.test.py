@@ -41,6 +41,41 @@ class AskTableReviewTest(unittest.TestCase):
                            cwd=self.root, capture_output=True, text=True)
         return r, json.loads(r.stdout.strip().splitlines()[-1])
 
+    def test_unrelated_request_does_not_inherit_permissions(self):
+        self.prepare(self.reader["situations"][0])
+        (self.root / "work/ping.txt").write_text("화면 활동의 연장도 복구해 주세요.")
+        run = subprocess.run([sys.executable, str(VERIFY), "prepare", "--request", "work/ping.txt", "--base", self.base],
+                             cwd=self.root, capture_output=True, text=True, check=True)
+        prompt = Path(json.loads(run.stdout)["prompt_file"]).read_text()
+        self.assertNotIn('독자 결과 "등록만"', prompt)
+
+    def test_missing_final_table_of_matching_request_blocks_review(self):
+        run = subprocess.run([sys.executable, str(VERIFY), "prepare", "--request", "work/req1.txt", "--base", self.base],
+                             cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(json.loads(run.stdout)["state"], "unverified")
+
+    def test_handoff_keeps_initial_expectation_when_both_working_tables_change(self):
+        reader = self.reader
+        row = reader["situations"][0]
+        row["observed"] = row["decided_by"]["observed"]
+        reader["axes"] = {"states": [{"name": row["cell"][0], "where": "fixture"}],
+                          "commands": [{"name": row["cell"][1], "where": "save"}]}
+        folder = self.root / "work/ask"
+        for name in ("reader", "situations"):
+            (folder / (name + ".json")).write_text(json.dumps(reader))
+        ask = VERIFY.parents[1] / "wf-ask/situations.py"
+        cmd = [sys.executable, str(ask), "work/ask/situations.json", "--reader", "work/ask/reader.json",
+               "--request", "work/req1.txt", "--handoff", "--base", self.base]
+        subprocess.run(cmd, cwd=self.root, capture_output=True, check=True)
+        row["chosen"] = "등록과 조회"
+        for name in ("reader", "situations"):
+            (folder / (name + ".json")).write_text(json.dumps(reader))
+        retry = subprocess.run(cmd, cwd=self.root, capture_output=True)
+        self.assertNotEqual(retry.returncode, 0)
+        _, result = self.prepare(row)
+        self.assertEqual(result["state"], "unverified")
+        self.assertIn("최초 독자 표", result["reason"])
+
     def test_generic_approval_flip_is_returned_before_review(self):
         flipped = dict(self.reader["situations"][0], chosen="등록과 조회", source=[2], decided_by={"kind": "답", "quote": "진행해주세요"})
         r, result = self.prepare(flipped)

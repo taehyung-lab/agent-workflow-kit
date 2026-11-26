@@ -108,6 +108,21 @@ def reviewed_choices(work, plan, events, kept):
 
 def preserve_choices(events, plan, source_items, reviewed=()):
     requirements = {r['id']: r for r in plan['requirements']}
+    last_plan = current(events)
+    if last_plan:
+        for original in last_plan['requirements']:
+            if original['state'] != '확정':
+                continue
+            key = original['id']
+            updated = requirements.get(key)
+            if updated is None:
+                raise ValueError(f'{key}: 최초 기대값을 삭제할 수 없다. 철회 결정도 그 줄에 남긴다')
+            if all(updated.get(field) == original.get(field) for field in ('expect', 'chosen', 'cell')):
+                continue
+            known = {item['sha256'] for item in sources(events)[:max(original['source'])]}
+            if not any(source_items[n - 1]['sha256'] not in known and n > max(original['source'])
+                       for n in updated['source']):
+                raise ValueError(f'{key}: 확정한 기대값 변경에는 후속 사용자 원문이 필요하다')
     for key, (original_sources, original_count) in pending_choices(events).items():
         if key not in requirements:
             raise ValueError(f'{key}: 미정인 선택을 다음 계획에서 지울 수 없다')

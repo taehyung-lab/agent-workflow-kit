@@ -724,15 +724,50 @@ def record(args):
     return record_report(result)
 
 
-def ask_table_conditions(root, inputs, used, flips):
-    """요구 확인의 독자 표(work/ask/reader.json)와 최종 표(work/ask/situations.json)를 대조해 필수 조건을 만든다.
-    독자가 정한 결과가 바뀐 줄, 독자의 미정이 사용자 답으로 정해진 줄, 지정 기준에서 관찰해 정한 줄마다 하나씩.
-    구현자가 고른 증거가 아니라 처음 정한 기대값으로 구현·검사를 대조하게 한다(구현자가 검사를 바꿔도 원래 요구가 남는다)."""
-    folder = Path(root, "work/ask")
-    if not (folder / "reader.json").is_file() or not (folder / "situations.json").is_file():
-        return []
-    reader = json.loads(inputs.read(str(folder / "reader.json"), "ask-reader"))
-    final = {i.get("id"): i for i in json.loads(inputs.read(str(folder / "situations.json"), "ask-final")).get("situations") or [] if isinstance(i, dict)}
+def ask_review_tables(root, inputs, request_paths, explicit_folder):
+    """새 인계는 이번 원문에 묶인다. 예전 공유 폴더는 인용으로 소속을 확인한다."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "wf-ask"))
+    from situations import handoff_folder, request_hash
+    requests = [Path(path).read_text() for path in request_paths]
+    frozen = handoff_folder(Path(request_paths[0])) if request_paths else None
+    if frozen and frozen.is_dir():
+        snapshots = sorted(frozen.glob("*.json"))
+        if not snapshots:
+            raise ValueError("원문에 연결된 최초 기대값이 없다")
+        hashes = [request_hash(text) for text in requests]
+        for path in snapshots:
+            record = json.loads(inputs.read(path, "ask-handoff"))
+            turns = record["requests"]
+            if not turns or hashes[:len(turns)] != turns:
+                raise ValueError("구현 전 인계한 사용자 원문이 달라졌다")
+            final = json.loads(inputs.read(record["final_path"], "ask-final"))
+            for reader in record["readers"]:
+                if json.loads(inputs.read(reader["path"], "ask-reader")) != reader["table"]:
+                    raise ValueError("최초 독자 표가 변경됐다")
+                yield reader["table"], final, 0
+            yield {"situations": record["expected"]}, final, len(turns)
+        return
+    folder = Path(explicit_folder) if explicit_folder else Path(root, "work/ask")
+    paths = [folder / name for name in ("reader.json", "situations.json")]
+    available = [path for path in paths if path.is_file()]
+    if not available and not explicit_folder:
+        return
+    tables = [json.loads(path.read_text()) for path in available]
+    if not explicit_folder:
+        origins = [row["decided_by"]["quote"] for table in tables for row in table["situations"]
+                   if row.get("decided_by", {}).get("kind") in ("요청", "기준") and row["decided_by"].get("quote")]
+        if origins and not any("".join(q.split()) in "".join(text.split()) for q in origins for text in requests):
+            return
+        if not origins:
+            raise ValueError("이전 공유 표의 요청을 식별할 수 없다. 해당 작업이면 --ask-dir 로 지정하고 다른 작업이면 표를 원래 작업 폴더에 보존한다")
+    if len(available) != 2:
+        raise ValueError("요구 확인의 독자 표 또는 최종 표가 빠졌다")
+    yield (json.loads(inputs.read(paths[0], "ask-reader")),
+           json.loads(inputs.read(paths[1], "ask-final")), 0)
+
+
+def ask_table_conditions(reader, merged, used, flips, frozen_turns):
+    final = {item["id"]: item for item in merged["situations"]}
     def said(row):
         by = (row or {}).get("decided_by") or {}
         return f"{by.get('kind', '없음')} \"{by.get('quote', '')}\"" if by else "근거 없음"
@@ -747,7 +782,13 @@ def ask_table_conditions(root, inputs, used, flips):
         changed = settled and (m.get("state") != "확정" or m.get("chosen") != r.get("chosen"))
         answered = not settled and m.get("state") == "확정"
         observed = (r.get("decided_by") or {}).get("observed") or r.get("observed")
-        if not (changed or answered or (settled and observed)):
+        if frozen_turns and any(m.get(key) != r.get(key) for key in ("expect", "cell", "observed")):
+            changed = True
+        if frozen_turns and changed:
+            by = m.get("decided_by") or {}
+            if by.get("kind") != "답" or not any(isinstance(n, int) and n > frozen_turns for n in m.get("source", [])):
+                flips.append(f"{r.get('id')} 최초 기대값 변경에 새 사용자 결정이 없다")
+        if not (frozen_turns or changed or answered or (settled and observed)):
             continue
         rid = next(f"R{n}" for n in range(1, 1000) if f"R{n}" not in used); used.add(rid)
         seen = f", 기준 관찰: {observed.get('value')} ({observed.get('where')})" if isinstance(observed, dict) else ""
@@ -757,6 +798,9 @@ def ask_table_conditions(root, inputs, used, flips):
         quote = ((m.get("decided_by") or {}).get("quote") or "")
         if changed and settled and m.get("state") == "확정" and generic(quote):
             flips.append(f"요구 표 {r.get('id')}: 독자가 정한 \"{r.get('chosen')}\" 를 일반 승인 \"{quote}\" 으로 \"{m.get('chosen')}\" 로 바꿨다(사용자가 그 결과를 직접 말해야 한다)")
+        if frozen_turns:
+            text += " 최초 상황과 기대값 원문: " + json.dumps(r, ensure_ascii=False)
+            text += " 구현과 검사가 이 기대값을 지키며, 기준을 바꿨다면 뒤 사용자 결정이 그 변경을 명시하는지 확인한다."
         if changed or answered:
             text += " 최종 결과가 독자 결과와 다르거나 사용자 답으로 정해졌으면, 인용한 사용자 말이 그 줄 질문 뒤에 그 결과를 직접 고른 답인지 사용자 원문으로 대조한다(아니면 미충족)."
         lines.append(text)
@@ -855,6 +899,7 @@ def prepare_review(args, record_path=None):
     result = {"round": n, "max_rounds": rounds_max}
     if asked_max != rounds_max:
         result["note"] = f"재검토 한도는 이 시도의 첫 회차에 정한 {rounds_max} 회다(--rounds {asked_max} 는 쓰지 않았다)"
+    ask_tables = list(ask_review_tables(root, inputs, opt(args, "--request", True), opt(args, "--ask-dir")))
     start_print = products_print(roots, multi)
     first_criteria = vstate.get("first_criteria", criteria)
     if len(ran) >= rounds_max:
@@ -941,7 +986,9 @@ def prepare_review(args, record_path=None):
         rid = f'TV{number}'; used.add(rid)
         internal.append(f"{rid} 대상 {name}: 이 대상의 적용 기준으로 내부 검토를 수행하고, 별도 필수 검토가 있으면 현재 결과까지 확인했다. 근거에 적용 기준·대상 버전·실행 결과를 적는다. 누락·실패·미확인이면 충족이 아니다.")
     flips = []
-    conditions = '\n'.join([conditions, *internal, *ask_table_conditions(root, inputs, used, flips)]).strip()
+    for reader, final, turns in ask_tables:
+        internal.extend(ask_table_conditions(reader, final, used, flips, turns))
+    conditions = '\n'.join([conditions, *internal]).strip()
     required = sorted(set(ids(conditions) + requirement_ids) - set(pending + unknown))
     result.update(open_decisions=pending, unconfirmed=unknown, required=required)
     (keep / "criteria.txt").write_text(criteria, encoding="utf-8")

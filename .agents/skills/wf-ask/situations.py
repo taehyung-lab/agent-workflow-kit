@@ -36,6 +36,9 @@ chosen 으로 적는다. 결과가 하나뿐인 상황은 형식 오류다(종�
 출력은 JSON 한 줄: {"settled": [...], "open": [...], "demoted": [{"id", "reason"}], "missing": [["상태", "명령"], ...]}.
 """
 import argparse
+import hashlib
+import os
+import tempfile
 import json
 import re
 import subprocess
@@ -257,6 +260,40 @@ def classify(items, requests, roots, base=None):
             "missing": missing_cells(axes, settled + pending) if axes is not None else None}
 
 
+def handoff_folder(request):
+    return request.with_name(request.name + ".expectations")
+
+
+def request_hash(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def save_handoff(request_paths, requests, result, final_path, reader_paths, readers):
+    """구현 전 근거를 원문 옆에 턴별로 한 번만 게시한다. 재실행이나 경쟁 쓰기가 덮어쓰지 않는다."""
+    if not requests or result["open"] or result["missing"]:
+        raise ValueError("원문과 확정된 모든 상황이 있어야 구현으로 인계한다")
+    folder = handoff_folder(request_paths[0])
+    folder.mkdir(exist_ok=True)
+    target = folder / f"{len(requests):04d}.json"
+    snapshot = {"requests": [request_hash(text) for text in requests],
+                "expected": result["settled"], "final_path": str(final_path.resolve()),
+                "readers": [{"path": str(path.resolve()), "table": table}
+                            for path, table in zip(reader_paths, readers)]}
+    with tempfile.NamedTemporaryFile(dir=folder, delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            stream.write(json.dumps(snapshot, ensure_ascii=False, sort_keys=True).encode())
+            stream.flush()
+            os.fsync(stream.fileno())
+            try:
+                os.link(temporary, target)
+            except FileExistsError:
+                if json.loads(target.read_text()) != snapshot:
+                    raise ValueError("같은 사용자 원문의 최초 기대값을 바꿀 수 없다")
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("situations", type=Path)
@@ -267,6 +304,7 @@ def main():
     parser.add_argument("--message", type=Path, help="사용자에게 보낼 글. --reader 의 미정마다 ask 문장이 그대로 있는지 본다")
     parser.add_argument("--sent", action="append", default=[], type=Path, help="사용자 턴마다 그 뒤에 보낸 글(순서가 원문 번호)")
     parser.add_argument("--base", help="작업 시작 커밋. 합의 인용을 이 판의 문서에서 찾는다")
+    parser.add_argument("--handoff", action="store_true", help="구현 전 확정 결과를 첫 원문 옆에 보존한다")
     args = parser.parse_args()
     try:
         requests = [path.read_text(encoding="utf-8") for path in args.request]
@@ -284,6 +322,10 @@ def main():
             if unbound:
                 raise ValueError("그 줄을 물은 글 뒤의 답이 아니다: " + "; ".join(unbound))
         result = classify(data, requests, roots, args.base)
+        if args.handoff:
+            if args.compose or args.message:
+                raise ValueError("안내 작성과 구현 인계는 다른 시점이다")
+            save_handoff(args.request, requests, result, args.situations, args.reader, readers)
         if args.compose:
             if not args.reader:
                 raise ValueError("--compose 는 --reader 와 함께 쓴다")

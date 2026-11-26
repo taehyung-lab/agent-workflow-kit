@@ -67,6 +67,16 @@ sys.exit(work.main())
  def test_failure(self):
   self.data['checks'][0]['argv']=['python3','-c','raise SystemExit(1)'];self.record()
   rc,r=self.runwork('check');self.assertEqual(r['completion'],'check-failed')
+ def test_check_failure_does_not_authorize_replacing_expected_result(self):
+  self.data['checks'][0]['argv']=['python3','-c','raise SystemExit(1)']
+  self.record()
+  _,result=self.runwork('check')
+  self.assertEqual(result['check'],'FAIL')
+  self.data['requirements'][0]['expect']='구현이 실제로 한 일'
+  self.plan.write_text(json.dumps(self.data))
+  code,result=self.runwork('record','--plan',str(self.plan))
+  self.assertNotEqual(code,0)
+  self.assertIn('후속 사용자 원문',result['reason'])
  def test_missing_coverage(self):
   self.data['checks']=[];self.record();rc,r=self.runwork('check');self.assertEqual(r['completion'],'unverified')
  def test_waiting_never_executes(self):
