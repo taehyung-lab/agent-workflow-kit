@@ -215,6 +215,84 @@ class SituationsTest(unittest.TestCase):
         self.assertEqual(r.stdout.strip().splitlines(), [f'1. {names}', f'2. {loan}', f'3. {code}'])
         self.assertEqual(check('구현 전에 정해 주세요.\n' + r.stdout + '\n추천은 1번 현재 이름입니다.'), [])
 
+    def test_composed_notice_can_be_sent_with_two_independent_readers(self):
+        first = {'id': 'Q1', 'expect': '빈 상자 봉인', 'source': [1], 'state': '미정',
+                 'ask': '빈 상자도 봉인할까요?', 'default': '거절', 'default_by': '운영 기록'}
+        self.run_tool([first])
+        table = self.root / 'situations.json'
+        other = self.root / 'reader2.json'
+        record = json.loads(table.read_text())
+        record['situations'][0]['ask'] = '내용물이 없을 때도 봉인할까요?'
+        other.write_text(json.dumps(record))
+        cmd = [sys.executable, str(TOOL), str(table), '--request', str(self.request),
+               '--reader', str(table), '--reader', str(other)]
+        message = self.root / 'notice.txt'
+        message.write_text(subprocess.check_output([*cmd, '--compose'], text=True))
+        reply = subprocess.run([*cmd, '--message', str(message)], text=True, capture_output=True)
+        self.assertEqual(reply.returncode, 0, reply.stdout)
+        self.assertEqual(message.read_text().count('기본값'), 1)
+
+    def test_unsolicited_correction_needs_a_matching_reader_and_later_user_turn(self):
+        before = {'id': 'Q1', 'expect': '빈 상자 봉인', 'source': [1], 'state': '확정',
+                  'chosen': '거절', 'decided_by': {'kind': '요청', 'quote': '빈 상자는 봉인할 수 없습니다.'}}
+        self.run_tool([before])
+        table = self.root / 'situations.json'
+        original = self.root / 'original.json'
+        original.write_bytes(table.read_bytes())
+        record = json.loads(table.read_text())
+        updated = record['situations'][0]
+        change = '빈 상자도 봉인할 수 있게 해 주세요.'
+        updated.update(chosen='허용', source=[2], decided_by={'kind': '정정', 'quote': change},
+                       observed={'where': '기존 동작', 'value': '거절'})
+        table.write_text(json.dumps(record))
+        later = self.root / 'turn2'
+        later.write_text(change)
+        independent = self.root / 'independent.json'
+        independent.write_bytes(table.read_bytes())
+        cmd = [sys.executable, str(TOOL), str(table), '--request', str(self.request),
+               '--request', str(later), '--reader', str(original)]
+        def run(*options):
+            return subprocess.run([*cmd, *options], text=True, capture_output=True)
+        accepted = run('--reader', str(independent))
+        self.assertEqual(accepted.returncode, 0, accepted.stdout)
+        self.assertEqual(json.loads(accepted.stdout)['settled'][0]['chosen'], '허용')
+        notice = run('--reader', str(independent), '--compose').stdout
+        self.assertIn(change, notice)
+        self.assertIn('거절 (기존 동작)', notice)
+        self.assertNotEqual(run().returncode, 0)
+        later.write_text('그대로 진행해 주세요.')
+        updated['decided_by']['quote'] = later.read_text()
+        table.write_text(json.dumps(record))
+        independent.write_bytes(table.read_bytes())
+        self.assertFalse(json.loads(run('--reader', str(independent)).stdout).get('ready', False))
+
+    def test_new_implementer_receives_the_input_action_and_expected_outcome(self):
+        item = {'id': 'Q1', 'expect': '빈 상자에서 봉인을 누른다', 'cell': ['빈 상자', '봉인'],
+                'source': [1], 'state': '확정', 'results': ['허용', '거절'], 'chosen': '거절',
+                'decided_by': {'kind': '요청', 'quote': '빈 상자는 봉인할 수 없습니다.'}}
+        axes = {'states': [{'name': '빈 상자', 'where': 'data/boxes.json'}],
+                'commands': [{'name': '봉인', 'where': '상자 상세 화면'}]}
+        self.run_tool([item], axes)
+        result = subprocess.check_output(
+            [sys.executable, str(TOOL), str(self.root / 'situations.json'),
+             '--request', str(self.request), '--handoff'], text=True)
+        brief, = json.loads(result)['implementation']
+        for detail in ('data/boxes.json', '상자 상세 화면', item['expect'], '거절', item['decided_by']['quote']):
+            self.assertIn(detail, brief)
+
+    def test_compose_shows_the_decided_result_and_its_source(self):
+        scene = '빈 상자에서 봉인을 누른다'
+        policy = '빈 상자는 봉인할 수 없습니다.'
+        item = {'id': 'Q1', 'expect': scene, 'chosen': '거절', 'source': [1],
+                'state': '확정', 'decided_by': {'kind': '요청', 'quote': policy}}
+        self.run_tool([item])
+        table = self.root / 'situations.json'
+        reply = subprocess.check_output(
+            [sys.executable, str(TOOL), str(table), '--request', str(self.request),
+             '--reader', str(table), '--compose'], text=True)
+        for confirmed in (scene, '거절', policy):
+            self.assertIn(confirmed, reply)
+
     def test_compose_puts_reference_observations_first(self):
         # 2026-11-24 접근권한: "1.5와 같게"인데 1.5 의 저장 경로를 보지 않아 이름만 고쳐도 조회가 저장됐다.
         # 독자가 지정 기준에서 관찰한 값(observed)은 첫 답 목록 맨 앞에 "기준 관찰" 줄로 나간다. 위치·값이 없으면 멈춘다.

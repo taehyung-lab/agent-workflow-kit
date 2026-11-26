@@ -742,6 +742,7 @@ def ask_review_tables(root, inputs, request_paths, explicit_folder, map_request)
         if not snapshots:
             raise ValueError("원문에 연결된 최초 기대값이 없다")
         hashes = [request_hash(text) for text in requests]
+        history = []
         for path in snapshots:
             record = json.loads(inputs.read(path, "ask-handoff"))
             for turn, message in enumerate(record.get("sent", []), 1):
@@ -759,8 +760,13 @@ def ask_review_tables(root, inputs, request_paths, explicit_folder, map_request)
             for reader in record["readers"]:
                 if json.loads(inputs.read(reader["path"], "ask-reader")) != reader["table"]:
                     raise ValueError("최초 독자 표가 변경됐다")
-                yield reader["table"], final, 0
-            yield {"situations": record["expected"]}, final, len(turns)
+                history.append((reader["table"], 0))
+            history.append(({"situations": record["expected"]}, len(turns)))
+        # 이전 인계마다 사용한 최종 표 경로가 달라도 현재 구현은 마지막 표로 판정한다.
+        from situations import check_correction_readers
+        check_correction_readers(final, [r["table"] for r in record["readers"]], requests)
+        for original, turn in history:
+            yield original, final, turn
         return
     folder = Path(explicit_folder) if explicit_folder else Path(root, "work/ask")
     paths = [folder / name for name in ("reader.json", "situations.json")]
@@ -785,17 +791,26 @@ def ask_review_tables(root, inputs, request_paths, explicit_folder, map_request)
            json.loads(inputs.read(paths[1], "ask-final")), 0)
 
 
-def ask_table_conditions(reader, merged, used, flips, frozen_turns):
+def review_correction(row):
+    turn = (row.get("source") or ["미확인"])[0]
+    return (f"{turn}번 사용자 원문의 후속 정정이 이 장면과 바뀐 결과를 직접 명시하는지 독립적으로 대조한다. "
+            "질문 없이 보낸 정정도 유효하며, 원문이 다른 장면이나 결과만 정하면 미충족이다.")
+
+
+def ask_table_conditions(reader, merged, used, flips, frozen_turns, requests):
     final = {item["id"]: item for item in merged["situations"]}
     def said(row):
         by = (row or {}).get("decided_by") or {}
         return f"{by.get('kind', '없음')} \"{by.get('quote', '')}\"" if by else "근거 없음"
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "wf-ask"))
-    from situations import _generic as generic
+    from situations import _generic as generic, correction_problem
     lines = []
-    for r in reader.get("situations") or []:
-        if not isinstance(r, dict):
-            continue
+    original = [r for r in reader.get("situations", []) if isinstance(r, dict)]
+    known = {r.get("id") for r in original}
+    for key, row in final.items():
+        if key not in known and (row.get("decided_by") or {}).get("kind") == "정정":
+            original.append({"id": key, "expect": row.get("expect")})
+    for r in original:
         m = final.get(r.get("id")) or {}
         settled = r.get("state") == "확정"
         changed = settled and (m.get("state") != "확정" or m.get("chosen") != r.get("chosen"))
@@ -803,11 +818,17 @@ def ask_table_conditions(reader, merged, used, flips, frozen_turns):
         observed = (r.get("decided_by") or {}).get("observed") or r.get("observed")
         if frozen_turns and any(m.get(key) != r.get(key) for key in ("expect", "cell", "observed")):
             changed = True
-        if frozen_turns and changed:
-            by = m.get("decided_by") or {}
+        by = m.get("decided_by") or {}
+        correction = by.get("kind") == "정정"
+        if correction:
+            after = max([frozen_turns, *(r.get("source") or [])]) if changed or answered else 1
+            problem = correction_problem(m, requests, after=max(1, after))
+            if problem:
+                flips.append(f"{r.get('id')} 정정: {problem}")
+        elif frozen_turns and changed:
             if by.get("kind") != "답" or not any(isinstance(n, int) and n > frozen_turns for n in m.get("source", [])):
                 flips.append(f"{r.get('id')} 최초 기대값 변경에 새 사용자 결정이 없다")
-        if not (frozen_turns or changed or answered or (settled and observed)):
+        if not (correction or frozen_turns or changed or answered or (settled and observed)):
             continue
         rid = next(f"R{n}" for n in range(1, 1000) if f"R{n}" not in used); used.add(rid)
         seen = f", 기준 관찰: {observed.get('value')} ({observed.get('where')})" if isinstance(observed, dict) else ""
@@ -815,12 +836,14 @@ def ask_table_conditions(reader, merged, used, flips, frozen_turns):
                 f" → 최종 표 \"{m.get('chosen') or '미정'}\" (근거 {said(m)}, 그 줄 질문 \"{r.get('ask') or m.get('ask') or '없음'}\")."
                 " 구현의 실제 동작과 검사가 최종 결과를 지키는가.")
         quote = ((m.get("decided_by") or {}).get("quote") or "")
-        if changed and settled and m.get("state") == "확정" and generic(quote):
+        if changed and settled and m.get("state") == "확정" and not correction and generic(quote):
             flips.append(f"요구 표 {r.get('id')}: 독자가 정한 \"{r.get('chosen')}\" 를 일반 승인 \"{quote}\" 으로 \"{m.get('chosen')}\" 로 바꿨다(사용자가 그 결과를 직접 말해야 한다)")
         if frozen_turns:
             text += " 최초 상황과 기대값 원문: " + json.dumps(r, ensure_ascii=False)
             text += " 구현과 검사가 이 기대값을 지키며, 기준을 바꿨다면 뒤 사용자 결정이 그 변경을 명시하는지 확인한다."
-        if changed or answered:
+        if correction:
+            text += " " + review_correction(m)
+        elif changed or answered:
             text += " 최종 결과가 독자 결과와 다르거나 사용자 답으로 정해졌으면, 인용한 사용자 말이 그 줄 질문 뒤에 그 결과를 직접 고른 답인지 사용자 원문으로 대조한다(아니면 미충족)."
         lines.append(text)
     return lines
@@ -829,7 +852,7 @@ def ask_table_conditions(reader, merged, used, flips, frozen_turns):
 def prepare_review(args, record_path=None):
     """검토 입력을 묶는다: 요청 원문·지도 기준·기준 커밋부터의 변경(diff)과 판정 대상의 고정 복사본. 검토자는 띄우지 않는다.
     한도에 닿았거나 입력·근거가 불완전하면 여기서 최종 결과를 낸다."""
-    from situations import resolve_reference, tag_commit
+    from situations import handoff_folder, resolve_reference, tag_commit
     asked_max = int(opt(args, "--rounds") or 2)
     root = project_root()
     problems = []
@@ -855,7 +878,11 @@ def prepare_review(args, record_path=None):
             problems.append("작업 지도의 `## 기준` 이 비었다(입력 부족)")
         criteria = f"### {map_rel}\n{body}" if body else ""
         quoted = quoted_request(body or "")
-        if quoted:
+        # 첫 원문 파일에 묶인 인계가 있으면 그 파일의 턴 번호를 그대로 쓴다.
+        request_paths = opt(args, "--request", True)
+        same_first = (quoted and request_paths and handoff_folder(Path(request_paths[0])).is_dir()
+                      and requests[0].strip() == quoted.strip())
+        if quoted and not same_first:
             requests = [f"(작업 지도 `## 기준` 에 옮겨 둔 요청 원문)\n{quoted}"] + requests
     if not requests or any(not r.strip() for r in requests):
         problems.append("요청 원문을 확보하지 못했다(입력 부족): 지도 `## 기준` 에 `요청 원문` 항목이 없고 --request 도 없다(또는 비었다). 요약으로 대신하지 않는다")
@@ -865,6 +892,7 @@ def prepare_review(args, record_path=None):
     conditions = inputs.read(opt(args, "--conditions"), "conditions") if opt(args, "--conditions") else ""
     envelope = f"### {map_rel}\n{body}" if inputs.map is not None and (body := context_text(inputs.map)) else ""
     record_requirements = None
+    record_corrections = []
     definition_rel = map_rel
     if record_path is not None:
         if map_rel or opt(args, '--base'):
@@ -872,7 +900,15 @@ def prepare_review(args, record_path=None):
         plan = json.loads(inputs.read(record_path, 'requirements'))
         work = Path(record_path).parent
         journal = inputs.read(work / 'journal.jsonl', 'journal', definition='evidence')
+        previous = {}
         for event in json.loads(journal):
+            rows = event.get("plan", {}).get("requirements", []) + event.get("findings", [])
+            for row in rows:
+                key = row["id"]
+                earlier = previous.get(key, {"id": key, "expect": row["expect"]})
+                if (row.get("decided_by") or {}).get("kind") == "정정" and row != earlier:
+                    record_corrections.append((earlier, row))
+                previous[key] = row
             for item in event.get('results', []):
                 inputs.watch_bytes(item['output'], 'check-log')
             for item in event.get('evidence', []):
@@ -1056,7 +1092,12 @@ def prepare_review(args, record_path=None):
             envelope += f"\n### {turn}번 사용자 원문 직후 실제 발송 내용 (판정 대상)\n{message or '(응답 없이 이어진 턴)'}\n"
     flips = []
     for reader, final, turns in ask_tables:
-        internal.extend(ask_table_conditions(reader, final, used, flips, turns))
+        internal.extend(ask_table_conditions(reader, final, used, flips, turns, requests))
+    for earlier, row in record_corrections:
+        rid = next(f"CR{n}" for n in range(1, 1000) if f"CR{n}" not in used)
+        used.add(rid)
+        internal.append(f"{rid} 대표 기록 {row['id']}: 이전 요구 {json.dumps(earlier, ensure_ascii=False)} "
+                        f"→ 정정 당시 요구 {json.dumps(row, ensure_ascii=False)}. " + review_correction(row))
     conditions = '\n'.join([conditions, *internal]).strip()
     required = sorted(set(ids(conditions) + requirement_ids) - set(pending + unknown))
     result.update(open_decisions=pending, unconfirmed=unknown, required=required)
