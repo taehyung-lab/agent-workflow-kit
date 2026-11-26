@@ -158,6 +158,90 @@ class SituationsTest(unittest.TestCase):
         self.assertEqual(self.ids(result, 'open'), ['Q1'])
         self.assertIn('chosen', result['demoted'][0]['reason'])
 
+    def test_message_must_carry_each_reader_question(self):
+        # 2026-11-25 라벨 1·3회차: 독자는 M1·m1 을 미정으로 돌려줬고 담당자가 첫 답에서 뺐다. 담당자는 같은 주제의 상황을 묶어 바꿔 써서
+        # 낱말 대조로는 가를 수 없었다 → 질문 문장은 독자가 쓰고(ask), 보낸 글에 그 문장이 그대로 있는지만 본다.
+        names = '이미 확정된 1번 시트를 열 때, 저장된 옛 이름(소나무)과 현재 이름(솔나무) 중 무엇을 보일까요?'
+        loan = '대여 중인 표본 L1이 담긴 3번 시트도 확정할 수 있게 할까요?'
+        code = 'M1(참나무)과 m1(단풍나무)을 입력하면 같은 표본으로 볼까요, 다른 표본으로 볼까요?'
+        reader = {'axes': {'states': [{'name': s, 'where': 'data.json'} for s in ('printed', 'loan', 'code')],
+                           'commands': [{'name': 'seal', 'where': 'sheets.py'}]},
+                  'situations': [
+                      {'id': 'Q16', 'cell': ['printed', 'seal'], 'expect': '1번 seal', 'results': ['옛 이름', '현재 이름'], 'source': [1], 'state': '미정', 'ask': names},
+                      {'id': 'Q19', 'cell': ['printed', 'seal'], 'expect': '1번 조회', 'results': ['옛 이름', '현재 이름'], 'source': [1], 'state': '미정', 'ask': names},
+                      {'id': 'Q28', 'cell': ['loan', 'seal'], 'expect': '3번 seal', 'results': ['허용', '거절'], 'source': [1], 'state': '미정', 'ask': loan},
+                      {'id': 'Q29', 'cell': ['code', 'seal'], 'expect': 'm1 추가', 'results': ['m1', 'M1'], 'source': [1], 'state': '미정', 'ask': code}]}
+        merged = json.loads(json.dumps(reader))
+        path = self.root / 'situations.json'; path.write_text(json.dumps(merged, ensure_ascii=False))
+        (self.root / 'reader.json').write_text(json.dumps(reader, ensure_ascii=False))
+        def check(text, code_=0):
+            (self.root / 'message.md').write_text(text)
+            r = subprocess.run([sys.executable, '-I', str(TOOL), str(path), '--request', str(self.request), '--root', str(self.root),
+                                '--reader', str(self.root / 'reader.json'), '--message', str(self.root / 'message.md')], capture_output=True, text=True)
+            self.assertEqual(r.returncode, code_, r.stdout + r.stderr)
+            return [u['id'] for u in json.loads(r.stdout)['undelivered']]
+        # 1·3회차 모양: 이름·대여만 묻고 코드는 뺐다
+        self.assertEqual(check(f'구현 전 두 가지를 정해야 합니다.\n1. {names}\n2. {loan}\n추천은 현재 이름 유지입니다.', 3), ['Q29'])
+        # 2회차 모양: 세 질문 모두(앞뒤 설명·줄바꿈이 달라도 된다)
+        self.assertEqual(check(f'세 가지가 필요합니다.\n- {names}\n- {loan}\n-  {code}'), [])
+        # 질문 번호만 있는 글은 통과하지 못한다
+        self.assertEqual(check('Q16, Q19, Q28, Q29 를 확인해 주세요.', 3), ['Q16', 'Q19', 'Q28', 'Q29'])
+        # 사용자 답(kind 답)으로 정해진 상황은 다시 보내지 않아도 된다
+        merged['situations'][3].update(state='확정', chosen='m1', source=[2], decided_by={'kind': '답', 'quote': '입력한 정확한 코드에 적용합니다'})
+        path.write_text(json.dumps(merged, ensure_ascii=False))
+        (self.root / 'answer.txt').write_text('조회, 추가, 삭제 모두 입력한 정확한 코드에 적용합니다.\n')
+        (self.root / 'message.md').write_text(f'{names}\n{loan}')
+        (self.root / 'sent1.md').write_text(f'세 가지가 필요합니다.\n- {names}\n- {loan}\n- {code}')
+        def answered(*sent):
+            return subprocess.run([sys.executable, '-I', str(TOOL), str(path), '--request', str(self.request), '--request', str(self.root / 'answer.txt'),
+                                   '--root', str(self.root), '--reader', str(self.root / 'reader.json'), '--message', str(self.root / 'message.md'),
+                                   *[x for f in sent for x in ('--sent', str(self.root / f))]], capture_output=True, text=True)
+        r = answered('sent1.md')
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        # 그 질문을 보낸 글이 없으면 답으로 닫지 못한다(2026-11-26 접근권한 f3: 다른 주제의 말을 답으로 인용)
+        r = answered()
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn('Q29', r.stdout)
+        # 독자가 ask 를 안 쓴 미정은 그 사실을 알린다
+        del reader['situations'][2]['ask']; (self.root / 'reader.json').write_text(json.dumps(reader, ensure_ascii=False))
+        merged['situations'][3].update(state='미정'); merged['situations'][3].pop('decided_by'); path.write_text(json.dumps(merged, ensure_ascii=False))
+        self.assertEqual(check(f'{names}\n{code}', 3), ['Q28'])
+
+        # 첫 답에 붙일 질문 목록: 같은 ask 는 한 번, 순서는 처음 나온 대로. 붙인 글은 대조를 통과한다
+        reader['situations'][2]['ask'] = loan; (self.root / 'reader.json').write_text(json.dumps(reader, ensure_ascii=False))
+        r = subprocess.run([sys.executable, '-I', str(TOOL), str(path), '--request', str(self.request), '--root', str(self.root),
+                            '--reader', str(self.root / 'reader.json'), '--compose'], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.stdout.strip().splitlines(), [f'1. {names}', f'2. {loan}', f'3. {code}'])
+        self.assertEqual(check('구현 전에 정해 주세요.\n' + r.stdout + '\n추천은 1번 현재 이름입니다.'), [])
+
+    def test_compose_puts_reference_observations_first(self):
+        # 2026-11-24 접근권한: "1.5와 같게"인데 1.5 의 저장 경로를 보지 않아 이름만 고쳐도 조회가 저장됐다.
+        # 독자가 지정 기준에서 관찰한 값(observed)은 첫 답 목록 맨 앞에 "기준 관찰" 줄로 나간다. 위치·값이 없으면 멈춘다.
+        reader = {'axes': {'states': [{'name': '등록만 저장된 권한', 'where': 'data'}], 'commands': [{'name': s, 'where': 'ui'} for s in ('열기', '이름만 저장', '등록 클릭')]},
+                  'situations': [
+                      {'id': 'Q1', 'cell': ['등록만 저장된 권한', '열기'], 'expect': '수정 화면을 연다(조회 칸)', 'results': ['켜짐', '꺼짐'], 'chosen': '켜짐',
+                       'source': [1], 'state': '확정', 'decided_by': {'kind': '요청', 'quote': '물품을 상자에 담은 뒤'},
+                       'observed': {'where': 'v1.5 permission-tree-row.tsx:73', 'value': '조회 켜짐·잠김'}},
+                      {'id': 'Q2', 'cell': ['등록만 저장된 권한', '이름만 저장'], 'expect': '이름만 고쳐 저장(전송 기능)', 'results': ['CREATE', 'CREATE·READ'], 'chosen': 'CREATE',
+                       'source': [1], 'state': '확정', 'decided_by': {'kind': '요청', 'quote': '물품을 상자에 담은 뒤'},
+                       'observed': {'where': 'v1.5 use-access-permission-form.ts:139', 'value': 'CREATE 만 전송'}},
+                      {'id': 'Q3', 'cell': ['등록만 저장된 권한', '등록 클릭'], 'expect': '등록을 누른다', 'results': ['조회 켜짐', '그대로'], 'source': [1], 'state': '미정',
+                       'ask': '블랙리스트에도 같은 규칙을 둘까요?'}]}
+        path = self.root / 'situations.json'; path.write_text(json.dumps(reader, ensure_ascii=False))
+        (self.root / 'reader.json').write_text(json.dumps(reader, ensure_ascii=False))
+        def compose(code_=0):
+            r = subprocess.run([sys.executable, '-I', str(TOOL), str(path), '--request', str(self.request), '--root', str(self.root),
+                                '--reader', str(self.root / 'reader.json'), '--compose'], capture_output=True, text=True)
+            self.assertEqual(r.returncode, code_, r.stdout + r.stderr)
+            return r.stdout.strip().splitlines()
+        self.assertEqual(compose(), ['1. 기준 관찰: 수정 화면을 연다(조회 칸) → 조회 켜짐·잠김 (v1.5 permission-tree-row.tsx:73)',
+                                     '2. 기준 관찰: 이름만 고쳐 저장(전송 기능) → CREATE 만 전송 (v1.5 use-access-permission-form.ts:139)',
+                                     '3. 블랙리스트에도 같은 규칙을 둘까요?'])
+        reader['situations'][1]['observed'] = {'where': ''}; (self.root / 'reader.json').write_text(json.dumps(reader, ensure_ascii=False))
+        path.write_text(json.dumps(reader, ensure_ascii=False))
+        self.assertIn('where', compose(3)[0])
+
     def test_merged_record_cannot_shrink_reader_table(self):
         # 저장 실행(라벨 3회차): 독자 표에 빈 칸 26개가 나오자 주 담당자가 상태를 하나로 합쳐 빈 칸 확인을 지나갔다.
         reader = {'axes': {'states': [{'name': '빈 상자', 'where': 'app.py:new'}, {'name': '빌린 물품 상자', 'where': 'data.json:3'}],
@@ -178,6 +262,20 @@ class SituationsTest(unittest.TestCase):
         self.assertIn('사용자 답 없이', self.run_tool(settled['situations'], settled['axes'], code=3, reader=reader)['error'])
         result = self.run_tool(reader['situations'], reader['axes'], reader=reader)
         self.assertEqual(self.ids(result, 'open'), ['Q2'])
+
+
+    def test_generic_approval_cannot_flip_reader_result(self):
+        # 2026-11-26 접근권한 k1: 독자가 1.5 로 정한 저장 줄을 담당자가 자기 질문으로 다시 열고 반대를 추천,
+        # "진행해주세요"를 그 승인으로 받았다 → 독자가 정한 결과는 일반 승인으로 바뀌지 않는다.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('situations', TOOL); mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+        ask = '등록만 저장된 권한을 그대로 저장하면 조회도 함께 저장할까요?'
+        reader = {'situations': [{'id': 'Q10', 'state': '확정', 'chosen': '등록만', 'results': ['등록만', '조회도']}]}
+        merged = {'situations': [{'id': 'Q10', 'state': '확정', 'chosen': '조회도', 'results': ['등록만', '조회도'], 'source': [2], 'ask': ask,
+                                  'decided_by': {'kind': '답', 'quote': '진행해주세요'}}]}
+        self.assertIn('일반 승인', ' '.join(mod.answers_unbound(merged, reader, [f'1. {ask} (추천: 조회도)'])))
+        merged['situations'][0]['decided_by']['quote'] = '조회도 함께 저장해 주세요'
+        self.assertEqual(mod.answers_unbound(merged, reader, [f'1. {ask}']), [])
 
 
 if __name__ == '__main__':
